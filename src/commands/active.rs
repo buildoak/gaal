@@ -416,10 +416,8 @@ fn extract_usage_sample(record: &Value, engine: Engine) -> Option<UsageSample> {
         Engine::Codex => {
             let payload_type = record.pointer("/payload/type").and_then(Value::as_str);
             if payload_type == Some("token_count") {
-                let input =
-                    as_i64(record.pointer("/payload/info/last_token_usage/input_tokens"));
-                let output =
-                    as_i64(record.pointer("/payload/info/last_token_usage/output_tokens"));
+                let input = as_i64(record.pointer("/payload/info/last_token_usage/input_tokens"));
+                let output = as_i64(record.pointer("/payload/info/last_token_usage/output_tokens"));
                 (input, input + output)
             } else {
                 let input = as_i64(record.pointer("/payload/usage/input_tokens"));

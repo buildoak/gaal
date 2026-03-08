@@ -5,9 +5,7 @@ use std::path::Path;
 /// Replaces path separators, parent-dir traversals, and null bytes with underscores.
 /// Truncates to 255 characters.
 pub fn sanitize_filename(id: &str) -> String {
-    let sanitized: String = id
-        .replace(['/', '\\', '\0'], "_")
-        .replace("..", "__");
+    let sanitized: String = id.replace(['/', '\\', '\0'], "_").replace("..", "__");
     if sanitized.len() > 255 {
         sanitized[..255].to_string()
     } else {

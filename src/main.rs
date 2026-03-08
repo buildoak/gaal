@@ -674,9 +674,7 @@ fn parse_parallel(raw: &str) -> Result<usize, String> {
     if (1..=5).contains(&value) {
         Ok(value)
     } else {
-        Err(format!(
-            "invalid --parallel value `{raw}` (expected 1..=5)"
-        ))
+        Err(format!("invalid --parallel value `{raw}` (expected 1..=5)"))
     }
 }
 

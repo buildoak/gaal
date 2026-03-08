@@ -2,12 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use gaal::{
     db::{
+        init_db,
         queries::{
             add_tag, get_facts, get_handoff, get_session, get_tags, insert_facts_batch,
             list_sessions, query_who, upsert_handoff, upsert_session, FactType as QueryFactType,
             ListFilter, SessionRow, WhoFilter,
         },
-        init_db, DB_SCHEMA,
+        DB_SCHEMA,
     },
     error::GaalError,
     model::{Fact, FactType, HandoffRecord},
@@ -37,7 +38,9 @@ fn session_row(
         started_at: started_at.to_string(),
         ended_at: ended_at.map(str::to_string),
         exit_signal: exit_signal.map(str::to_string),
-        last_event_at: ended_at.map(str::to_string).or_else(|| Some(started_at.to_string())),
+        last_event_at: ended_at
+            .map(str::to_string)
+            .or_else(|| Some(started_at.to_string())),
         parent_id: None,
         jsonl_path: format!("/tmp/{id}.jsonl"),
         total_input_tokens: 120,
@@ -522,7 +525,10 @@ fn exit_code_mapping() {
     assert_eq!(GaalError::AmbiguousId("abc".to_string()).exit_code(), 2);
     assert_eq!(GaalError::NotFound("x".to_string()).exit_code(), 3);
     assert_eq!(GaalError::NoIndex.exit_code(), 10);
-    assert_eq!(GaalError::ParseError("bad input".to_string()).exit_code(), 11);
+    assert_eq!(
+        GaalError::ParseError("bad input".to_string()).exit_code(),
+        11
+    );
 }
 
 #[test]

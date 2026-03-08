@@ -1,10 +1,10 @@
 use std::fs;
+#[cfg(unix)]
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
-#[cfg(unix)]
-use std::os::fd::AsFd;
-use std::sync::{Arc, LazyLock, Mutex, mpsc};
+use std::sync::{mpsc, Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -15,16 +15,16 @@ use rusqlite::{named_params, Connection};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::commands::index::{IndexOutcome, index_discovered_session};
-use crate::config::{GaalConfig, gaal_home, load_config};
+use crate::commands::index::{index_discovered_session, IndexOutcome};
+use crate::config::{gaal_home, load_config, GaalConfig};
 use crate::db::open_db;
 use crate::db::queries::{get_facts, get_session, upsert_handoff, SessionRow};
 use crate::detection::DetectedSession;
 use crate::discovery::DiscoveredSession;
 use crate::error::GaalError;
-use crate::parser::types::Engine;
 use crate::model::{Fact, FactType, HandoffRecord};
 use crate::output::json::print_json;
+use crate::parser::types::Engine;
 
 /// Built-in fallback extraction prompt used when no prompt file is available.
 const DEFAULT_HANDOFF_PROMPT: &str = r#"You are analyzing an agent session trace. Extract:
@@ -391,7 +391,10 @@ fn validate_handoff_metadata(
         return Err(format!("headline too short ({} chars, need ≥5)", hl.len()));
     }
     if !(0..=3).contains(&substance) {
-        return Err(format!("substance out of range: {} (expected 0-3)", substance));
+        return Err(format!(
+            "substance out of range: {} (expected 0-3)",
+            substance
+        ));
     }
     if substance >= 1 && projects.is_empty() {
         return Err("substantive session (substance ≥1) must have at least one project".into());
@@ -536,7 +539,11 @@ fn parse_since_filter(since: &str) -> String {
 
     let normalized = raw.to_ascii_lowercase();
     let (count_raw, unit) = normalized.split_at(normalized.len().saturating_sub(1));
-    let count = count_raw.parse::<i64>().ok().filter(|v| *v > 0).unwrap_or(7);
+    let count = count_raw
+        .parse::<i64>()
+        .ok()
+        .filter(|v| *v > 0)
+        .unwrap_or(7);
     let days = match unit {
         "d" => count,
         "w" => count.saturating_mul(7),
@@ -544,9 +551,7 @@ fn parse_since_filter(since: &str) -> String {
     };
 
     let delta = TimeDelta::try_days(days).unwrap_or_else(|| TimeDelta::days(7));
-    (Local::now() - delta)
-        .format("%Y-%m-%d")
-        .to_string()
+    (Local::now() - delta).format("%Y-%m-%d").to_string()
 }
 
 fn resolve_sessions(conn: &Connection, id_or_today: &str) -> Result<Vec<SessionRow>, GaalError> {
@@ -787,7 +792,10 @@ fn invoke_agent_mux(
     timeout_secs: u64,
 ) -> Result<String, GaalError> {
     let request = format!("{prompt}\n\n---\n\nSession context:\n{context}");
-    let mux_timeout_ms = timeout_secs.saturating_sub(5).saturating_mul(1_000).max(10_000);
+    let mux_timeout_ms = timeout_secs
+        .saturating_sub(5)
+        .saturating_mul(1_000)
+        .max(10_000);
 
     let child = Command::new(binary)
         .arg("--engine")
@@ -925,8 +933,8 @@ fn parse_agent_mux_response(stdout: &str) -> Result<String, GaalError> {
 
 fn value_to_response(value: Value) -> Result<String, GaalError> {
     if value.get("success").and_then(Value::as_bool) == Some(false) {
-        let error =
-            extract_agent_mux_error(&value).unwrap_or_else(|| "agent-mux reported failure".to_string());
+        let error = extract_agent_mux_error(&value)
+            .unwrap_or_else(|| "agent-mux reported failure".to_string());
         return Err(GaalError::Other(anyhow!(error)));
     }
 

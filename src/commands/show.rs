@@ -156,10 +156,8 @@ pub fn run(args: ShowArgs) -> Result<(), GaalError> {
                 row.jsonl_path
             )));
         }
-        let markdown =
-            crate::render::session_md::render_session_markdown(jsonl_path).map_err(|e| {
-                GaalError::Internal(format!("failed to render session markdown: {e}"))
-            })?;
+        let markdown = crate::render::session_md::render_session_markdown(jsonl_path)
+            .map_err(|e| GaalError::Internal(format!("failed to render session markdown: {e}")))?;
         print!("{markdown}");
         return Ok(());
     }
@@ -751,7 +749,11 @@ fn resolve_pid(index: &LivePidIndex, row: &SessionRow) -> Option<u32> {
 }
 
 fn status_from_row(row: &SessionRow, live_pids: &LivePidIndex, now: DateTime<Utc>) -> &'static str {
-    match compute_session_status(&status_params_for_row(row, resolve_pid(live_pids, row), now)) {
+    match compute_session_status(&status_params_for_row(
+        row,
+        resolve_pid(live_pids, row),
+        now,
+    )) {
         SessionStatus::Active => "active",
         SessionStatus::Idle => "idle",
         SessionStatus::Stuck => "stuck",

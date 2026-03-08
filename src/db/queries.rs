@@ -6,8 +6,7 @@ use serde_json::{Map as JsonMap, Number, Value};
 
 use crate::error::GaalError;
 use crate::model::{
-    compute_session_status, Fact, HandoffRecord, SessionStatus, StatusParams,
-    STUCK_SILENCE_SECS,
+    compute_session_status, Fact, HandoffRecord, SessionStatus, StatusParams, STUCK_SILENCE_SECS,
 };
 
 /// Database-level session row, flattened to only SQLite-backed fields.
@@ -812,7 +811,9 @@ pub fn get_aggregate(conn: &Connection, filter: &ListFilter) -> Result<Aggregate
         total_input_tokens += session.total_input_tokens;
         total_output_tokens += session.total_output_tokens;
         *by_engine.entry(session.engine.clone()).or_insert(0) += 1;
-        *by_status.entry(session_status(session).to_string()).or_insert(0) += 1;
+        *by_status
+            .entry(session_status(session).to_string())
+            .or_insert(0) += 1;
     }
 
     Ok(AggregateResult {

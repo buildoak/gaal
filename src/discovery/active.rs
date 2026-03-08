@@ -315,19 +315,12 @@ fn engine_from_ps_command(cmd0: &str, full_cmd: &str) -> Option<Engine> {
         "--type=",          // Electron/Chromium child processes
     ];
 
-    if REJECT_PATTERNS
-        .iter()
-        .any(|pat| lowered_cmd.contains(pat))
-    {
+    if REJECT_PATTERNS.iter().any(|pat| lowered_cmd.contains(pat)) {
         return None;
     }
 
     // Only match if the basename of the executable is exactly "claude" or "codex".
-    let basename = cmd0
-        .rsplit('/')
-        .next()
-        .unwrap_or(cmd0)
-        .to_ascii_lowercase();
+    let basename = cmd0.rsplit('/').next().unwrap_or(cmd0).to_ascii_lowercase();
 
     if basename == "claude" {
         return Some(Engine::Claude);

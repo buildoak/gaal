@@ -111,7 +111,9 @@ struct EywaEntry {
 /// Run `gaal index backfill`.
 pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     // Resolve output_dir: CLI arg > config default > None.
-    let output_dir = args.output_dir.or_else(|| load_config().markdown_output_dir);
+    let output_dir = args
+        .output_dir
+        .or_else(|| load_config().markdown_output_dir);
 
     // --output-dir (or config default) implies --with-markdown.
     let with_markdown = args.with_markdown || output_dir.is_some();
@@ -127,16 +129,8 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
         indexed: 0,
         skipped: 0,
         errors: 0,
-        markdown_written: if output_dir.is_some() {
-            Some(0)
-        } else {
-            None
-        },
-        markdown_skipped: if output_dir.is_some() {
-            Some(0)
-        } else {
-            None
-        },
+        markdown_written: if output_dir.is_some() { Some(0) } else { None },
+        markdown_skipped: if output_dir.is_some() { Some(0) } else { None },
     };
     let total = sessions.len();
 
@@ -534,9 +528,7 @@ fn default_session_markdown_path(discovered: &DiscoveredSession) -> PathBuf {
 /// Generate a session markdown file from raw JSONL during backfill.
 ///
 /// Writes the rendered markdown to `~/.gaal/data/{engine}/sessions/YYYY/MM/DD/{id}.md`.
-fn generate_session_markdown(
-    discovered: &DiscoveredSession,
-) -> Result<PathBuf, GaalError> {
+fn generate_session_markdown(discovered: &DiscoveredSession) -> Result<PathBuf, GaalError> {
     let markdown = crate::render::session_md::render_session_markdown(&discovered.path)
         .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
 
@@ -735,7 +727,10 @@ fn resolve_eywa_content_path(entry: &EywaEntry) -> Option<String> {
         }
     }
 
-    let date_str = entry.started_at.as_deref().or(entry.generated_at.as_deref())?;
+    let date_str = entry
+        .started_at
+        .as_deref()
+        .or(entry.generated_at.as_deref())?;
     let (year, month, day) = extract_date_parts(date_str);
     let filename = format!("{}.md", entry.session_id);
     let candidate_roots = [
@@ -744,11 +739,7 @@ fn resolve_eywa_content_path(entry: &EywaEntry) -> Option<String> {
     ];
 
     for root in candidate_roots {
-        let candidate = root
-            .join(&year)
-            .join(&month)
-            .join(&day)
-            .join(&filename);
+        let candidate = root.join(&year).join(&month).join(&day).join(&filename);
         if candidate.exists() {
             return Some(candidate.to_string_lossy().to_string());
         }

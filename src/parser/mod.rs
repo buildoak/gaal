@@ -8,8 +8,11 @@ use serde_json::Value;
 pub mod claude;
 pub mod common;
 pub mod codex;
+pub mod event;
+pub mod facts;
 pub mod types;
 
+pub use event::{SessionEvent, EventKind, ToolUseEvent, ContentBlock};
 pub use types::{Engine, ParsedSession, SessionMeta};
 
 /// Detects which engine produced the JSONL stream at `path`.
@@ -62,19 +65,27 @@ pub fn detect_engine(path: &Path) -> Result<Engine> {
 }
 
 /// Parses a complete session JSONL file.
+///
+/// Uses the unified pipeline: JSONL → parse_events() → extract_parsed_session().
 pub fn parse_session(path: &Path) -> Result<ParsedSession> {
-    match detect_engine(path)? {
-        Engine::Claude => claude::parse(path),
-        Engine::Codex => codex::parse(path),
-    }
+    let engine = detect_engine(path)?;
+    let events = match engine {
+        Engine::Claude => claude::parse_events(path)?,
+        Engine::Codex => codex::parse_events(path)?,
+    };
+    Ok(facts::extract_parsed_session(&events, engine, path))
 }
 
 /// Parses only newly appended JSONL content starting at byte `offset`.
+///
+/// Uses the unified pipeline: JSONL → parse_events_from_offset() → extract_parsed_session().
 pub fn parse_session_incremental(path: &Path, offset: u64) -> Result<(ParsedSession, u64)> {
-    let parsed = match detect_engine(path)? {
-        Engine::Claude => claude::parse_from_offset(path, offset),
-        Engine::Codex => codex::parse_from_offset(path, offset),
-    }?;
+    let engine = detect_engine(path)?;
+    let events = match engine {
+        Engine::Claude => claude::parse_events_from_offset(path, offset)?,
+        Engine::Codex => codex::parse_events_from_offset(path, offset)?,
+    };
+    let parsed = facts::extract_parsed_session(&events, engine, path);
 
     let new_offset = std::fs::metadata(path)
         .with_context(|| format!("failed to stat session file: {}", path.display()))?

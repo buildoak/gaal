@@ -25,8 +25,8 @@ pub fn detect_current_session() -> Result<DetectedSession, GaalError> {
             // Try lsof first (works if the process has the JSONL open),
             // then fall back to CWD-based resolution (Claude Code doesn't
             // keep the JSONL open permanently).
-            let jsonl_path = resolve_jsonl_for_pid(current)
-                .or_else(|| resolve_jsonl_via_cwd(current, &engine));
+            let jsonl_path =
+                resolve_jsonl_for_pid(current).or_else(|| resolve_jsonl_via_cwd(current, &engine));
             let Some(jsonl_path) = jsonl_path else {
                 return Err(GaalError::Internal(format!(
                     "Found {engine} process (PID {current}) but could not resolve its JSONL session file."
@@ -84,12 +84,7 @@ pub fn get_process_name(pid: u32) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    Some(
-        raw.rsplit('/')
-            .next()
-            .map(str::to_string)
-            .unwrap_or(raw),
-    )
+    Some(raw.rsplit('/').next().map(str::to_string).unwrap_or(raw))
 }
 
 pub fn resolve_jsonl_for_pid(pid: u32) -> Option<PathBuf> {
@@ -188,7 +183,11 @@ fn resolve_cwd_for_pid(pid: u32) -> Option<String> {
             return None;
         }
         let cwd = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if cwd.is_empty() { None } else { Some(cwd) }
+        if cwd.is_empty() {
+            None
+        } else {
+            Some(cwd)
+        }
     }
     #[cfg(not(unix))]
     {

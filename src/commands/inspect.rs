@@ -797,11 +797,7 @@ fn duration_between(start: &str, end: &str) -> Option<u64> {
 /// This approximates peak context window usage — the largest prompt the
 /// model had to process in a single turn.
 fn peak_input_tokens(samples: &[crate::commands::active::UsageSample]) -> i64 {
-    samples
-        .iter()
-        .map(|s| s.input_tokens)
-        .max()
-        .unwrap_or(0)
+    samples.iter().map(|s| s.input_tokens).max().unwrap_or(0)
 }
 
 fn round1(value: f64) -> f64 {

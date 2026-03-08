@@ -157,7 +157,8 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
     let mut summaries = Vec::with_capacity(rows.len());
     for row in rows {
         let pid = resolve_pid(&live_pids, &row);
-        let status = compute_session_status(&status_params_for_row(&row, pid, now, stuck_silence_secs));
+        let status =
+            compute_session_status(&status_params_for_row(&row, pid, now, stuck_silence_secs));
         if !matches_status_filter(&status, &requested_statuses) {
             continue;
         }
@@ -206,7 +207,8 @@ fn build_precise_aggregate(
 
     for row in rows {
         let pid = resolve_pid(&live_pids, &row);
-        let status = compute_session_status(&status_params_for_row(&row, pid, now, stuck_silence_secs));
+        let status =
+            compute_session_status(&status_params_for_row(&row, pid, now, stuck_silence_secs));
         if !matches_status_filter(&status, requested_statuses) {
             continue;
         }

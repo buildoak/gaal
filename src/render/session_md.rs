@@ -1,17 +1,21 @@
 //! Core session-to-markdown renderer.
 //!
-//! Reads raw JSONL session files and produces markdown output
-//! identical in format to the Python `session_to_markdown.py`.
+//! Converts session event streams into human-readable markdown output.
+//! Uses the unified parser pipeline: JSONL → parse_events() → SessionData → markdown.
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Utc};
 use regex::Regex;
 use serde_json::Value;
+
+use crate::parser::event::{
+    ContentBlock as ParserContentBlock, EventKind, SessionEvent, ToolUseEvent,
+};
+use crate::parser::{claude, codex, detect_engine};
+use crate::parser::types::Engine;
 
 // Dubai timezone: UTC+4.
 const DUBAI_OFFSET_SECS: i32 = 4 * 3600;
@@ -20,9 +24,6 @@ const DUBAI_OFFSET_SECS: i32 = 4 * 3600;
 const TRUNCATION_LIMIT: usize = 100_000;
 /// Preview size when truncation applies.
 const TRUNCATION_PREVIEW: usize = 5_000;
-
-/// JSONL record types to skip entirely.
-const NOISE_TYPES: &[&str] = &["file-history-snapshot", "queue-operation"];
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -116,16 +117,28 @@ struct SubagentInfo {
     model: String,
 }
 
+/// Aggregated stats pulled from subagent tool results.
+#[derive(Debug, Clone, Default)]
+struct SubagentToolResultStats {
+    total_tokens: Option<i64>,
+    total_duration_ms: Option<i64>,
+    total_tool_use_count: Option<i64>,
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 /// Render a JSONL session file to a markdown string.
 ///
-/// Parses the raw JSONL file, assembles turns, and produces
-/// markdown output matching the Python reference implementation.
+/// Uses the unified pipeline: JSONL → parse_events() → SessionData → markdown.
 pub fn render_session_markdown(path: &Path) -> Result<String> {
-    let session = parse_jsonl_to_session(path)?;
+    let engine = detect_engine(path)?;
+    let events = match engine {
+        Engine::Claude => claude::parse_events(path)?,
+        Engine::Codex => codex::parse_events(path)?,
+    };
+    let session = events_to_session_data(&events, path);
     Ok(session_to_markdown(&session))
 }
 
@@ -323,9 +336,7 @@ fn fmt_tool_annotation(name: &str, input: &Value, tool_id: &str) -> Option<ToolA
         }
         "WebSearch" => {
             let query = get_str(&inp, "query").unwrap_or("?");
-            Some(ToolAnnotation::Simple(format!(
-                "-> WebSearch: `{query}`"
-            )))
+            Some(ToolAnnotation::Simple(format!("-> WebSearch: `{query}`")))
         }
         _ => Some(ToolAnnotation::Simple(format!("-> {name}"))),
     }
@@ -338,8 +349,8 @@ fn resolve_input(input: &Value) -> Value {
             if let Some(raw) = obj.get("_truncated").and_then(Value::as_str) {
                 // Try to extract useful info from truncated string.
                 if raw.contains("file_path") {
-                    let attempt = format!("{}}}",
-                        raw.trim_end_matches("...").trim_end_matches('}'));
+                    let attempt =
+                        format!("{}}}", raw.trim_end_matches("...").trim_end_matches('}'));
                     if let Ok(parsed) = serde_json::from_str::<Value>(&format!("{attempt}}}")) {
                         return parsed;
                     }
@@ -429,11 +440,7 @@ fn extract_tool_results(blocks: &[ContentBlock]) -> HashMap<String, String> {
 // ---------------------------------------------------------------------------
 
 /// Format a Task (subagent) block with prompt, result, and inline delta.
-fn fmt_task_block(
-    task: &TaskInfo,
-    result: Option<&str>,
-    delta: Option<&SubagentDelta>,
-) -> String {
+fn fmt_task_block(task: &TaskInfo, result: Option<&str>, delta: Option<&SubagentDelta>) -> String {
     let mut lines = Vec::new();
     let model = fmt_model(&task.model);
     let agent_label = if task.subagent_type.is_empty() {
@@ -565,7 +572,10 @@ fn collect_files(turns: &[Turn]) -> (Vec<String>, Vec<(String, String)>) {
             let ContentBlock::ToolUse { name, input, .. } = block else {
                 continue;
             };
-            if input.as_object().map_or(false, |o| o.contains_key("_truncated")) {
+            if input
+                .as_object()
+                .map_or(false, |o| o.contains_key("_truncated"))
+            {
                 continue;
             }
             match name.as_str() {
@@ -654,11 +664,7 @@ fn extract_open_threads(turns: &[Turn]) -> Vec<String> {
         return threads;
     }
 
-    let start = if turns.len() >= 2 {
-        turns.len() - 2
-    } else {
-        0
-    };
+    let start = if turns.len() >= 2 { turns.len() - 2 } else { 0 };
 
     for turn in &turns[start..] {
         let text = extract_text_from_blocks(&turn.assistant_content);
@@ -682,141 +688,275 @@ fn extract_open_threads(turns: &[Turn]) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// JSONL parsing
+// Event-to-SessionData conversion
 // ---------------------------------------------------------------------------
 
-/// Parse raw JSONL file into a SessionData structure.
-fn parse_jsonl_to_session(path: &Path) -> Result<SessionData> {
-    let file =
-        File::open(path).with_context(|| format!("failed to open session file: {}", path.display()))?;
-    let reader = BufReader::new(file);
-
-    let mut records: Vec<Value> = Vec::new();
-    let mut agent_progress_records: Vec<Value> = Vec::new();
-
-    for line_result in reader.lines() {
-        let line = line_result.context("failed to read JSONL line")?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let data: Value = match serde_json::from_str(trimmed) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        let record_type = data
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-
-        if NOISE_TYPES.contains(&record_type) {
-            continue;
-        }
-
-        if record_type == "progress" {
-            let is_agent_progress = data
-                .pointer("/data/type")
-                .and_then(Value::as_str)
-                == Some("agent_progress");
-            if is_agent_progress {
-                agent_progress_records.push(data);
-            }
-            continue;
-        }
-
-        records.push(data);
-    }
-
-    // Extract metadata.
+/// Convert a canonical event stream into a `SessionData` ready for rendering.
+///
+/// Replaces the old `parse_jsonl_to_session` — works with both Claude and
+/// Codex events since both emit the same `SessionEvent` types.
+fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
     let mut session_id: Option<String> = None;
     let mut summary: Option<String> = None;
     let mut timestamps: Vec<String> = Vec::new();
-    let mut models = std::collections::BTreeSet::new();
+    let mut models: BTreeSet<String> = BTreeSet::new();
 
-    for r in &records {
-        if session_id.is_none() {
-            if let Some(sid) = r.get("sessionId").and_then(Value::as_str) {
-                session_id = Some(sid.to_string());
-            }
-        }
-        if r.get("type").and_then(Value::as_str) == Some("summary") {
-            summary = r.get("summary").and_then(Value::as_str).map(str::to_string);
-        }
-        if let Some(ts) = r.get("timestamp").and_then(Value::as_str) {
-            timestamps.push(ts.to_string());
-        }
-        if let Some(m) = r.pointer("/message/model").and_then(Value::as_str) {
-            if !m.starts_with('<') {
-                models.insert(m.to_string());
-            }
-        }
-    }
-
-    // Assemble turns.
+    // -- Build turns from events --
     let mut turns: Vec<Turn> = Vec::new();
     let mut current_turn: Option<Turn> = None;
     let mut turn_number = 0i32;
 
-    for r in &records {
-        let rtype = r.get("type").and_then(Value::as_str).unwrap_or_default();
+    // Subagent tracking.
+    let mut subagent_deltas_map: HashMap<String, SubagentDelta> = HashMap::new();
+    // Extracted from tool_result payloads (legacy toolUseResult parity).
+    let mut subagent_stats_by_agent_id: HashMap<String, SubagentToolResultStats> = HashMap::new();
+    // Map tool_use_id → tool_result content for Task matching.
+    let mut tool_result_contents: HashMap<String, String> = HashMap::new();
 
-        if rtype == "user" {
-            // Check for interruption.
-            let msg = r.get("message").cloned().unwrap_or(Value::Null);
-            let content = msg.get("content").cloned().unwrap_or(Value::Null);
-            if is_interruption(&content) {
-                continue;
+    for event in events {
+        if let Some(ts) = &event.timestamp {
+            timestamps.push(ts.clone());
+        }
+
+        match &event.kind {
+            EventKind::Meta {
+                session_id: sid,
+                model,
+                ..
+            } => {
+                if session_id.is_none() {
+                    if let Some(id) = sid {
+                        session_id = Some(id.clone());
+                    }
+                }
+                if let Some(m) = model {
+                    if !m.starts_with('<') {
+                        models.insert(m.clone());
+                    }
+                }
             }
 
-            // Save previous turn.
-            if let Some(t) = current_turn.take() {
-                turns.push(t);
+            EventKind::Summary { text } => {
+                summary = Some(text.clone());
             }
 
-            turn_number += 1;
-            current_turn = Some(Turn {
-                turn_number,
-                user_content: extract_content_blocks_raw(&msg),
-                assistant_content: Vec::new(),
-                timestamp_start: r.get("timestamp").and_then(Value::as_str).map(str::to_string),
-                timestamp_end: None,
-                model: None,
-            });
-        } else if rtype == "assistant" {
-            if current_turn.is_none() {
+            EventKind::UserMessage { content } => {
+                // Check for interruption.
+                let is_interrupt = content.iter().any(|block| {
+                    if let ParserContentBlock::Text(text) = block {
+                        text.contains("[Request interrupted by user]")
+                    } else {
+                        false
+                    }
+                });
+                if is_interrupt {
+                    continue;
+                }
+
+                // Save previous turn.
+                if let Some(t) = current_turn.take() {
+                    turns.push(t);
+                }
+
                 turn_number += 1;
+                let user_blocks = convert_content_blocks(content);
+
+                // Also extract tool results from user message (Claude sends them here).
+                for block in content {
+                    if let ParserContentBlock::ToolResult {
+                        tool_use_id,
+                        content: result_content,
+                    } = block
+                    {
+                        if !tool_use_id.is_empty() {
+                            tool_result_contents
+                                .insert(tool_use_id.clone(), result_content.clone());
+                        }
+                        if let Some((agent_id, stats)) =
+                            extract_subagent_tool_result_stats(result_content)
+                        {
+                            subagent_stats_by_agent_id.insert(agent_id, stats);
+                        }
+                    }
+                }
+
                 current_turn = Some(Turn {
                     turn_number,
-                    user_content: Vec::new(),
+                    user_content: user_blocks,
                     assistant_content: Vec::new(),
-                    timestamp_start: r
-                        .get("timestamp")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                    timestamp_start: event.timestamp.clone(),
                     timestamp_end: None,
                     model: None,
                 });
             }
 
-            let msg = r.get("message").cloned().unwrap_or(Value::Null);
-            if let Some(ref mut turn) = current_turn {
-                turn.assistant_content
-                    .extend(extract_content_blocks_raw(&msg));
-                turn.timestamp_end = r
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                turn.model = msg
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
+            EventKind::AssistantMessage {
+                content,
+                model,
+                ..
+            } => {
+                if current_turn.is_none() {
+                    turn_number += 1;
+                    current_turn = Some(Turn {
+                        turn_number,
+                        user_content: Vec::new(),
+                        assistant_content: Vec::new(),
+                        timestamp_start: event.timestamp.clone(),
+                        timestamp_end: None,
+                        model: None,
+                    });
+                }
+
+                if let Some(m) = model {
+                    if !m.starts_with('<') {
+                        models.insert(m.clone());
+                    }
+                }
+
+                let blocks = convert_content_blocks(content);
+                if let Some(ref mut turn) = current_turn {
+                    turn.assistant_content.extend(blocks);
+                    turn.timestamp_end = event.timestamp.clone();
+                    turn.model = model.clone();
+                }
             }
+
+            EventKind::ToolResult {
+                tool_use_id,
+                content: result_content,
+                ..
+            } => {
+                // Store for Task matching.
+                if !tool_use_id.is_empty() {
+                    if let Some(text) = result_content {
+                        tool_result_contents.insert(tool_use_id.clone(), text.clone());
+                        if let Some((agent_id, stats)) =
+                            extract_subagent_tool_result_stats(text)
+                        {
+                            subagent_stats_by_agent_id.insert(agent_id, stats);
+                        }
+                    }
+                }
+            }
+
+            EventKind::SubagentProgress {
+                agent_id,
+                prompt,
+                message,
+                timestamp: progress_timestamp,
+                total_tokens,
+                total_duration_ms,
+                total_tool_use_count,
+                ..
+            } => {
+                let entry =
+                    subagent_deltas_map
+                        .entry(agent_id.clone())
+                        .or_insert_with(|| SubagentDelta {
+                            agent_id: agent_id.clone(),
+                            prompt: prompt.clone(),
+                            files_read: Vec::new(),
+                            files_written: Vec::new(),
+                            commands: Vec::new(),
+                            tool_counts: HashMap::new(),
+                            timestamps: Vec::new(),
+                            total_tokens: None,
+                            total_duration_ms: None,
+                            total_tool_use_count: None,
+                        });
+
+                if let Some(ts) = event
+                    .timestamp
+                    .as_deref()
+                    .or(progress_timestamp.as_deref())
+                {
+                    entry.timestamps.push(ts.to_string());
+                }
+
+                // Update stats (take latest non-None).
+                if total_tokens.is_some() {
+                    entry.total_tokens = *total_tokens;
+                }
+                if total_duration_ms.is_some() {
+                    entry.total_duration_ms = *total_duration_ms;
+                }
+                if total_tool_use_count.is_some() {
+                    entry.total_tool_use_count = *total_tool_use_count;
+                }
+
+                // Extract tool usage from the progress message content.
+                if let Some(msg) = message {
+                    extract_subagent_tool_usage(entry, msg);
+                }
+            }
+
+            // ToolUse events are already captured as content blocks within
+            // AssistantMessage. Standalone ToolUse events don't need separate
+            // handling for markdown rendering.
+            EventKind::ToolUse(_)
+            | EventKind::Usage { .. }
+            | EventKind::SubagentCompletion { .. }
+            | EventKind::StopSignal { .. } => {}
         }
     }
 
     if let Some(t) = current_turn.take() {
         turns.push(t);
+    }
+
+    // Apply tool-result-derived aggregate stats to matching agents.
+    for (agent_id, stats) in subagent_stats_by_agent_id {
+        if let Some(entry) = subagent_deltas_map.get_mut(&agent_id) {
+            if stats.total_tokens.is_some() {
+                entry.total_tokens = stats.total_tokens;
+            }
+            if stats.total_duration_ms.is_some() {
+                entry.total_duration_ms = stats.total_duration_ms;
+            }
+            if stats.total_tool_use_count.is_some() {
+                entry.total_tool_use_count = stats.total_tool_use_count;
+            }
+        }
+    }
+
+    // Merge tool_result_contents into turn user_content for Task matching.
+    // The rendering code looks up tool results by ID in user_content blocks.
+    // We already captured ToolResult events above; now inject them into
+    // the appropriate turn's user_content if not already present.
+    // (For Claude, tool_results come inside UserMessage content blocks, which
+    //  we already handled. For standalone ToolResult events, inject them.)
+    for turn in &mut turns {
+        // Check which tool_use_ids appear in assistant_content
+        let tool_ids: Vec<String> = turn
+            .assistant_content
+            .iter()
+            .filter_map(|b| {
+                if let ContentBlock::ToolUse { id, .. } = b {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for tid in tool_ids {
+            // If there's a result for this tool but it's not in user_content, add it.
+            let already_has = turn.user_content.iter().any(|b| {
+                if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                    tool_use_id == &tid
+                } else {
+                    false
+                }
+            });
+            if !already_has {
+                if let Some(content) = tool_result_contents.get(&tid) {
+                    turn.user_content.push(ContentBlock::ToolResult {
+                        tool_use_id: tid,
+                        content: content.clone(),
+                    });
+                }
+            }
+        }
     }
 
     // Timestamps and duration.
@@ -825,8 +965,13 @@ fn parse_jsonl_to_session(path: &Path) -> Result<SessionData> {
     let ts_end = timestamps.last().cloned();
     let duration_seconds = compute_duration(ts_start.as_deref(), ts_end.as_deref());
 
-    // Subagent deltas.
-    let subagent_deltas = extract_subagent_deltas(&records, &agent_progress_records);
+    // Subagent deltas sorted by first timestamp.
+    let mut subagent_deltas: Vec<SubagentDelta> = subagent_deltas_map.into_values().collect();
+    subagent_deltas.sort_by(|a, b| {
+        let a_min = a.timestamps.iter().min().cloned().unwrap_or_default();
+        let b_min = b.timestamps.iter().min().cloned().unwrap_or_default();
+        a_min.cmp(&b_min)
+    });
 
     let fallback_id = path
         .file_stem()
@@ -834,7 +979,7 @@ fn parse_jsonl_to_session(path: &Path) -> Result<SessionData> {
         .unwrap_or("unknown")
         .to_string();
 
-    Ok(SessionData {
+    SessionData {
         session_id: session_id.unwrap_or(fallback_id),
         summary,
         turns,
@@ -843,124 +988,200 @@ fn parse_jsonl_to_session(path: &Path) -> Result<SessionData> {
         duration_seconds,
         models_used: models.into_iter().collect(),
         subagent_deltas,
+    }
+}
+
+/// Convert parser content blocks to renderer content blocks.
+fn convert_content_blocks(blocks: &[ParserContentBlock]) -> Vec<ContentBlock> {
+    blocks
+        .iter()
+        .map(|block| match block {
+            ParserContentBlock::Text(text) => ContentBlock::Text {
+                text: text.clone(),
+            },
+            ParserContentBlock::Thinking => ContentBlock::Thinking,
+            ParserContentBlock::ToolUse(ToolUseEvent { id, name, input }) => {
+                ContentBlock::ToolUse {
+                    name: name.clone(),
+                    input: input.clone(),
+                    id: id.clone(),
+                }
+            }
+            ParserContentBlock::ToolResult {
+                tool_use_id,
+                content,
+            } => ContentBlock::ToolResult {
+                tool_use_id: tool_use_id.clone(),
+                content: content.clone(),
+            },
+        })
+        .collect()
+}
+
+/// Extract tool usage from a subagent progress message.
+fn extract_subagent_tool_usage(entry: &mut SubagentDelta, msg: &Value) {
+    // Progress messages can have nested assistant message with tool_use blocks.
+    if msg.get("type").and_then(Value::as_str) != Some("assistant") {
+        return;
+    }
+    let inner_msg = msg.get("message").unwrap_or(msg);
+    let Some(content) = inner_msg.get("content").and_then(Value::as_array) else {
+        return;
+    };
+
+    for block in content {
+        if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+            continue;
+        }
+        let tool_name = block
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let inp = block.get("input").cloned().unwrap_or(Value::Null);
+
+        *entry.tool_counts.entry(tool_name.clone()).or_insert(0) += 1;
+
+        match tool_name.as_str() {
+            "Read" => {
+                if let Some(path) = get_str(&inp, "file_path") {
+                    if !entry.files_read.contains(&path.to_string()) {
+                        entry.files_read.push(path.to_string());
+                    }
+                }
+            }
+            "Write" => {
+                if let Some(path) = get_str(&inp, "file_path") {
+                    let existing = entry.files_written.iter().any(|(p, _)| p == path);
+                    if !existing {
+                        entry
+                            .files_written
+                            .push((path.to_string(), "created".to_string()));
+                    }
+                }
+            }
+            "Edit" => {
+                if let Some(path) = get_str(&inp, "file_path") {
+                    let existing = entry.files_written.iter().any(|(p, _)| p == path);
+                    if !existing {
+                        entry
+                            .files_written
+                            .push((path.to_string(), "edited".to_string()));
+                    }
+                }
+            }
+            "Bash" => {
+                if let Some(cmd) = get_str(&inp, "command") {
+                    if !entry.commands.contains(&cmd.to_string()) {
+                        entry.commands.push(cmd.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Extract aggregate subagent stats from tool_result content.
+///
+/// This preserves legacy behavior where markdown parsing also consumed
+/// `toolUseResult` totals in addition to progress records.
+fn extract_subagent_tool_result_stats(
+    content: &str,
+) -> Option<(String, SubagentToolResultStats)> {
+    let parsed_json = serde_json::from_str::<Value>(content).ok();
+
+    let agent_id = parsed_json
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("agentId")
+                .or_else(|| value.get("agent_id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| extract_agent_id_from_result(content))
+        .or_else(|| extract_string_field(content, &["agentId", "agent_id"]))?;
+
+    let mut stats = SubagentToolResultStats::default();
+    if let Some(json) = parsed_json.as_ref() {
+        stats.total_tokens = extract_i64_from_value(
+            json.get("totalTokens")
+                .or_else(|| json.get("total_tokens")),
+        );
+        stats.total_duration_ms = extract_i64_from_value(
+            json.get("totalDurationMs")
+                .or_else(|| json.get("total_duration_ms")),
+        );
+        stats.total_tool_use_count = extract_i64_from_value(
+            json.get("totalToolUseCount")
+                .or_else(|| json.get("total_tool_use_count")),
+        );
+    }
+
+    if stats.total_tokens.is_none() {
+        stats.total_tokens = extract_i64_field(content, &["totalTokens", "total_tokens"]);
+    }
+    if stats.total_duration_ms.is_none() {
+        stats.total_duration_ms =
+            extract_i64_field(content, &["totalDurationMs", "total_duration_ms"]);
+    }
+    if stats.total_tool_use_count.is_none() {
+        stats.total_tool_use_count =
+            extract_i64_field(content, &["totalToolUseCount", "total_tool_use_count"]);
+    }
+
+    Some((agent_id, stats))
+}
+
+fn extract_i64_from_value(value: Option<&Value>) -> Option<i64> {
+    value.and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_u64().and_then(|raw| i64::try_from(raw).ok()))
+            .or_else(|| v.as_str().and_then(|raw| raw.parse::<i64>().ok()))
     })
 }
 
-/// Check if a user message content indicates an interruption.
-fn is_interruption(content: &Value) -> bool {
-    if let Some(text) = content.as_str() {
-        return text.contains("[Request interrupted by user]");
+fn extract_string_field(content: &str, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        let pattern = format!(
+            r#"(?i)(?:"{}"|{})\s*[:=]\s*"([^"]+)""#,
+            regex::escape(key),
+            regex::escape(key)
+        );
+        let Ok(re) = Regex::new(&pattern) else {
+            continue;
+        };
+        if let Some(caps) = re.captures(content) {
+            if let Some(m) = caps.get(1) {
+                return Some(m.as_str().to_string());
+            }
+        }
     }
-    if let Some(items) = content.as_array() {
-        for item in items {
-            if item.get("type").and_then(Value::as_str) == Some("text") {
-                if let Some(t) = item.get("text").and_then(Value::as_str) {
-                    if t.contains("[Request interrupted by user]") {
-                        return true;
-                    }
+    None
+}
+
+fn extract_i64_field(content: &str, keys: &[&str]) -> Option<i64> {
+    for key in keys {
+        let pattern = format!(
+            r#"(?i)(?:"{}"|{})\s*[:=]\s*"?(?P<num>\d+)"?"#,
+            regex::escape(key),
+            regex::escape(key)
+        );
+        let Ok(re) = Regex::new(&pattern) else {
+            continue;
+        };
+        if let Some(caps) = re.captures(content) {
+            if let Some(num) = caps.name("num") {
+                if let Ok(value) = num.as_str().parse::<i64>() {
+                    return Some(value);
                 }
             }
         }
     }
-    false
+    None
 }
 
-/// Extract content blocks from a raw message Value.
-fn extract_content_blocks_raw(message: &Value) -> Vec<ContentBlock> {
-    let content = match message.get("content") {
-        Some(c) => c,
-        None => return Vec::new(),
-    };
-
-    if let Some(text) = content.as_str() {
-        return vec![ContentBlock::Text {
-            text: text.to_string(),
-        }];
-    }
-
-    let Some(items) = content.as_array() else {
-        return Vec::new();
-    };
-
-    let mut blocks = Vec::new();
-    for item in items {
-        if let Some(text) = item.as_str() {
-            blocks.push(ContentBlock::Text {
-                text: text.to_string(),
-            });
-            continue;
-        }
-
-        let Some(obj) = item.as_object() else {
-            continue;
-        };
-        let btype = obj
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-
-        match btype {
-            "text" => {
-                let text = obj
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                blocks.push(ContentBlock::Text { text });
-            }
-            "thinking" => {
-                blocks.push(ContentBlock::Thinking);
-            }
-            "tool_use" => {
-                let name = obj
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let input = obj.get("input").cloned().unwrap_or(Value::Object(serde_json::Map::new()));
-                let id = obj
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                blocks.push(ContentBlock::ToolUse { name, input, id });
-            }
-            "tool_result" => {
-                let tool_use_id = obj
-                    .get("tool_use_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let raw_content = obj.get("content").cloned().unwrap_or(Value::Null);
-                let content_str = if let Some(list) = raw_content.as_array() {
-                    let texts: Vec<&str> = list
-                        .iter()
-                        .filter_map(|c| {
-                            if c.get("type").and_then(Value::as_str) == Some("text") {
-                                c.get("text").and_then(Value::as_str)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    texts.join("\n")
-                } else if let Some(s) = raw_content.as_str() {
-                    s.to_string()
-                } else {
-                    raw_content.to_string()
-                };
-                blocks.push(ContentBlock::ToolResult {
-                    tool_use_id,
-                    content: content_str,
-                });
-            }
-            _ => {
-                // Skip unknown block types.
-            }
-        }
-    }
-    blocks
-}
 
 /// Compute duration in seconds between two timestamps.
 fn compute_duration(start: Option<&str>, end: Option<&str>) -> Option<f64> {
@@ -974,148 +1195,6 @@ fn compute_duration(start: Option<&str>, end: Option<&str>) -> Option<f64> {
 // Subagent delta extraction
 // ---------------------------------------------------------------------------
 
-/// Extract subagent activity from progress records and toolUseResults.
-fn extract_subagent_deltas(
-    records: &[Value],
-    agent_progress_records: &[Value],
-) -> Vec<SubagentDelta> {
-    if agent_progress_records.is_empty() {
-        return Vec::new();
-    }
-
-    let mut agents: HashMap<String, SubagentDelta> = HashMap::new();
-
-    for rec in agent_progress_records {
-        let data = rec.get("data").cloned().unwrap_or(Value::Null);
-        let Some(agent_id) = data.get("agentId").and_then(Value::as_str) else {
-            continue;
-        };
-
-        let entry = agents.entry(agent_id.to_string()).or_insert_with(|| {
-            SubagentDelta {
-                agent_id: agent_id.to_string(),
-                prompt: data
-                    .get("prompt")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                files_read: Vec::new(),
-                files_written: Vec::new(),
-                commands: Vec::new(),
-                tool_counts: HashMap::new(),
-                timestamps: Vec::new(),
-                total_tokens: None,
-                total_duration_ms: None,
-                total_tool_use_count: None,
-            }
-        });
-
-        if let Some(ts) = rec.get("timestamp").and_then(Value::as_str) {
-            entry.timestamps.push(ts.to_string());
-        }
-
-        // Extract tool usage from assistant messages in progress.
-        let msg = data.get("message").cloned().unwrap_or(Value::Null);
-        if msg.get("type").and_then(Value::as_str) == Some("assistant") {
-            let inner_msg = msg.get("message").cloned().unwrap_or(Value::Null);
-            if let Some(content) = inner_msg.get("content").and_then(Value::as_array) {
-                for block in content {
-                    if block.get("type").and_then(Value::as_str) != Some("tool_use") {
-                        continue;
-                    }
-                    let tool_name = block
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    let inp = block.get("input").cloned().unwrap_or(Value::Null);
-
-                    // Count tool usage.
-                    *entry.tool_counts.entry(tool_name.clone()).or_insert(0) += 1;
-
-                    // Track specific tools.
-                    match tool_name.as_str() {
-                        "Read" => {
-                            if let Some(path) = get_str(&inp, "file_path") {
-                                if !entry.files_read.contains(&path.to_string()) {
-                                    entry.files_read.push(path.to_string());
-                                }
-                            }
-                        }
-                        "Write" => {
-                            if let Some(path) = get_str(&inp, "file_path") {
-                                let existing = entry
-                                    .files_written
-                                    .iter()
-                                    .any(|(p, _)| p == path);
-                                if !existing {
-                                    entry
-                                        .files_written
-                                        .push((path.to_string(), "created".to_string()));
-                                }
-                            }
-                        }
-                        "Edit" => {
-                            if let Some(path) = get_str(&inp, "file_path") {
-                                let existing = entry
-                                    .files_written
-                                    .iter()
-                                    .any(|(p, _)| p == path);
-                                if !existing {
-                                    entry
-                                        .files_written
-                                        .push((path.to_string(), "edited".to_string()));
-                                }
-                            }
-                        }
-                        "Bash" => {
-                            if let Some(cmd) = get_str(&inp, "command") {
-                                if !entry.commands.contains(&cmd.to_string()) {
-                                    entry.commands.push(cmd.to_string());
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    // Extract usage stats from toolUseResult in main records.
-    for rec in records {
-        if rec.get("type").and_then(Value::as_str) != Some("user") {
-            continue;
-        }
-        let tool_result = match rec.get("toolUseResult") {
-            Some(tr) if tr.is_object() => tr,
-            _ => continue,
-        };
-        let Some(agent_id) = tool_result.get("agentId").and_then(Value::as_str) else {
-            continue;
-        };
-        if let Some(entry) = agents.get_mut(agent_id) {
-            entry.total_tokens = tool_result
-                .get("totalTokens")
-                .and_then(Value::as_i64);
-            entry.total_duration_ms = tool_result
-                .get("totalDurationMs")
-                .and_then(Value::as_i64);
-            entry.total_tool_use_count = tool_result
-                .get("totalToolUseCount")
-                .and_then(Value::as_i64);
-        }
-    }
-
-    // Convert to sorted list.
-    let mut result: Vec<SubagentDelta> = agents.into_values().collect();
-    result.sort_by(|a, b| {
-        let a_min = a.timestamps.iter().min().cloned().unwrap_or_default();
-        let b_min = b.timestamps.iter().min().cloned().unwrap_or_default();
-        a_min.cmp(&b_min)
-    });
-    result
-}
 
 // ---------------------------------------------------------------------------
 // Markdown rendering
@@ -1237,7 +1316,8 @@ fn flush_pending_tools(
             ToolAnnotation::Simple(s) => lines.push(s),
             ToolAnnotation::Task(task) => {
                 let result = all_tool_results.get(&task.tool_id).map(String::as_str);
-                let delta = lookup_delta_for_task(&task.tool_id, all_tool_results, deltas_by_agent_id);
+                let delta =
+                    lookup_delta_for_task(&task.tool_id, all_tool_results, deltas_by_agent_id);
                 lines.push(fmt_task_block(&task, result, delta));
             }
         }
@@ -1258,7 +1338,8 @@ fn render_tool_annotations_inline(
             ToolAnnotation::Simple(s) => lines.push(s.clone()),
             ToolAnnotation::Task(task) => {
                 let result = all_tool_results.get(&task.tool_id).map(String::as_str);
-                let delta = lookup_delta_for_task(&task.tool_id, all_tool_results, deltas_by_agent_id);
+                let delta =
+                    lookup_delta_for_task(&task.tool_id, all_tool_results, deltas_by_agent_id);
                 lines.push(fmt_task_block(task, result, delta));
             }
         }
@@ -1816,12 +1897,29 @@ mod tests {
     }
 
     #[test]
-    fn test_is_interruption() {
-        let content = Value::String("[Request interrupted by user]".to_string());
-        assert!(is_interruption(&content));
+    fn test_interruption_detection() {
+        use crate::parser::event::{
+            ContentBlock as PB, EventKind as EK, SessionEvent as SE,
+        };
+        // An interruption user message should be skipped during conversion.
+        let events = vec![SE {
+            timestamp: Some("2026-03-07T10:00:00Z".to_string()),
+            kind: EK::UserMessage {
+                content: vec![PB::Text("[Request interrupted by user]".to_string())],
+            },
+        }];
+        let session = events_to_session_data(&events, Path::new("test.jsonl"));
+        assert!(session.turns.is_empty(), "interruption turn should be skipped");
 
-        let normal = Value::String("Hello".to_string());
-        assert!(!is_interruption(&normal));
+        // A normal user message should produce a turn.
+        let events2 = vec![SE {
+            timestamp: Some("2026-03-07T10:00:00Z".to_string()),
+            kind: EK::UserMessage {
+                content: vec![PB::Text("Hello".to_string())],
+            },
+        }];
+        let session2 = events_to_session_data(&events2, Path::new("test.jsonl"));
+        assert_eq!(session2.turns.len(), 1, "normal message should produce a turn");
     }
 
     #[test]
@@ -1839,5 +1937,47 @@ mod tests {
         let threads = extract_open_threads(&[turn]);
         assert_eq!(threads.len(), 2);
         assert!(threads[0].contains("fix the build"));
+    }
+
+    #[test]
+    fn test_subagent_stats_merged_from_tool_result_payload() {
+        use crate::parser::event::{
+            ContentBlock as PB, EventKind as EK, SessionEvent as SE,
+        };
+
+        let events = vec![
+            SE {
+                timestamp: Some("2026-03-07T10:00:00Z".to_string()),
+                kind: EK::SubagentProgress {
+                    agent_id: "agent123".to_string(),
+                    prompt: "Investigate parser output".to_string(),
+                    message: None,
+                    timestamp: Some("2026-03-07T10:00:00Z".to_string()),
+                    total_tokens: None,
+                    total_duration_ms: None,
+                    total_tool_use_count: None,
+                },
+            },
+            SE {
+                timestamp: Some("2026-03-07T10:01:00Z".to_string()),
+                kind: EK::UserMessage {
+                    content: vec![
+                        PB::Text("tool result incoming".to_string()),
+                        PB::ToolResult {
+                            tool_use_id: "task_1".to_string(),
+                            content: r#"{"agentId":"agent123","totalTokens":1200,"totalDurationMs":3000,"totalToolUseCount":4}"#.to_string(),
+                        },
+                    ],
+                },
+            },
+        ];
+
+        let session = events_to_session_data(&events, Path::new("test.jsonl"));
+        assert_eq!(session.subagent_deltas.len(), 1);
+        let delta = &session.subagent_deltas[0];
+        assert_eq!(delta.agent_id, "agent123");
+        assert_eq!(delta.total_tokens, Some(1200));
+        assert_eq!(delta.total_duration_ms, Some(3000));
+        assert_eq!(delta.total_tool_use_count, Some(4));
     }
 }

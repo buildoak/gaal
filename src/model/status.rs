@@ -95,7 +95,8 @@ pub fn compute_session_status(params: &StatusParams<'_>) -> SessionStatus {
         return SessionStatus::Unknown;
     }
 
-    let silence_stuck = params.silence_secs >= params.stuck_silence_secs && !params.permission_blocked;
+    let silence_stuck =
+        params.silence_secs >= params.stuck_silence_secs && !params.permission_blocked;
     if silence_stuck
         || params.loop_detected
         || params.context_pct >= 95.0
@@ -111,7 +112,10 @@ pub fn compute_session_status(params: &StatusParams<'_>) -> SessionStatus {
 
 fn is_failed_exit(exit_signal: Option<&str>) -> bool {
     matches!(
-        exit_signal.unwrap_or_default().to_ascii_lowercase().as_str(),
+        exit_signal
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
         "error" | "max_tokens" | "killed" | "failed"
     )
 }

@@ -181,7 +181,12 @@ fn load_all_handoffs(conn: &Connection) -> Result<Vec<RecallSession>, GaalError>
         let keyword_tokens = tokenize_fields(&keywords);
         let headline_tokens: HashSet<String> = headline
             .as_deref()
-            .map(|h| split_tokens(h).into_iter().filter(|t| !STOPWORDS.contains(&t.as_str())).collect())
+            .map(|h| {
+                split_tokens(h)
+                    .into_iter()
+                    .filter(|t| !STOPWORDS.contains(&t.as_str()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         out.push(RecallSession {
@@ -222,7 +227,10 @@ fn score_sessions(
     for token in query_tokens {
         let mut df = 0.0_f64;
         for session in sessions {
-            if session.project_tokens.contains(token) || session.keyword_tokens.contains(token) || session.headline_tokens.contains(token) {
+            if session.project_tokens.contains(token)
+                || session.keyword_tokens.contains(token)
+                || session.headline_tokens.contains(token)
+            {
                 df += 1.0;
             }
         }
@@ -433,7 +441,12 @@ fn render_eywa(results: &[ScoredSession], _human: bool) -> Result<(), GaalError>
 
     for (idx, row) in results.iter().enumerate() {
         let date = row.session.session_date.to_string();
-        let headline = row.session.handoff.headline.as_deref().unwrap_or("(no headline)");
+        let headline = row
+            .session
+            .handoff
+            .headline
+            .as_deref()
+            .unwrap_or("(no headline)");
         println!("### {} --- {}\n", date, headline);
 
         // Read handoff markdown and strip YAML frontmatter
