@@ -82,9 +82,14 @@ struct InspectProcess {
 
 #[derive(Debug, Serialize)]
 struct InspectContext {
-    tokens_used: i64,
-    tokens_limit: i64,
-    pct_used: f64,
+    /// Cumulative input + output tokens across all turns (for cost tracking).
+    total_tokens: i64,
+    /// Peak input tokens seen in any single API turn (approximates context window usage).
+    context_window: i64,
+    /// Context window limit for this engine/model.
+    context_limit: i64,
+    /// Percentage of context window used (context_window / context_limit).
+    pct_context: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -360,7 +365,7 @@ fn inspect_live(
         .and_then(|s| s.model.clone())
         .or_else(|| parsed.as_ref().and_then(|p| p.meta.model.clone()));
 
-    let tokens_used = row
+    let total_tokens = row
         .as_ref()
         .map(|s| s.total_input_tokens + s.total_output_tokens)
         .or_else(|| {
@@ -371,8 +376,9 @@ fn inspect_live(
         .unwrap_or(0)
         .max(0);
 
+    let context_window = peak_input_tokens(&runtime.usage_samples);
     let tokens_limit = context_limit_tokens(active.engine, model.as_deref());
-    let context_pct = pct_used(tokens_used, tokens_limit);
+    let context_pct = pct_used(context_window, tokens_limit);
 
     let now = Utc::now();
     let last_event_ts = runtime
@@ -419,7 +425,7 @@ fn inspect_live(
         now,
     );
 
-    let velocity = build_velocity(&facts, &runtime, tokens_used, uptime_secs, now, true);
+    let velocity = build_velocity(&facts, &runtime, total_tokens, uptime_secs, now, true);
     let recent_errors = build_recent_errors(&facts, now);
 
     Ok(InspectOutput {
@@ -434,9 +440,10 @@ fn inspect_live(
             rss_mb: round1(active.process.rss_mb),
         }),
         context: InspectContext {
-            tokens_used,
-            tokens_limit,
-            pct_used: context_pct,
+            total_tokens,
+            context_window,
+            context_limit: tokens_limit,
+            pct_context: context_pct,
         },
         current_turn: turn,
         last_turn: None,
@@ -471,7 +478,7 @@ fn inspect_archived(row: &SessionRow, conn: &Connection) -> Result<InspectOutput
         .clone()
         .or_else(|| parsed.as_ref().and_then(|p| p.meta.model.clone()));
 
-    let tokens_used = (row.total_input_tokens + row.total_output_tokens)
+    let total_tokens = (row.total_input_tokens + row.total_output_tokens)
         .max(0)
         .max(
             parsed
@@ -479,8 +486,9 @@ fn inspect_archived(row: &SessionRow, conn: &Connection) -> Result<InspectOutput
                 .map(|p| p.total_input_tokens + p.total_output_tokens)
                 .unwrap_or(0),
         );
+    let context_window = peak_input_tokens(&runtime.usage_samples);
     let tokens_limit = context_limit_tokens(engine, model.as_deref());
-    let context_pct = pct_used(tokens_used, tokens_limit);
+    let context_pct = pct_used(context_window, tokens_limit);
 
     let now = Utc::now();
     let anchor = row
@@ -505,7 +513,7 @@ fn inspect_archived(row: &SessionRow, conn: &Connection) -> Result<InspectOutput
     .unwrap_or(0);
 
     let status = archived_status(row, parsed.as_ref());
-    let velocity = build_velocity(&facts, &runtime, tokens_used, uptime_secs, anchor, false);
+    let velocity = build_velocity(&facts, &runtime, total_tokens, uptime_secs, anchor, false);
     let recent_errors = build_recent_errors(&facts, now);
 
     let turn = turn_snapshot(
@@ -535,9 +543,10 @@ fn inspect_archived(row: &SessionRow, conn: &Connection) -> Result<InspectOutput
         uptime_secs,
         process: None,
         context: InspectContext {
-            tokens_used,
-            tokens_limit,
-            pct_used: context_pct,
+            total_tokens,
+            context_window,
+            context_limit: tokens_limit,
+            pct_context: context_pct,
         },
         current_turn: None,
         last_turn: turn,
@@ -782,6 +791,17 @@ fn duration_between(start: &str, end: &str) -> Option<u64> {
         return Some(0);
     }
     u64::try_from(end.signed_duration_since(start).num_seconds()).ok()
+}
+
+/// Return the highest input_tokens value from any single usage sample.
+/// This approximates peak context window usage — the largest prompt the
+/// model had to process in a single turn.
+fn peak_input_tokens(samples: &[crate::commands::active::UsageSample]) -> i64 {
+    samples
+        .iter()
+        .map(|s| s.input_tokens)
+        .max()
+        .unwrap_or(0)
 }
 
 fn round1(value: f64) -> f64 {

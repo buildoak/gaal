@@ -77,6 +77,7 @@ pub(crate) struct RuntimeProbe {
 pub(crate) struct UsageSample {
     pub ts: String,
     pub tokens: i64,
+    pub input_tokens: i64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -406,24 +407,33 @@ fn record_timestamp(record: &Value) -> Option<String> {
 
 fn extract_usage_sample(record: &Value, engine: Engine) -> Option<UsageSample> {
     let ts = record_timestamp(record)?;
-    let tokens = match engine {
+    let (input_tokens, tokens) = match engine {
         Engine::Claude => {
-            as_i64(record.pointer("/message/usage/input_tokens"))
-                + as_i64(record.pointer("/message/usage/output_tokens"))
+            let input = as_i64(record.pointer("/message/usage/input_tokens"));
+            let output = as_i64(record.pointer("/message/usage/output_tokens"));
+            (input, input + output)
         }
         Engine::Codex => {
             let payload_type = record.pointer("/payload/type").and_then(Value::as_str);
             if payload_type == Some("token_count") {
-                as_i64(record.pointer("/payload/info/last_token_usage/input_tokens"))
-                    + as_i64(record.pointer("/payload/info/last_token_usage/output_tokens"))
+                let input =
+                    as_i64(record.pointer("/payload/info/last_token_usage/input_tokens"));
+                let output =
+                    as_i64(record.pointer("/payload/info/last_token_usage/output_tokens"));
+                (input, input + output)
             } else {
-                as_i64(record.pointer("/payload/usage/input_tokens"))
-                    + as_i64(record.pointer("/payload/usage/output_tokens"))
+                let input = as_i64(record.pointer("/payload/usage/input_tokens"));
+                let output = as_i64(record.pointer("/payload/usage/output_tokens"));
+                (input, input + output)
             }
         }
     };
 
-    (tokens > 0).then_some(UsageSample { ts, tokens })
+    (tokens > 0).then_some(UsageSample {
+        ts,
+        tokens,
+        input_tokens,
+    })
 }
 
 fn as_i64(value: Option<&Value>) -> i64 {
