@@ -318,6 +318,21 @@ pub fn remove_tag(conn: &Connection, session_id: &str, tag: &str) -> Result<(), 
     Ok(())
 }
 
+/// Delete a session and its associated facts by id.
+pub fn delete_session(conn: &Connection, id: &str) -> Result<(), GaalError> {
+    conn.execute(
+        "DELETE FROM facts WHERE session_id = :id",
+        named_params! { ":id": id },
+    )
+    .map_err(db_err)?;
+    conn.execute(
+        "DELETE FROM sessions WHERE id = :id",
+        named_params! { ":id": id },
+    )
+    .map_err(db_err)?;
+    Ok(())
+}
+
 /// Fetch one session by id.
 pub fn get_session(conn: &Connection, id: &str) -> Result<Option<SessionRow>, GaalError> {
     conn.query_row(

@@ -12,8 +12,8 @@ use crate::commands::search;
 use crate::config::{gaal_home, load_config};
 use crate::db::open_db;
 use crate::db::queries::{
-    get_handoff, get_index_status, get_session, insert_facts_batch, upsert_handoff, upsert_session,
-    SessionRow,
+    delete_session, get_handoff, get_index_status, get_session, insert_facts_batch, upsert_handoff,
+    upsert_session, SessionRow,
 };
 use crate::discovery::{discover_sessions, DiscoveredSession};
 use crate::error::GaalError;
@@ -402,7 +402,13 @@ pub(crate) fn index_discovered_session(
     let parsed = parse_session(&discovered.path).map_err(GaalError::from)?;
 
     // Skip noise-only sessions (0 conversation turns, e.g. file-history-snapshot only).
-    if parsed.total_turns == 0 && existing.is_none() {
+    if parsed.total_turns == 0 {
+        if let Some(row) = existing.as_ref() {
+            // Prune stale zero-turn sessions from the DB on re-index.
+            if row.total_turns == 0 {
+                delete_session(conn, &row.id)?;
+            }
+        }
         return Ok(IndexOutcome::Skipped);
     }
 
@@ -529,15 +535,22 @@ fn default_session_markdown_path(discovered: &DiscoveredSession) -> PathBuf {
 ///
 /// Writes the rendered markdown to `~/.gaal/data/{engine}/sessions/YYYY/MM/DD/{id}.md`.
 fn generate_session_markdown(discovered: &DiscoveredSession) -> Result<PathBuf, GaalError> {
+    let started_at = discovered
+        .started_at
+        .as_deref()
+        .unwrap_or(EPOCH_RFC3339);
+
+    // Don't create markdown for sessions with no valid timestamp (epoch fallback).
+    if started_at == EPOCH_RFC3339 {
+        return Err(GaalError::Internal(
+            "skipping markdown for epoch-timestamp session".to_string(),
+        ));
+    }
+
     let markdown = crate::render::session_md::render_session_markdown(&discovered.path)
         .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
 
     let engine = discovered.engine.to_string();
-
-    let started_at = discovered
-        .started_at
-        .as_deref()
-        .unwrap_or("1970-01-01T00:00:00Z");
     let (year, month, day) = extract_date_parts(started_at);
 
     let md_path = gaal_home()
@@ -579,7 +592,12 @@ fn write_session_markdown_to_dir(
     let started_at = discovered
         .started_at
         .as_deref()
-        .unwrap_or("1970-01-01T00:00:00Z");
+        .unwrap_or(EPOCH_RFC3339);
+
+    // Don't create markdown for sessions with no valid timestamp (epoch fallback).
+    if started_at == EPOCH_RFC3339 {
+        return Ok(WriteOutcome::Skipped);
+    }
     let (year, month, day) = extract_date_parts(started_at);
     let short_id = &crate::util::sanitize_filename(&discovered.id)
         .chars()

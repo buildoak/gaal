@@ -23,7 +23,7 @@ pub fn discover_claude_sessions() -> Result<Vec<DiscoveredSession>> {
         let Ok(meta) = fs::metadata(&path) else {
             continue;
         };
-        if !meta.is_file() {
+        if !meta.is_file() || meta.len() == 0 {
             continue;
         }
 
