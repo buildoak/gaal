@@ -18,7 +18,7 @@ pub(crate) fn tool_call_fact(
     if matches!(name, "Bash" | "exec_command") {
         return Some(bash_fact(input, ts, turn_number));
     }
-    if name == "Task" {
+    if matches!(name, "Task" | "TaskCreate" | "Agent") {
         return Some(task_fact(input, ts, turn_number));
     }
     if matches!(name, "WebSearch" | "WebFetch" | "web_search" | "web_fetch") {
