@@ -23,6 +23,14 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
     conn.busy_timeout(Duration::from_millis(5_000))
         .map_err(map_db_err)?;
 
+    // Run migrations BEFORE the full schema batch so that new columns exist
+    // when CREATE INDEX IF NOT EXISTS references them.  ALTER TABLE ADD COLUMN
+    // is a no-op error when the column already exists, so .ok() swallows that.
+    conn.execute_batch(
+        "ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standalone';",
+    )
+    .ok();
+
     conn.execute_batch(DB_SCHEMA).map_err(map_db_err)?;
     Ok(())
 }

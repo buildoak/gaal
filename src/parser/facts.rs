@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::linker::extract_child_links;
 use crate::model::fact::FactType;
 use crate::model::Fact;
 
@@ -312,6 +313,7 @@ pub fn extract_parsed_session(
     }
 
     let resolved_start = resolve_started_at(started_at, last_event_at.clone());
+    let child_links = extract_child_links(events);
 
     ParsedSession {
         meta: SessionMeta {
@@ -330,6 +332,7 @@ pub fn extract_parsed_session(
         ended_at: last_event_at.clone(),
         exit_signal: last_stop_reason,
         last_event_at,
+        child_links,
     }
 }
 

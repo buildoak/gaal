@@ -21,6 +21,7 @@ pub struct SessionRow {
     pub exit_signal: Option<String>,
     pub last_event_at: Option<String>,
     pub parent_id: Option<String>,
+    pub session_type: String,
     pub jsonl_path: String,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
@@ -134,12 +135,12 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
         r#"
         INSERT INTO sessions (
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            parent_id, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
+            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
             total_turns, last_indexed_offset
         )
         VALUES (
             :id, :engine, :model, :cwd, :started_at, :ended_at, :exit_signal, :last_event_at,
-            :parent_id, :jsonl_path, :total_input_tokens, :total_output_tokens, :total_tools,
+            :parent_id, :session_type, :jsonl_path, :total_input_tokens, :total_output_tokens, :total_tools,
             :total_turns, :last_indexed_offset
         )
         ON CONFLICT(id) DO UPDATE SET
@@ -151,6 +152,7 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             exit_signal = excluded.exit_signal,
             last_event_at = excluded.last_event_at,
             parent_id = excluded.parent_id,
+            session_type = excluded.session_type,
             jsonl_path = excluded.jsonl_path,
             total_input_tokens = excluded.total_input_tokens,
             total_output_tokens = excluded.total_output_tokens,
@@ -168,6 +170,7 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             ":exit_signal": &session.exit_signal,
             ":last_event_at": &session.last_event_at,
             ":parent_id": &session.parent_id,
+            ":session_type": &session.session_type,
             ":jsonl_path": &session.jsonl_path,
             ":total_input_tokens": session.total_input_tokens,
             ":total_output_tokens": session.total_output_tokens,
@@ -339,7 +342,7 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<SessionRow>, Ga
         r#"
         SELECT
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            parent_id, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
+            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
             total_turns, last_indexed_offset
         FROM sessions
         WHERE id = :id
@@ -383,7 +386,7 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
         r#"
         SELECT
             s.id, s.engine, s.model, s.cwd, s.started_at, s.ended_at, s.exit_signal, s.last_event_at,
-            s.parent_id, s.jsonl_path, s.total_input_tokens, s.total_output_tokens, s.total_tools,
+            s.parent_id, s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens, s.total_tools,
             s.total_turns, s.last_indexed_offset
         FROM sessions s
         WHERE (:engine IS NULL OR s.engine = :engine)
@@ -519,7 +522,7 @@ pub fn get_children(conn: &Connection, parent_id: &str) -> Result<Vec<SessionRow
             r#"
             SELECT
                 id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-                parent_id, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
+                parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
                 total_turns, last_indexed_offset
             FROM sessions
             WHERE parent_id = :parent_id
@@ -852,6 +855,9 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         exit_signal: row.get("exit_signal")?,
         last_event_at: row.get("last_event_at")?,
         parent_id: row.get("parent_id")?,
+        session_type: row
+            .get::<_, Option<String>>("session_type")?
+            .unwrap_or_else(|| "standalone".to_string()),
         jsonl_path: row.get("jsonl_path")?,
         total_input_tokens: row.get("total_input_tokens")?,
         total_output_tokens: row.get("total_output_tokens")?,

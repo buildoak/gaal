@@ -4,6 +4,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use crate::error::GaalError;
+use crate::linker::ChildLink;
 
 /// Session engine type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,4 +76,6 @@ pub struct ParsedSession {
     pub exit_signal: Option<String>,
     /// Last event timestamp seen in stream.
     pub last_event_at: Option<String>,
+    /// Child links extracted from agent-mux tool results.
+    pub child_links: Vec<ChildLink>,
 }

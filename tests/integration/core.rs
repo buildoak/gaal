@@ -42,6 +42,7 @@ fn session_row(
             .map(str::to_string)
             .or_else(|| Some(started_at.to_string())),
         parent_id: None,
+        session_type: "standalone".to_string(),
         jsonl_path: format!("/tmp/{id}.jsonl"),
         total_input_tokens: 120,
         total_output_tokens: 40,
@@ -159,6 +160,7 @@ fn session_insert_and_query_roundtrip() {
         exit_signal: Some("ok".to_string()),
         last_event_at: Some("2026-03-01T10:29:10Z".to_string()),
         parent_id: Some(parent.id.clone()),
+        session_type: "standalone".to_string(),
         jsonl_path: "/tmp/sess-roundtrip-1.jsonl".to_string(),
         total_input_tokens: 2_000,
         total_output_tokens: 900,

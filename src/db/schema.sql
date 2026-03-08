@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     exit_signal TEXT,
     last_event_at TEXT,
     parent_id TEXT REFERENCES sessions(id),
+    session_type TEXT DEFAULT 'standalone' CHECK(session_type IN ('standalone', 'coordinator', 'subagent')),
     jsonl_path TEXT NOT NULL,
     total_input_tokens INTEGER DEFAULT 0,
     total_output_tokens INTEGER DEFAULT 0,
@@ -56,5 +57,6 @@ CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_cwd ON sessions(cwd);
 CREATE INDEX IF NOT EXISTS idx_sessions_engine ON sessions(engine);
+CREATE INDEX IF NOT EXISTS idx_sessions_type ON sessions(session_type);
 CREATE INDEX IF NOT EXISTS idx_handoffs_substance ON handoffs(substance);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON session_tags(tag);

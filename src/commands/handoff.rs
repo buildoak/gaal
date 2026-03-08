@@ -487,7 +487,7 @@ fn find_batch_candidates(
             r#"
             SELECT
                 s.id, s.engine, s.model, s.cwd, s.started_at, s.ended_at, s.exit_signal, s.last_event_at,
-                s.parent_id, s.jsonl_path, s.total_input_tokens, s.total_output_tokens, s.total_tools,
+                s.parent_id, s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens, s.total_tools,
                 s.total_turns, s.last_indexed_offset
             FROM sessions s
             WHERE s.id NOT IN (SELECT session_id FROM handoffs)
@@ -517,12 +517,13 @@ fn find_batch_candidates(
             exit_signal: row.get(6).map_err(GaalError::from)?,
             last_event_at: row.get(7).map_err(GaalError::from)?,
             parent_id: row.get(8).map_err(GaalError::from)?,
-            jsonl_path: row.get(9).map_err(GaalError::from)?,
-            total_input_tokens: row.get(10).map_err(GaalError::from)?,
-            total_output_tokens: row.get(11).map_err(GaalError::from)?,
-            total_tools: row.get(12).map_err(GaalError::from)?,
-            total_turns: row.get(13).map_err(GaalError::from)?,
-            last_indexed_offset: row.get(14).map_err(GaalError::from)?,
+            session_type: row.get(9).map_err(GaalError::from)?,
+            jsonl_path: row.get(10).map_err(GaalError::from)?,
+            total_input_tokens: row.get(11).map_err(GaalError::from)?,
+            total_output_tokens: row.get(12).map_err(GaalError::from)?,
+            total_tools: row.get(13).map_err(GaalError::from)?,
+            total_turns: row.get(14).map_err(GaalError::from)?,
+            last_indexed_offset: row.get(15).map_err(GaalError::from)?,
         });
     }
     Ok(out)

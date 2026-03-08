@@ -1,10 +1,11 @@
 //! `gaal index` — build, manage, and inspect the session index.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use rusqlite::named_params;
+use rusqlite::{named_params, OptionalExtension};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -12,11 +13,12 @@ use crate::commands::search;
 use crate::config::{gaal_home, load_config};
 use crate::db::open_db;
 use crate::db::queries::{
-    delete_session, get_handoff, get_index_status, get_session, insert_facts_batch, upsert_handoff,
-    upsert_session, SessionRow,
+    delete_session, get_handoff, get_index_status, get_session, insert_facts_batch, list_sessions,
+    upsert_handoff, upsert_session, ListFilter, SessionRow,
 };
 use crate::discovery::{discover_sessions, DiscoveredSession};
 use crate::error::GaalError;
+use crate::linker::ChildLink;
 use crate::model::{Fact, HandoffRecord};
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
@@ -83,6 +85,12 @@ struct ImportEywaSummary {
     imported: usize,
     skipped: usize,
     errors: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct LinkParentsSummary {
+    linked_children: usize,
+    coordinators: usize,
 }
 
 #[derive(Debug)]
@@ -281,6 +289,11 @@ pub fn run_reindex(args: ReindexArgs) -> Result<(), GaalError> {
     let offset = file_len_i64(&path)?;
     let mut row = build_full_session_row(&parsed, &path, offset, existing.parent_id);
     row.id = existing.id.clone();
+    row.session_type = existing.session_type.clone();
+    let child_links = parsed.child_links.clone();
+    if !child_links.is_empty() {
+        row.session_type = "coordinator".to_string();
+    }
     let facts = normalize_facts(parsed.facts, &existing.id);
 
     conn.execute(
@@ -292,6 +305,13 @@ pub fn run_reindex(args: ReindexArgs) -> Result<(), GaalError> {
     upsert_session(&conn, &row)?;
     if !facts.is_empty() {
         insert_facts_batch(&conn, &facts)?;
+    }
+    if !link_children_for_parent(&conn, &existing.id, &child_links)?.is_empty() {
+        conn.execute(
+            "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
+            named_params! { ":id": &existing.id },
+        )
+        .map_err(GaalError::from)?;
     }
     search::build_search_index(&conn)?;
 
@@ -352,6 +372,51 @@ pub fn run_prune(args: PruneArgs) -> Result<(), GaalError> {
     print_json(&payload).map_err(GaalError::from)
 }
 
+/// Run `gaal index link-parents`.
+pub fn run_link_parents() -> Result<(), GaalError> {
+    let conn = open_db()?;
+    let sessions = list_sessions(
+        &conn,
+        &ListFilter {
+            limit: Some(1_000_000),
+            include_children: true,
+            ..ListFilter::default()
+        },
+    )?;
+    let mut linked_children: HashSet<String> = HashSet::new();
+    let mut coordinators: HashSet<String> = HashSet::new();
+
+    for session in sessions {
+        let path = PathBuf::from(&session.jsonl_path);
+        if !path.exists() {
+            continue;
+        }
+        let parsed = match parse_session(&path) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                eprintln!("failed parsing {}: {}", path.display(), err);
+                continue;
+            }
+        };
+        if !parsed.child_links.is_empty() {
+            conn.execute(
+                "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
+                named_params! { ":id": &session.id },
+            )
+            .map_err(GaalError::from)?;
+            coordinators.insert(session.id.clone());
+        }
+        let linked = link_children_for_parent(&conn, &session.id, &parsed.child_links)?;
+        linked_children.extend(linked);
+    }
+
+    let summary = LinkParentsSummary {
+        linked_children: linked_children.len(),
+        coordinators: coordinators.len(),
+    };
+    print_json(&summary).map_err(GaalError::from)
+}
+
 pub(crate) fn index_discovered_session(
     conn: &rusqlite::Connection,
     discovered: &DiscoveredSession,
@@ -384,17 +449,28 @@ pub(crate) fn index_discovered_session(
         })?;
         let (parsed_delta, new_offset) =
             parse_session_incremental(&discovered.path, offset).map_err(GaalError::from)?;
-        let merged_row = build_incremental_session_row(
+        let mut merged_row = build_incremental_session_row(
             &existing_row,
             &parsed_delta,
             &discovered.path,
             new_offset,
         )?;
+        let child_links = parsed_delta.child_links.clone();
+        if !child_links.is_empty() {
+            merged_row.session_type = "coordinator".to_string();
+        }
         let normalized_facts = normalize_facts(parsed_delta.facts, &existing_row.id);
 
         upsert_session(conn, &merged_row)?;
         if !normalized_facts.is_empty() {
             insert_facts_batch(conn, &normalized_facts)?;
+        }
+        if !link_children_for_parent(conn, &existing_row.id, &child_links)?.is_empty() {
+            conn.execute(
+                "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
+                named_params! { ":id": &existing_row.id },
+            )
+            .map_err(GaalError::from)?;
         }
         return Ok(IndexOutcome::Indexed);
     }
@@ -420,6 +496,13 @@ pub(crate) fn index_discovered_session(
     let mut session_row =
         build_full_session_row(&parsed, &discovered.path, file_size_i64, parent_id);
     session_row.id = target_id.to_string();
+    if let Some(row) = existing.as_ref() {
+        session_row.session_type = row.session_type.clone();
+    }
+    let child_links = parsed.child_links.clone();
+    if !child_links.is_empty() {
+        session_row.session_type = "coordinator".to_string();
+    }
     let facts = normalize_facts(parsed.facts, target_id);
 
     if let Some(row) = existing.as_ref() {
@@ -433,6 +516,13 @@ pub(crate) fn index_discovered_session(
     upsert_session(conn, &session_row)?;
     if !facts.is_empty() {
         insert_facts_batch(conn, &facts)?;
+    }
+    if !link_children_for_parent(conn, target_id, &child_links)?.is_empty() {
+        conn.execute(
+            "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
+            named_params! { ":id": target_id },
+        )
+        .map_err(GaalError::from)?;
     }
     Ok(IndexOutcome::Indexed)
 }
@@ -453,6 +543,7 @@ fn build_full_session_row(
         exit_signal: parsed.exit_signal.clone(),
         last_event_at: parsed.last_event_at.clone(),
         parent_id,
+        session_type: "standalone".to_string(),
         jsonl_path: path.to_string_lossy().to_string(),
         total_input_tokens: parsed.total_input_tokens,
         total_output_tokens: parsed.total_output_tokens,
@@ -495,6 +586,7 @@ fn build_incremental_session_row(
             .clone()
             .or_else(|| existing.last_event_at.clone()),
         parent_id: existing.parent_id.clone(),
+        session_type: existing.session_type.clone(),
         jsonl_path: path.to_string_lossy().to_string(),
         total_input_tokens: existing.total_input_tokens + parsed_delta.total_input_tokens,
         total_output_tokens: existing.total_output_tokens + parsed_delta.total_output_tokens,
@@ -656,6 +748,64 @@ fn normalize_facts(mut facts: Vec<Fact>, session_id: &str) -> Vec<Fact> {
     facts
 }
 
+fn link_children_for_parent(
+    conn: &rusqlite::Connection,
+    parent_id: &str,
+    links: &[ChildLink],
+) -> Result<Vec<String>, GaalError> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for link in links {
+        let Some(child_id) = resolve_child_session_id(conn, &link.child_session_id)? else {
+            continue;
+        };
+        if child_id == parent_id || !seen.insert(child_id.clone()) {
+            continue;
+        }
+        conn.execute(
+            "UPDATE sessions SET parent_id = :parent_id, session_type = 'subagent' WHERE id = :id",
+            named_params! { ":parent_id": parent_id, ":id": &child_id },
+        )
+        .map_err(GaalError::from)?;
+        out.push(child_id);
+    }
+    Ok(out)
+}
+
+fn resolve_child_session_id(
+    conn: &rusqlite::Connection,
+    child_session_id: &str,
+) -> Result<Option<String>, GaalError> {
+    let raw = child_session_id.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    if let Some(row) = get_session(conn, raw)? {
+        return Ok(Some(row.id));
+    }
+    let short = raw.chars().take(8).collect::<String>();
+    if short.is_empty() {
+        return Ok(None);
+    }
+    if let Some(row) = get_session(conn, &short)? {
+        return Ok(Some(row.id));
+    }
+    let like = format!("{short}%");
+    conn.query_row(
+        r#"
+        SELECT id
+        FROM sessions
+        WHERE id LIKE :like
+        ORDER BY CASE WHEN id = :short THEN 0 ELSE 1 END, LENGTH(id) ASC
+        LIMIT 1
+        "#,
+        named_params! { ":like": &like, ":short": &short },
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(GaalError::from)
+}
+
 fn parse_engine_filter(engine: Option<&str>) -> Result<Option<Engine>, GaalError> {
     let Some(raw) = engine else {
         return Ok(None);
@@ -783,6 +933,7 @@ fn build_eywa_session_stub(entry: &EywaEntry) -> SessionRow {
         exit_signal: None,
         last_event_at: Some(started_at),
         parent_id: None,
+        session_type: "standalone".to_string(),
         jsonl_path: entry
             .content_path
             .clone()
