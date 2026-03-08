@@ -49,6 +49,12 @@ pub fn detect_engine(path: &Path) -> Result<Engine> {
         }
     }
 
+    // Fallback: infer engine from the file's directory when content is empty or
+    // lacks recognisable type fields (e.g. legacy / abandoned 0-byte sessions).
+    if let Some(engine) = detect_engine_from_path(path) {
+        return Ok(engine);
+    }
+
     bail!(
         "could not detect engine from first 10 non-empty lines: {}",
         path.display()
@@ -88,4 +94,20 @@ fn is_codex_type(value: &str) -> bool {
         value,
         "session_meta" | "response_item" | "turn_context" | "event_msg"
     )
+}
+
+/// Infer engine from the JSONL file's path when content-based detection fails.
+///
+/// Files under `~/.claude/projects/` are Claude sessions; files under
+/// `~/.codex/sessions/` are Codex sessions.  This handles empty / abandoned
+/// session files that contain no parseable records.
+fn detect_engine_from_path(path: &Path) -> Option<Engine> {
+    let path_str = path.to_str()?;
+    if path_str.contains("/.claude/projects/") {
+        return Some(Engine::Claude);
+    }
+    if path_str.contains("/.codex/sessions/") {
+        return Some(Engine::Codex);
+    }
+    None
 }
