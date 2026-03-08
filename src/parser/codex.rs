@@ -104,7 +104,7 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                             kind: EventKind::UserMessage { content },
                         });
                     }
-                    "agent_message" | "task_complete" => {
+                    "agent_message" => {
                         let assistant_text = extract_assistant_text(&record, event_type);
                         let content = assistant_text
                             .map(|text| vec![ContentBlock::Text(text)])
@@ -113,31 +113,64 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                             .pointer("/payload/model")
                             .and_then(Value::as_str)
                             .map(str::to_string);
-                        let stop_reason = if event_type == "task_complete" {
-                            Some(extract_codex_stop_reason(&record))
-                        } else {
-                            None
-                        };
 
                         events.push(SessionEvent {
                             timestamp: ts.clone(),
                             kind: EventKind::AssistantMessage {
                                 content,
                                 model,
-                                stop_reason: stop_reason.clone(),
+                                stop_reason: None,
                             },
                         });
+                    }
+                    "task_complete" => {
+                        let assistant_text = extract_assistant_text(&record, event_type);
+                        let model = record
+                            .pointer("/payload/model")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        let stop_reason = Some(extract_codex_stop_reason(&record));
 
-                        if event_type == "task_complete" {
+                        // Deduplicate: task_complete's last_agent_message often
+                        // repeats the preceding agent_message. Only emit an
+                        // AssistantMessage if the text is new.
+                        let is_duplicate = assistant_text.as_ref().map_or(true, |text| {
+                            events.iter().rev().any(|ev| {
+                                if let EventKind::AssistantMessage { content, .. } = &ev.kind {
+                                    content.iter().any(|block| {
+                                        if let ContentBlock::Text(prev) = block {
+                                            prev == text
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                } else {
+                                    false
+                                }
+                            })
+                        });
+
+                        if !is_duplicate {
+                            let content = assistant_text
+                                .map(|text| vec![ContentBlock::Text(text)])
+                                .unwrap_or_default();
                             events.push(SessionEvent {
                                 timestamp: ts.clone(),
-                                kind: EventKind::StopSignal {
-                                    reason: stop_reason
-                                        .clone()
-                                        .unwrap_or_else(|| "task_complete".to_string()),
+                                kind: EventKind::AssistantMessage {
+                                    content,
+                                    model,
+                                    stop_reason: stop_reason.clone(),
                                 },
                             });
                         }
+
+                        events.push(SessionEvent {
+                            timestamp: ts.clone(),
+                            kind: EventKind::StopSignal {
+                                reason: stop_reason
+                                    .unwrap_or_else(|| "task_complete".to_string()),
+                            },
+                        });
                     }
                     "token_count" => {
                         events.push(SessionEvent {

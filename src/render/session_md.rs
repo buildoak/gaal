@@ -256,6 +256,7 @@ fn fmt_model(model: &str) -> String {
         return "unknown".to_string();
     }
     let lower = model.to_lowercase();
+    // Claude model families.
     if lower.contains("opus") {
         return "Opus".to_string();
     }
@@ -264,6 +265,22 @@ fn fmt_model(model: &str) -> String {
     }
     if lower.contains("haiku") {
         return "Haiku".to_string();
+    }
+    // Codex models (e.g. "gpt-5.3-codex", "codex-1", "o4-mini").
+    if lower.contains("codex") {
+        // Extract version prefix before "codex" if present (e.g. "GPT-5.3").
+        if let Some(pos) = lower.find("codex") {
+            let prefix = model[..pos].trim_end_matches('-');
+            if prefix.is_empty() {
+                return "Codex".to_string();
+            }
+            return format!("{} Codex", prefix.to_uppercase());
+        }
+        return "Codex".to_string();
+    }
+    // o-series models (e.g. "o4-mini", "o3").
+    if lower.starts_with("o") && lower.chars().nth(1).map_or(false, |c| c.is_ascii_digit()) {
+        return model.to_string();
     }
     if model.contains('-') {
         model.split('-').next().unwrap_or(model).to_string()
@@ -308,14 +325,19 @@ fn fmt_tool_annotation(name: &str, input: &Value, tool_id: &str) -> Option<ToolA
             let pattern = get_str(&inp, "pattern").unwrap_or("?");
             Some(ToolAnnotation::Simple(format!("-> Search: `{pattern}`")))
         }
-        "Bash" => {
-            let cmd = get_str(&inp, "command").unwrap_or("?");
+        "Bash" | "exec_command" => {
+            let cmd = get_str(&inp, "command")
+                .or_else(|| get_str(&inp, "cmd"))
+                .unwrap_or("?");
             let display = if cmd.len() > 60 {
                 format!("{}...", &cmd[..57.min(cmd.len())])
             } else {
                 cmd.to_string()
             };
             Some(ToolAnnotation::Simple(format!("-> Bash: `{display}`")))
+        }
+        "apply_patch" => {
+            Some(ToolAnnotation::Simple("-> Patch (apply_patch)".to_string()))
         }
         "Task" => {
             let desc = get_str(&inp, "description").unwrap_or("").to_string();
@@ -617,8 +639,10 @@ fn collect_commands(turns: &[Turn]) -> Vec<String> {
     for turn in turns {
         for block in &turn.assistant_content {
             if let ContentBlock::ToolUse { name, input, .. } = block {
-                if name == "Bash" {
-                    if let Some(cmd) = get_str(input, "command") {
+                if matches!(name.as_str(), "Bash" | "exec_command") {
+                    if let Some(cmd) = get_str(input, "command")
+                        .or_else(|| get_str(input, "cmd"))
+                    {
                         if !commands.contains(&cmd.to_string()) {
                             commands.push(cmd.to_string());
                         }
@@ -890,11 +914,20 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
                 }
             }
 
-            // ToolUse events are already captured as content blocks within
-            // AssistantMessage. Standalone ToolUse events don't need separate
-            // handling for markdown rendering.
-            EventKind::ToolUse(_)
-            | EventKind::Usage { .. }
+            // For Claude, ToolUse events are already inside AssistantMessage
+            // content blocks. For Codex, they arrive as standalone events and
+            // must be injected into the current turn's assistant_content.
+            EventKind::ToolUse(tool_event) => {
+                if let Some(ref mut turn) = current_turn {
+                    turn.assistant_content.push(ContentBlock::ToolUse {
+                        name: tool_event.name.clone(),
+                        input: tool_event.input.clone(),
+                        id: tool_event.id.clone(),
+                    });
+                }
+            }
+
+            EventKind::Usage { .. }
             | EventKind::SubagentCompletion { .. }
             | EventKind::StopSignal { .. } => {}
         }
