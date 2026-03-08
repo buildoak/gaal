@@ -454,7 +454,9 @@ fn process_session_handoff(
         }
     }
 
-    let handoff_path = write_handoff_markdown(session, &response)?;
+    let frontmatter = build_handoff_frontmatter(session, &extracted, engine, model);
+    let full_content = format!("{}{}", frontmatter, response);
+    let handoff_path = write_handoff_markdown(session, &full_content)?;
 
     let record = HandoffRecord {
         session_id: session.id.clone(),
@@ -972,6 +974,105 @@ fn extract_agent_mux_error(value: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|error| !error.is_empty())
         .map(str::to_string)
+}
+
+/// Build YAML frontmatter for handoff markdown files.
+fn build_handoff_frontmatter(
+    session: &SessionRow,
+    extracted: &ExtractedMetadata,
+    engine: &str,
+    model: &str,
+) -> String {
+    // Session ID: first 8 chars
+    let sid: String = session.id.chars().take(8).collect();
+
+    // Date from started_at (RFC3339)
+    let date_str = DateTime::parse_from_rfc3339(&session.started_at)
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    // Duration in human format "2h 24m" / "45m" / "0m"
+    let dur_mins = duration_minutes(session);
+    let duration_str = if dur_mins >= 60 {
+        format!("{}h {}m", dur_mins / 60, dur_mins % 60)
+    } else {
+        format!("{}m", dur_mins)
+    };
+
+    // Simplified model name using same logic as render/session_md.rs
+    let model_simple = simplify_model_name(model);
+
+    // Engine: "claude" or "codex"
+    let engine_str = if engine.contains("codex") {
+        "codex"
+    } else {
+        "claude"
+    };
+
+    // Headline - quote if it contains YAML special chars
+    let headline = extracted.headline.as_deref().unwrap_or("Untitled session");
+    let headline_formatted = if headline.contains(':')
+        || headline.contains('#')
+        || headline.contains('&')
+        || headline.contains('*')
+        || headline.contains('!')
+        || headline.contains('|')
+        || headline.contains('"')
+        || headline.contains('\'')
+        || headline.contains('%')
+        || headline.contains('@')
+        || headline.contains('<')
+        || headline.contains('>')
+        || headline.contains('{')
+        || headline.contains('}')
+        || headline.contains('[')
+        || headline.contains(']')
+    {
+        // Use double quotes, escape any internal double quotes
+        format!("\"{}\"", headline.replace('"', "\\\""))
+    } else {
+        headline.to_string()
+    };
+
+    // Projects as YAML inline list
+    let projects_str = format!("[{}]", extracted.projects.join(", "));
+
+    // Keywords as YAML inline list
+    let keywords_str = format!("[{}]", extracted.keywords.join(", "));
+
+    // Substance score
+    let substance = extracted.substance;
+
+    format!(
+        "---\nsession_id: {sid}\ndate: {date_str}\nduration: {duration_str}\nmodel: {model_simple}\nengine: {engine_str}\nheadline: {headline_formatted}\nprojects: {projects_str}\nkeywords: {keywords_str}\nsubstance: {substance}\n---\n\n"
+    )
+}
+
+/// Simplify model name to human-readable form.
+fn simplify_model_name(model: &str) -> String {
+    let lower = model.to_lowercase();
+    if lower.contains("opus") {
+        "Opus".to_string()
+    } else if lower.contains("sonnet") {
+        "Sonnet".to_string()
+    } else if lower.contains("haiku") {
+        "Haiku".to_string()
+    } else if lower.contains("codex") {
+        if let Some(pos) = lower.find("codex") {
+            let prefix = model[..pos].trim_end_matches('-');
+            if prefix.is_empty() {
+                "Codex".to_string()
+            } else {
+                format!("{} Codex", prefix.to_uppercase())
+            }
+        } else {
+            "Codex".to_string()
+        }
+    } else if lower.contains("o4-mini") {
+        "o4-mini".to_string()
+    } else {
+        model.to_string()
+    }
 }
 
 fn write_handoff_markdown(session: &SessionRow, content: &str) -> Result<PathBuf, GaalError> {
