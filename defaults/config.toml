@@ -1,0 +1,28 @@
+# Gaal configuration — agent session observability
+# Copy to ~/.gaal/config.toml or run 'gaal index init'
+
+# Default output directory for session markdown files (used by `gaal index backfill`).
+# When set, backfill writes markdowns here without needing --output-dir.
+# markdown_output_dir = "/path/to/session/markdowns/"
+
+[llm]
+# Default engine for LLM operations (codex, claude)
+default_engine = "codex"
+# Default model identifier (codex spark via agent-mux: --engine codex --model gpt-5.3-codex-spark)
+default_model = "gpt-5.3-codex-spark"
+# Timeout in seconds for LLM invocations
+timeout_secs = 120
+
+[handoff]
+# Path to extraction prompt (relative to ~/.gaal/)
+prompt = "prompts/handoff.md"
+# Output format identifier
+format = "eywa"
+
+[agent-mux]
+# Binary name or absolute path to agent-mux
+path = "agent-mux"
+
+[stuck]
+# Seconds of silence before a session is considered stuck
+silence_secs = 300

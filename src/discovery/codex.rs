@@ -1,0 +1,146 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+
+use crate::discovery::discover::{read_head_lines, DiscoveredSession};
+use crate::parser::types::Engine;
+
+const HEAD_LINES: usize = 30;
+
+/// Discover Codex session JSONL files from `~/.codex/sessions` recursively.
+pub fn discover_codex_sessions() -> Result<Vec<DiscoveredSession>> {
+    let Some(home) = dirs::home_dir() else {
+        return Ok(Vec::new());
+    };
+    let root = home.join(".codex").join("sessions");
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut sessions = Vec::new();
+    for path in collect_rollout_jsonl_files(&root) {
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+
+        let head = read_head_lines(&path, HEAD_LINES);
+        let (id, model, cwd, started_at) = parse_codex_head(&head);
+        let fallback_id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        sessions.push(DiscoveredSession {
+            id: id.unwrap_or(fallback_id),
+            engine: Engine::Codex,
+            path,
+            model,
+            cwd,
+            started_at,
+            file_size: meta.len(),
+        });
+    }
+
+    Ok(sessions)
+}
+
+fn collect_rollout_jsonl_files(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let is_rollout = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
+                .unwrap_or(false);
+
+            if is_rollout {
+                out.push(path);
+            }
+        }
+    }
+
+    out
+}
+
+fn parse_codex_head(lines: &[String]) -> CodexHead {
+    let mut id: Option<String> = None;
+    let mut model: Option<String> = None;
+    let mut cwd: Option<String> = None;
+    let mut started_at: Option<String> = None;
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+
+        if started_at.is_none() {
+            started_at = record
+                .pointer("/payload/timestamp")
+                .or_else(|| record.get("timestamp"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+        if id.is_none() {
+            id = record
+                .pointer("/payload/id")
+                .or_else(|| record.get("session_id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+        if cwd.is_none() {
+            cwd = record
+                .pointer("/payload/cwd")
+                .or_else(|| record.get("cwd"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+        if model.is_none() {
+            model = record
+                .pointer("/payload/model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+
+        if id.is_some() && model.is_some() && cwd.is_some() && started_at.is_some() {
+            break;
+        }
+    }
+
+    (id, model, cwd, started_at)
+}
+
+type CodexHead = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);

@@ -1,0 +1,1165 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::os::fd::AsFd;
+use std::sync::{Arc, LazyLock, Mutex, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use anyhow::anyhow;
+use chrono::{DateTime, Local, TimeDelta, Utc};
+use regex::Regex;
+use rusqlite::{named_params, Connection};
+use serde::Serialize;
+use serde_json::Value;
+
+use crate::config::{GaalConfig, gaal_home, load_config};
+use crate::db::open_db;
+use crate::db::queries::{get_facts, get_session, upsert_handoff, SessionRow};
+use crate::error::GaalError;
+use crate::model::{Fact, FactType, HandoffRecord};
+use crate::output::json::print_json;
+
+/// Built-in fallback extraction prompt used when no prompt file is available.
+const DEFAULT_HANDOFF_PROMPT: &str = r#"You are analyzing an agent session trace. Extract:
+## Headline (one-line summary)
+## What Happened (structured bullet summary of key actions)
+## Key Decisions (decisions made)
+## Open Threads (unfinished work)
+## Key Files (files created/modified with descriptions)
+Also extract: projects (list), keywords (list), substance score (0-3)."#;
+
+static FENCED_JSON_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)```json\s*\n(.*?)\n\s*```")
+        .expect("fenced JSON regex for handoff metadata should compile")
+});
+
+/// Arguments for `gaal handoff`.
+#[derive(Debug, Clone)]
+pub struct HandoffArgs {
+    /// Session id/prefix, or the keyword `today`.
+    pub id: Option<String>,
+    /// Override extraction engine (defaults to config).
+    pub engine: Option<String>,
+    /// Override extraction model (defaults to config).
+    pub model: Option<String>,
+    /// Optional prompt path override.
+    pub prompt: Option<PathBuf>,
+    /// Optional provider label for metadata/routing context.
+    pub provider: Option<String>,
+    /// Optional output format label.
+    pub format: Option<String>,
+    /// Run batch mode.
+    pub batch: bool,
+    /// Time window (for example: `7d`).
+    pub since: Option<String>,
+    /// Max concurrent workers.
+    pub parallel: usize,
+    /// Minimum turns required to process a session.
+    pub min_turns: usize,
+    /// Preview candidates without processing.
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct HandoffRunResult {
+    session_id: String,
+    handoff_path: String,
+    headline: Option<String>,
+    projects: Vec<String>,
+    keywords: Vec<String>,
+    substance: i32,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct BatchResult {
+    session_id: String,
+    status: String,
+    handoff_path: Option<String>,
+    error: Option<String>,
+    duration_secs: f64,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ExtractedMetadata {
+    headline: Option<String>,
+    projects: Vec<String>,
+    keywords: Vec<String>,
+    substance: i32,
+}
+
+/// Runs the `gaal handoff` workflow.
+pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
+    let mut config = load_config();
+    if config.handoff.prompt.is_relative() {
+        config.handoff.prompt = gaal_home().join(&config.handoff.prompt);
+    }
+
+    let conn = open_db()?;
+    if args.batch {
+        return run_batch(&conn, &config, &args);
+    }
+
+    let id_or_today = if let Some(id) = args.id.clone() {
+        id
+    } else {
+        let detected = crate::detection::detect_current_session()?;
+        eprintln!(
+            "Auto-detected {} session {} (PID {}, JSONL: {})",
+            detected.engine,
+            detected.session_id,
+            detected.pid,
+            detected.jsonl_path.display()
+        );
+        detected.session_id
+    };
+
+    let engine = args
+        .engine
+        .clone()
+        .unwrap_or_else(|| config.llm.default_engine.clone());
+    let model = args
+        .model
+        .clone()
+        .unwrap_or_else(|| config.llm.default_model.clone());
+    let provider = args
+        .provider
+        .clone()
+        .unwrap_or_else(|| "agent-mux".to_string());
+    let format = args
+        .format
+        .clone()
+        .unwrap_or_else(|| config.handoff.format.clone());
+    let prompt_path = args
+        .prompt
+        .clone()
+        .unwrap_or_else(|| config.handoff.prompt.clone());
+    let prompt = load_prompt(&prompt_path)?;
+
+    let sessions = resolve_sessions(&conn, &id_or_today)?;
+    if sessions.is_empty() {
+        return Err(GaalError::NoResults);
+    }
+
+    let mut results = Vec::new();
+    for session in sessions {
+        let processed = process_session_handoff(
+            &conn, &config, &session, &engine, &model, &prompt, &provider, &format,
+        )?;
+
+        results.push(HandoffRunResult {
+            session_id: session.id,
+            handoff_path: processed.path.to_string_lossy().to_string(),
+            headline: processed.extracted.headline,
+            projects: processed.extracted.projects,
+            keywords: processed.extracted.keywords,
+            substance: processed.extracted.substance,
+        });
+    }
+
+    print_json(&results).map_err(GaalError::from)
+}
+
+#[derive(Debug, Clone)]
+struct ProcessedSessionHandoff {
+    path: PathBuf,
+    extracted: ExtractedMetadata,
+}
+
+fn run_batch(conn: &Connection, config: &GaalConfig, args: &HandoffArgs) -> Result<(), GaalError> {
+    let engine = args
+        .engine
+        .clone()
+        .unwrap_or_else(|| config.llm.default_engine.clone());
+    let model = args
+        .model
+        .clone()
+        .unwrap_or_else(|| config.llm.default_model.clone());
+    let provider = args
+        .provider
+        .clone()
+        .unwrap_or_else(|| "agent-mux".to_string());
+    let format = args
+        .format
+        .clone()
+        .unwrap_or_else(|| config.handoff.format.clone());
+    let prompt_path = args
+        .prompt
+        .clone()
+        .unwrap_or_else(|| config.handoff.prompt.clone());
+    let prompt = load_prompt(&prompt_path)?;
+
+    let since_date = parse_since_filter(args.since.as_deref().unwrap_or("7d"));
+    let candidates = find_batch_candidates(conn, &since_date, args.min_turns)?;
+    if candidates.is_empty() {
+        eprintln!(
+            "Batch complete: 0/0 succeeded, 0 failed (since {since_date}, min_turns={})",
+            args.min_turns
+        );
+        return print_json(&Vec::<BatchResult>::new()).map_err(GaalError::from);
+    }
+
+    if args.dry_run {
+        eprintln!(
+            "Batch dry-run: {} candidate session(s) since {} with min_turns={}",
+            candidates.len(),
+            since_date,
+            args.min_turns
+        );
+        for session in &candidates {
+            eprintln!(
+                "- {} (started_at={}, turns={})",
+                session.id, session.started_at, session.total_turns
+            );
+        }
+        let results: Vec<BatchResult> = candidates
+            .iter()
+            .map(|session| BatchResult {
+                session_id: session.id.clone(),
+                status: "pending".to_string(),
+                handoff_path: None,
+                error: None,
+                duration_secs: 0.0,
+            })
+            .collect();
+        return print_json(&results).map_err(GaalError::from);
+    }
+
+    let total = candidates.len();
+    let mut results = Vec::with_capacity(total);
+
+    if args.parallel <= 1 || total <= 1 {
+        for (idx, session) in candidates.iter().enumerate() {
+            eprintln!("Batch {}/{}: {}", idx + 1, total, session.id);
+            let started = Instant::now();
+            let outcome = process_single_batch_session(
+                conn, config, session, &engine, &model, &prompt, &provider, &format,
+            );
+            let duration_secs = started.elapsed().as_secs_f64();
+            match outcome {
+                Ok(path) => results.push(BatchResult {
+                    session_id: session.id.clone(),
+                    status: "success".to_string(),
+                    handoff_path: Some(path),
+                    error: None,
+                    duration_secs,
+                }),
+                Err(err) => results.push(BatchResult {
+                    session_id: session.id.clone(),
+                    status: "error".to_string(),
+                    handoff_path: None,
+                    error: Some(err.to_string()),
+                    duration_secs,
+                }),
+            }
+        }
+    } else {
+        let workers = args.parallel.clamp(1, 5);
+        let chunk_size = candidates.len().div_ceil(workers);
+        let shared: Arc<Mutex<Vec<BatchResult>>> = Arc::new(Mutex::new(Vec::with_capacity(total)));
+        let mut handles = Vec::new();
+
+        for chunk in candidates.chunks(chunk_size) {
+            let sessions = chunk.to_vec();
+            let shared_results = Arc::clone(&shared);
+            let engine = engine.clone();
+            let model = model.clone();
+            let prompt = prompt.clone();
+            let provider = provider.clone();
+            let format = format.clone();
+            let config = config.clone();
+
+            handles.push(thread::spawn(move || {
+                let thread_conn = match open_db() {
+                    Ok(conn) => conn,
+                    Err(err) => {
+                        if let Ok(mut guard) = shared_results.lock() {
+                            for session in sessions {
+                                guard.push(BatchResult {
+                                    session_id: session.id,
+                                    status: "error".to_string(),
+                                    handoff_path: None,
+                                    error: Some(err.to_string()),
+                                    duration_secs: 0.0,
+                                });
+                            }
+                        }
+                        return;
+                    }
+                };
+
+                for session in sessions {
+                    let started = Instant::now();
+                    let outcome = process_single_batch_session(
+                        &thread_conn,
+                        &config,
+                        &session,
+                        &engine,
+                        &model,
+                        &prompt,
+                        &provider,
+                        &format,
+                    );
+                    let duration_secs = started.elapsed().as_secs_f64();
+                    let result = match outcome {
+                        Ok(path) => BatchResult {
+                            session_id: session.id.clone(),
+                            status: "success".to_string(),
+                            handoff_path: Some(path),
+                            error: None,
+                            duration_secs,
+                        },
+                        Err(err) => BatchResult {
+                            session_id: session.id.clone(),
+                            status: "error".to_string(),
+                            handoff_path: None,
+                            error: Some(err.to_string()),
+                            duration_secs,
+                        },
+                    };
+
+                    if let Ok(mut guard) = shared_results.lock() {
+                        guard.push(result);
+                    }
+                }
+            }));
+        }
+
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        let guard = shared
+            .lock()
+            .map_err(|_| GaalError::Internal("batch results lock poisoned".to_string()))?;
+        results = guard.clone();
+    }
+
+    let succeeded = results.iter().filter(|r| r.status == "success").count();
+    let failed = results.iter().filter(|r| r.status == "error").count();
+    eprintln!("Batch complete: {succeeded}/{total} succeeded, {failed} failed");
+
+    print_json(&results).map_err(GaalError::from)
+}
+
+fn process_single_batch_session(
+    conn: &Connection,
+    config: &GaalConfig,
+    session: &SessionRow,
+    engine: &str,
+    model: &str,
+    prompt: &str,
+    provider: &str,
+    format: &str,
+) -> Result<String, GaalError> {
+    let processed = process_session_handoff(
+        conn, config, session, engine, model, prompt, provider, format,
+    )?;
+    Ok(processed.path.to_string_lossy().to_string())
+}
+
+fn validate_handoff_metadata(
+    headline: Option<&str>,
+    substance: i32,
+    projects: &[String],
+    keywords: &[String],
+) -> Result<(), String> {
+    let hl = headline.unwrap_or("");
+    if hl.len() < 5 {
+        return Err(format!("headline too short ({} chars, need ≥5)", hl.len()));
+    }
+    if !(0..=3).contains(&substance) {
+        return Err(format!("substance out of range: {} (expected 0-3)", substance));
+    }
+    if substance >= 1 && projects.is_empty() {
+        return Err("substantive session (substance ≥1) must have at least one project".into());
+    }
+    if substance >= 1 && keywords.is_empty() {
+        return Err("substantive session (substance ≥1) must have at least one keyword".into());
+    }
+    Ok(())
+}
+
+fn process_session_handoff(
+    conn: &Connection,
+    config: &GaalConfig,
+    session: &SessionRow,
+    engine: &str,
+    model: &str,
+    prompt: &str,
+    provider: &str,
+    format: &str,
+) -> Result<ProcessedSessionHandoff, GaalError> {
+    let facts = get_facts(conn, &session.id, None)?;
+    let context = build_context(session, &facts, provider, format);
+
+    let max_attempts = 2;
+    let mut response = String::new();
+    let mut extracted = ExtractedMetadata::default();
+    for attempt in 1..=max_attempts {
+        response = invoke_agent_mux(
+            &config.agent_mux.path,
+            engine,
+            model,
+            session.cwd.as_deref().unwrap_or("."),
+            prompt,
+            &context,
+            config.llm.timeout_secs,
+        )?;
+        extracted = extract_metadata(&response);
+        match validate_handoff_metadata(
+            extracted.headline.as_deref(),
+            extracted.substance,
+            &extracted.projects,
+            &extracted.keywords,
+        ) {
+            Ok(()) => break,
+            Err(reason) if attempt < max_attempts => {
+                eprintln!(
+                    "Handoff validation failed (attempt {}/{}): {}. Retrying...",
+                    attempt, max_attempts, reason
+                );
+            }
+            Err(reason) => {
+                eprintln!(
+                    "Handoff validation failed after {} attempts: {}. Accepting best-effort.",
+                    max_attempts, reason
+                );
+            }
+        }
+    }
+
+    let handoff_path = write_handoff_markdown(session, &response)?;
+
+    let record = HandoffRecord {
+        session_id: session.id.clone(),
+        headline: extracted.headline.clone(),
+        projects: extracted.projects.clone(),
+        keywords: extracted.keywords.clone(),
+        substance: extracted.substance,
+        duration_minutes: duration_minutes(session),
+        generated_at: Some(Utc::now().to_rfc3339()),
+        generated_by: Some(format!("{engine}/{model}")),
+        content_path: Some(handoff_path.to_string_lossy().to_string()),
+    };
+    upsert_handoff(conn, &record)?;
+
+    Ok(ProcessedSessionHandoff {
+        path: handoff_path,
+        extracted,
+    })
+}
+
+fn find_batch_candidates(
+    conn: &Connection,
+    since_date: &str,
+    min_turns: usize,
+) -> Result<Vec<SessionRow>, GaalError> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                s.id, s.engine, s.model, s.cwd, s.started_at, s.ended_at, s.exit_signal, s.last_event_at,
+                s.parent_id, s.jsonl_path, s.total_input_tokens, s.total_output_tokens, s.total_tools,
+                s.total_turns, s.last_indexed_offset
+            FROM sessions s
+            WHERE s.id NOT IN (SELECT session_id FROM handoffs)
+              AND s.total_turns >= :min_turns
+              AND s.started_at >= :since
+              AND s.parent_id IS NULL
+            ORDER BY s.started_at DESC
+            "#,
+        )
+        .map_err(GaalError::from)?;
+    let mut rows = stmt
+        .query(named_params! {
+            ":min_turns": min_turns as i64,
+            ":since": since_date,
+        })
+        .map_err(GaalError::from)?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(GaalError::from)? {
+        out.push(SessionRow {
+            id: row.get(0).map_err(GaalError::from)?,
+            engine: row.get(1).map_err(GaalError::from)?,
+            model: row.get(2).map_err(GaalError::from)?,
+            cwd: row.get(3).map_err(GaalError::from)?,
+            started_at: row.get(4).map_err(GaalError::from)?,
+            ended_at: row.get(5).map_err(GaalError::from)?,
+            exit_signal: row.get(6).map_err(GaalError::from)?,
+            last_event_at: row.get(7).map_err(GaalError::from)?,
+            parent_id: row.get(8).map_err(GaalError::from)?,
+            jsonl_path: row.get(9).map_err(GaalError::from)?,
+            total_input_tokens: row.get(10).map_err(GaalError::from)?,
+            total_output_tokens: row.get(11).map_err(GaalError::from)?,
+            total_tools: row.get(12).map_err(GaalError::from)?,
+            total_turns: row.get(13).map_err(GaalError::from)?,
+            last_indexed_offset: row.get(14).map_err(GaalError::from)?,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_since_filter(since: &str) -> String {
+    let raw = since.trim();
+    if raw.is_empty() {
+        return (Local::now() - TimeDelta::days(7))
+            .format("%Y-%m-%d")
+            .to_string();
+    }
+    if raw.len() >= 10 && raw.contains('-') {
+        return raw.to_string();
+    }
+
+    let normalized = raw.to_ascii_lowercase();
+    let (count_raw, unit) = normalized.split_at(normalized.len().saturating_sub(1));
+    let count = count_raw.parse::<i64>().ok().filter(|v| *v > 0).unwrap_or(7);
+    let days = match unit {
+        "d" => count,
+        "w" => count.saturating_mul(7),
+        _ => 7,
+    };
+
+    let delta = TimeDelta::try_days(days).unwrap_or_else(|| TimeDelta::days(7));
+    (Local::now() - delta)
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn resolve_sessions(conn: &Connection, id_or_today: &str) -> Result<Vec<SessionRow>, GaalError> {
+    if id_or_today.eq_ignore_ascii_case("today") {
+        return resolve_today_sessions(conn);
+    }
+
+    if let Some(exact) = get_session(conn, id_or_today)? {
+        return Ok(vec![exact]);
+    }
+
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id
+            FROM sessions
+            WHERE id LIKE :prefix
+            ORDER BY started_at DESC
+            "#,
+        )
+        .map_err(GaalError::from)?;
+    let pattern = format!("{id_or_today}%");
+    let mut rows = stmt
+        .query(named_params! { ":prefix": pattern })
+        .map_err(GaalError::from)?;
+
+    let mut ids = Vec::new();
+    while let Some(row) = rows.next().map_err(GaalError::from)? {
+        ids.push(row.get::<_, String>(0).map_err(GaalError::from)?);
+    }
+
+    if ids.is_empty() {
+        return Err(GaalError::NotFound(id_or_today.to_string()));
+    }
+    if ids.len() > 1 {
+        let choices = ids.join(", ");
+        return Err(GaalError::AmbiguousId(format!("{id_or_today} ({choices})")));
+    }
+
+    match get_session(conn, &ids[0])? {
+        Some(session) => Ok(vec![session]),
+        None => Err(GaalError::NotFound(id_or_today.to_string())),
+    }
+}
+
+fn resolve_today_sessions(conn: &Connection) -> Result<Vec<SessionRow>, GaalError> {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let pattern = format!("{today}%");
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id
+            FROM sessions
+            WHERE started_at LIKE :today
+            ORDER BY started_at ASC
+            "#,
+        )
+        .map_err(GaalError::from)?;
+    let mut rows = stmt
+        .query(named_params! { ":today": pattern })
+        .map_err(GaalError::from)?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(GaalError::from)? {
+        let id = row.get::<_, String>(0).map_err(GaalError::from)?;
+        if let Some(session) = get_session(conn, &id)? {
+            out.push(session);
+        }
+    }
+    Ok(out)
+}
+
+fn load_prompt(path: &Path) -> Result<String, GaalError> {
+    let resolved = expand_home(path);
+    match fs::read_to_string(resolved) {
+        Ok(content) => Ok(content),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Ok(DEFAULT_HANDOFF_PROMPT.to_string())
+        }
+        Err(err) => Err(GaalError::Io(err)),
+    }
+}
+
+fn build_context(session: &SessionRow, facts: &[Fact], provider: &str, format: &str) -> String {
+    let mut commands = Vec::new();
+    let mut errors = Vec::new();
+    let mut files = Vec::new();
+    let mut decisions = Vec::new();
+
+    for fact in facts {
+        let line = format_fact(fact);
+        match &fact.fact_type {
+            FactType::Command => commands.push(line),
+            FactType::Error => errors.push(line),
+            FactType::FileRead | FactType::FileWrite => files.push(line),
+            FactType::AssistantReply | FactType::UserPrompt | FactType::GitOp => {
+                if looks_like_decision(fact) {
+                    decisions.push(line);
+                }
+            }
+            FactType::TaskSpawn => {}
+        }
+    }
+
+    let command_block = bullet_lines(&commands, 40);
+    let error_block = bullet_lines(&errors, 20);
+    let file_block = bullet_lines(&files, 40);
+    let decision_block = bullet_lines(&decisions, 20);
+
+    format!(
+        "Requested provider: {provider}\nRequested format: {format}\n\n\
+Session Summary:\n\
+- id: {id}\n\
+- engine: {engine}\n\
+- model: {model}\n\
+- cwd: {cwd}\n\
+- started_at: {started_at}\n\
+- ended_at: {ended_at}\n\
+- total_input_tokens: {input_tokens}\n\
+- total_output_tokens: {output_tokens}\n\
+- total_tools: {tools}\n\
+- total_turns: {turns}\n\n\
+Commands:\n{command_block}\n\n\
+Errors:\n{error_block}\n\n\
+Files:\n{file_block}\n\n\
+Key Decisions:\n{decision_block}\n",
+        id = session.id,
+        engine = session.engine,
+        model = session.model.as_deref().unwrap_or("unknown"),
+        cwd = session.cwd.as_deref().unwrap_or("."),
+        started_at = session.started_at,
+        ended_at = session.ended_at.as_deref().unwrap_or("in_progress"),
+        input_tokens = session.total_input_tokens,
+        output_tokens = session.total_output_tokens,
+        tools = session.total_tools,
+        turns = session.total_turns
+    )
+}
+
+fn format_fact(fact: &Fact) -> String {
+    let ts = fact.ts.as_str();
+    let subject = fact.subject.as_deref().unwrap_or("-");
+    let detail = fact.detail.as_deref().unwrap_or("-");
+    let snippet = truncate(detail, 240);
+    format!("[{ts}] {subject} | {snippet}")
+}
+
+fn looks_like_decision(fact: &Fact) -> bool {
+    let mut haystack = String::new();
+    if let Some(subject) = &fact.subject {
+        haystack.push_str(subject);
+        haystack.push(' ');
+    }
+    if let Some(detail) = &fact.detail {
+        haystack.push_str(detail);
+    }
+    let text = haystack.to_ascii_lowercase();
+    [
+        "decid", "choose", "selected", "plan", "will", "next", "use ", "switch", "migrate",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+fn bullet_lines(values: &[String], max: usize) -> String {
+    if values.is_empty() {
+        return "- (none)".to_string();
+    }
+    values
+        .iter()
+        .take(max)
+        .map(|line| format!("- {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn invoke_agent_mux(
+    binary: &str,
+    engine: &str,
+    model: &str,
+    cwd: &str,
+    prompt: &str,
+    context: &str,
+    timeout_secs: u64,
+) -> Result<String, GaalError> {
+    let request = format!("{prompt}\n\n---\n\nSession context:\n{context}");
+    let mux_timeout_ms = timeout_secs.saturating_sub(5).saturating_mul(1_000).max(10_000);
+
+    let child = Command::new(binary)
+        .arg("--engine")
+        .arg(engine)
+        .arg("--model")
+        .arg(model)
+        .arg("--cwd")
+        .arg(cwd)
+        .arg("--timeout")
+        .arg(mux_timeout_ms.to_string())
+        .arg(request)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(GaalError::from)?;
+
+    #[cfg(unix)]
+    let _stdout_clone = child
+        .stdout
+        .as_ref()
+        .ok_or_else(|| GaalError::Internal("failed to open stdout for agent-mux".to_string()))?
+        .as_fd()
+        .try_clone_to_owned()
+        .map_err(GaalError::from)?;
+
+    #[cfg(unix)]
+    let _stderr_clone = child
+        .stderr
+        .as_ref()
+        .ok_or_else(|| GaalError::Internal("failed to open stderr for agent-mux".to_string()))?
+        .as_fd()
+        .try_clone_to_owned()
+        .map_err(GaalError::from)?;
+
+    let child_pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+
+    let output = match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
+        Ok(result) => result.map_err(GaalError::from)?,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let _ = terminate_process(child_pid);
+            return Err(GaalError::Other(anyhow!(
+                "agent-mux timed out after {timeout_secs}s"
+            )));
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            return Err(GaalError::Other(anyhow!(
+                "agent-mux worker thread disconnected unexpectedly"
+            )));
+        }
+    };
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if let Ok(value) = serde_json::from_str::<Value>(&stdout) {
+            if let Some(stdout_error) = extract_agent_mux_error(&value) {
+                let message = if stderr.is_empty() {
+                    format!("agent-mux failed: {stdout_error}")
+                } else {
+                    format!("agent-mux failed: {stdout_error}; stderr: {stderr}")
+                };
+                return Err(GaalError::Other(anyhow!(message)));
+            }
+        }
+        let message = if stderr.is_empty() {
+            "agent-mux command failed".to_string()
+        } else {
+            format!("agent-mux failed: {stderr}")
+        };
+        return Err(GaalError::Other(anyhow!(message)));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|e| GaalError::ParseError(format!("agent-mux output was not valid UTF-8: {e}")))?;
+    parse_agent_mux_response(&stdout)
+}
+
+fn terminate_process(pid: u32) -> Result<(), GaalError> {
+    #[cfg(unix)]
+    {
+        let status = Command::new("kill")
+            .arg("-9")
+            .arg(pid.to_string())
+            .status()
+            .map_err(GaalError::from)?;
+        if !status.success() {
+            return Err(GaalError::Other(anyhow!(
+                "failed to terminate agent-mux process {pid}"
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        let status = Command::new("taskkill")
+            .arg("/PID")
+            .arg(pid.to_string())
+            .arg("/F")
+            .status()
+            .map_err(GaalError::from)?;
+        if !status.success() {
+            return Err(GaalError::Other(anyhow!(
+                "failed to terminate agent-mux process {pid}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn parse_agent_mux_response(stdout: &str) -> Result<String, GaalError> {
+    if let Ok(value) = serde_json::from_str::<Value>(stdout.trim()) {
+        return value_to_response(value);
+    }
+
+    for line in stdout.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+            return value_to_response(value);
+        }
+    }
+
+    Err(GaalError::ParseError(
+        "agent-mux returned non-JSON output".to_string(),
+    ))
+}
+
+fn value_to_response(value: Value) -> Result<String, GaalError> {
+    if value.get("success").and_then(Value::as_bool) == Some(false) {
+        let error =
+            extract_agent_mux_error(&value).unwrap_or_else(|| "agent-mux reported failure".to_string());
+        return Err(GaalError::Other(anyhow!(error)));
+    }
+
+    let response = value
+        .get("response")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            value
+                .pointer("/data/response")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            value
+                .get("content")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+
+    response.ok_or_else(|| {
+        GaalError::ParseError("agent-mux JSON output missing `response` field".to_string())
+    })
+}
+
+fn extract_agent_mux_error(value: &Value) -> Option<String> {
+    if value.get("success").and_then(Value::as_bool) != Some(false) {
+        return None;
+    }
+
+    value
+        .get("error")
+        .or_else(|| value.pointer("/data/error"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|error| !error.is_empty())
+        .map(str::to_string)
+}
+
+fn write_handoff_markdown(session: &SessionRow, content: &str) -> Result<PathBuf, GaalError> {
+    let (year, month, day) = date_parts(&session.started_at);
+    let path = gaal_home()
+        .join("data")
+        .join(&session.engine)
+        .join("handoffs")
+        .join(year)
+        .join(month)
+        .join(day)
+        .join(format!("{}.md", crate::util::sanitize_filename(&session.id)));
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(GaalError::from)?;
+    }
+    crate::util::atomic_write(&path, content).map_err(GaalError::from)?;
+    Ok(path)
+}
+
+fn date_parts(started_at: &str) -> (String, String, String) {
+    let fallback = || {
+        let now = Local::now();
+        (
+            now.format("%Y").to_string(),
+            now.format("%m").to_string(),
+            now.format("%d").to_string(),
+        )
+    };
+
+    let Some(prefix) = started_at.get(0..10) else {
+        return fallback();
+    };
+    let mut parts = prefix.split('-');
+    let year = parts.next().unwrap_or_default();
+    let month = parts.next().unwrap_or_default();
+    let day = parts.next().unwrap_or_default();
+
+    if year.len() == 4 && month.len() == 2 && day.len() == 2 {
+        (year.to_string(), month.to_string(), day.to_string())
+    } else {
+        fallback()
+    }
+}
+
+fn duration_minutes(session: &SessionRow) -> i32 {
+    let Some(ended_at) = session.ended_at.as_deref() else {
+        return 0;
+    };
+
+    let started = DateTime::parse_from_rfc3339(&session.started_at);
+    let ended = DateTime::parse_from_rfc3339(ended_at);
+    match (started, ended) {
+        (Ok(started_ts), Ok(ended_ts)) => {
+            let mins = ended_ts.signed_duration_since(started_ts).num_minutes();
+            if mins < 0 {
+                0
+            } else {
+                mins as i32
+            }
+        }
+        _ => 0,
+    }
+}
+
+fn extract_metadata(response: &str) -> ExtractedMetadata {
+    if let Ok(value) = serde_json::from_str::<Value>(response.trim()) {
+        return extract_json_metadata(value).unwrap_or_else(|| extract_text_metadata(response));
+    }
+
+    if let Some(captures) = FENCED_JSON_RE.captures(response) {
+        if let Some(raw_json) = captures.get(1).map(|capture| capture.as_str()) {
+            if let Ok(value) = serde_json::from_str::<Value>(raw_json) {
+                if let Some(metadata) = extract_json_metadata(value) {
+                    return metadata;
+                }
+            }
+        }
+    }
+
+    extract_text_metadata(response)
+}
+
+fn extract_json_metadata(value: Value) -> Option<ExtractedMetadata> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+
+    let headline = map
+        .get("headline")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let projects = extract_string_array(map.get("projects"));
+    let keywords = extract_string_array(map.get("keywords"));
+    let substance = map
+        .get("substance")
+        .and_then(Value::as_i64)
+        .map(|v| v.clamp(0, 3) as i32)
+        .unwrap_or(0);
+
+    Some(ExtractedMetadata {
+        headline,
+        projects,
+        keywords,
+        substance,
+    })
+}
+
+fn extract_text_metadata(response: &str) -> ExtractedMetadata {
+    let headline = extract_heading_value(response, "Headline")
+        .or_else(|| first_nonempty_line(response).map(str::to_string));
+    let projects = extract_named_list(response, "projects");
+    let keywords = extract_named_list(response, "keywords");
+    let substance = extract_substance(response);
+
+    ExtractedMetadata {
+        headline,
+        projects,
+        keywords,
+        substance,
+    }
+}
+
+fn extract_heading_value(text: &str, heading: &str) -> Option<String> {
+    let mut in_section = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("##") {
+            if in_section {
+                break;
+            }
+            let name = trimmed.trim_start_matches('#').trim();
+            in_section = name.eq_ignore_ascii_case(heading);
+            continue;
+        }
+        if in_section && !trimmed.is_empty() {
+            let cleaned = trimmed
+                .trim_start_matches('-')
+                .trim_start_matches('*')
+                .trim();
+            if !cleaned.is_empty() {
+                return Some(cleaned.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn extract_named_list(text: &str, name: &str) -> Vec<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        let prefix = format!("{name}:");
+        if lower.starts_with(&prefix) {
+            let raw = trimmed[prefix.len()..].trim();
+            let parsed = parse_list(raw);
+            if !parsed.is_empty() {
+                return parsed;
+            }
+        }
+    }
+
+    let target = format!("## {name}");
+    let mut in_section = false;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("##") {
+            if in_section {
+                break;
+            }
+            in_section = trimmed.to_ascii_lowercase() == target;
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some(item) = trim_bullet(trimmed) {
+            out.push(item);
+        }
+    }
+    out
+}
+
+fn parse_list(raw: &str) -> Vec<String> {
+    if raw.is_empty() {
+        return Vec::new();
+    }
+
+    if raw.starts_with('[') && raw.ends_with(']') {
+        if let Ok(value) = serde_json::from_str::<Value>(raw) {
+            return extract_string_array(Some(&value));
+        }
+    }
+
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn trim_bullet(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let value = if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+        trimmed[2..].trim()
+    } else {
+        return None;
+    };
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn extract_substance(text: &str) -> i32 {
+    for line in text.lines() {
+        let lower = line.to_ascii_lowercase();
+        if !lower.contains("substance") {
+            continue;
+        }
+        for ch in lower.chars() {
+            if ('0'..='3').contains(&ch) {
+                return (ch as u8 - b'0') as i32;
+            }
+        }
+    }
+    0
+}
+
+fn first_nonempty_line(text: &str) -> Option<&str> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.trim_start_matches('#').trim())
+}
+
+fn extract_string_array(value: Option<&Value>) -> Vec<String> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn truncate(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    value.chars().take(max_chars).collect()
+}
+
+fn expand_home(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return gaal_home()
+            .parent()
+            .map(|home| home.join(rest))
+            .unwrap_or_else(|| path.to_path_buf());
+    }
+    path.to_path_buf()
+}

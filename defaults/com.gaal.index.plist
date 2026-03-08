@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.gaal.index</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>/opt/homebrew/bin/gaal index backfill 2>/dev/null; /opt/homebrew/bin/gaal handoff --batch --since 1d --min-turns 3 2>/dev/null</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>14400</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/gaal-index.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/gaal-index.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
