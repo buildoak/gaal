@@ -75,7 +75,14 @@ gaal recall "gaussian moat" --days-back 30 --format eywa
 The `--format eywa` flag produces output compatible with the coordinator's session context injection. Use `--format brief` for system-prompt-sized summaries when context budget is tight.
 
 ### Session End (coordinator calls this)
-Persist this session's context for future recall.
+Persist this session's context for future recall. Two steps — summary first, then extract.
+
+**Step 1: Write a session summary message.** Before calling `gaal handoff`, output a plain-text summary of what was accomplished in this session. This message becomes part of the JSONL transcript and gives the handoff extractor rich content to work with. Include:
+- What was done (key actions, decisions, artifacts)
+- What changed (files modified, configs updated, bugs fixed)
+- What's still open (blockers, next steps, unfinished threads)
+
+**Step 2: Generate handoff.**
 
 ```bash
 # Auto-detect current session and generate handoff
