@@ -207,6 +207,20 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                             eprintln!("  -> markdown error: {err}");
                         }
                     }
+                } else if with_markdown {
+                    // No output-dir: generate markdown to default gaal data dir
+                    // if the file doesn't already exist.
+                    let md_path = default_session_markdown_path(&session);
+                    if !md_path.exists() {
+                        match generate_session_markdown(&session) {
+                            Ok(md_path) => {
+                                eprintln!("  -> markdown: {}", md_path.display());
+                            }
+                            Err(err) => {
+                                eprintln!("  -> markdown error: {err}");
+                            }
+                        }
+                    }
                 }
             }
             Err(err) => {
@@ -488,6 +502,33 @@ fn build_incremental_session_row(
         total_turns: existing.total_turns + i64::from(parsed_delta.total_turns),
         last_indexed_offset: u64_to_i64(new_offset)?,
     })
+}
+
+/// Compute the default markdown path for a session without writing anything.
+///
+/// Returns `~/.gaal/data/{engine}/sessions/YYYY/MM/DD/{id}.md`.
+fn default_session_markdown_path(discovered: &DiscoveredSession) -> PathBuf {
+    let engine = discovered.engine.to_string();
+    let started_at = discovered
+        .started_at
+        .as_deref()
+        .unwrap_or("1970-01-01T00:00:00Z");
+    let (year, month, day) = extract_date_parts(started_at);
+
+    gaal_home()
+        .join("data")
+        .join(engine)
+        .join("sessions")
+        .join(year)
+        .join(month)
+        .join(day)
+        .join(format!(
+            "{}.md",
+            crate::util::sanitize_filename(&discovered.id)
+                .chars()
+                .take(8)
+                .collect::<String>()
+        ))
 }
 
 /// Generate a session markdown file from raw JSONL during backfill.
