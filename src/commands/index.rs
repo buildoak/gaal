@@ -392,6 +392,12 @@ fn index_discovered_session(
     }
 
     let parsed = parse_session(&discovered.path).map_err(GaalError::from)?;
+
+    // Skip noise-only sessions (0 conversation turns, e.g. file-history-snapshot only).
+    if parsed.total_turns == 0 && existing.is_none() {
+        return Ok(IndexOutcome::Skipped);
+    }
+
     let target_id = existing
         .as_ref()
         .map(|row| row.id.as_str())
@@ -511,6 +517,9 @@ fn generate_session_markdown(
         .join(format!(
             "{}.md",
             crate::util::sanitize_filename(&discovered.id)
+                .chars()
+                .take(8)
+                .collect::<String>()
         ));
 
     if let Some(parent) = md_path.parent() {

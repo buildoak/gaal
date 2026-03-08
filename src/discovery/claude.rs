@@ -110,6 +110,11 @@ fn parse_claude_head(lines: &[String]) -> ClaudeHead {
             started_at = record
                 .get("timestamp")
                 .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    record
+                        .pointer("/snapshot/timestamp")
+                        .and_then(serde_json::Value::as_str)
+                })
                 .map(str::to_string);
         }
         if id.is_none() {
