@@ -35,8 +35,13 @@ pub fn discover_codex_sessions() -> Result<Vec<DiscoveredSession>> {
             .unwrap_or("unknown")
             .to_string();
 
+        // Codex uses UUIDv7 (shared timestamp prefix, unique random suffix).
+        // Truncate to last 8 hex chars of the dash-stripped UUID for short IDs.
+        // Claude uses first-8 (UUIDv4, random throughout).
+        let short_id = truncate_codex_id(&id.unwrap_or(fallback_id));
+
         sessions.push(DiscoveredSession {
-            id: id.unwrap_or(fallback_id),
+            id: short_id,
             engine: Engine::Codex,
             path,
             model,
@@ -144,3 +149,17 @@ type CodexHead = (
     Option<String>,
     Option<String>,
 );
+
+/// Truncate a Codex session ID (UUIDv7) to its last 8 hex characters.
+///
+/// UUIDv7 shares a timestamp prefix across sessions started in the same
+/// millisecond; the random suffix is what provides uniqueness. Stripping
+/// dashes and taking the last 8 hex chars gives a short, collision-free ID.
+fn truncate_codex_id(raw: &str) -> String {
+    let hex: String = raw.chars().filter(|c| *c != '-').collect();
+    if hex.len() > 8 {
+        hex[hex.len() - 8..].to_string()
+    } else {
+        hex
+    }
+}
