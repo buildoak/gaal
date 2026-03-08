@@ -37,7 +37,7 @@ No engine-agnostic, machine-readable, queryable representation of what agent ses
 ### Out of scope (not observability problems):
 P5 (silent compaction), P6 (agent deception), P12 (permission bypass), P13 (context self-consumption), P15 (no convergence signal), P16 (cross-tool compat — partially solved by engine-agnostic design), P17 (MCP pollution)
 
-Full problem set with evidence: `centerpiece/experiments/active/agents-traces.md`
+Full problem set with evidence documented separately (see Research Artifacts below).
 
 ---
 
@@ -115,7 +115,7 @@ Output (JSON array):
   "engine": "claude",
   "model": "claude-opus-4-6",
   "status": "completed",
-  "cwd": "/Users/otonashi/thinking/pratchett-os/coordinator",
+  "cwd": "/home/user/projects/myproject",
   "started_at": "2026-03-02T22:55:59Z",
   "ended_at": "2026-03-03T11:14:22Z",
   "duration_secs": 44303,
@@ -307,7 +307,7 @@ gaal who ran "cargo test"                        # who ran this command?
 
 # Folder support
 gaal who wrote coordinator/                      # anything modified under this dir
-gaal who read centerpiece/research/              # anything read under this dir
+gaal who read docs/research/                     # anything read under this dir
 
 # Semantic verbs (command clustering)
 gaal who touched peekaboo                        # files OR commands mentioning "peekaboo"
@@ -426,7 +426,7 @@ Eywa replacement. Semantic session retrieval. "What do I know about X?"
 ```bash
 gaal recall                                      # most recent substantive sessions
 gaal recall "gaussian moat"                      # sessions about this topic
-gaal recall "reddit sweep orac" --days-back 30
+gaal recall "reddit sweep myproject" --days-back 30
 gaal recall "peekaboo" --limit 5
 gaal recall "gaussian" --format handoff          # full handoff markdown
 gaal recall "gaussian" --format brief            # system-prompt-sized (3-5 lines per session)
@@ -455,7 +455,7 @@ Output (JSON array):
   "session_id": "54fd2b6c",
   "date": "2026-03-02",
   "headline": "Harvested 33 inspiration seeds, built twitter-peekaboo skill",
-  "projects": ["pratchett-os", "tortuise"],
+  "projects": ["myproject", "backend-api"],
   "keywords": ["twitter-peekaboo", "inspiration-harvesting"],
   "substance": 2,
   "duration_minutes": 738,
@@ -765,7 +765,7 @@ gaal diff <id-a> <id-b>             # what changed between two sessions?
 
 ## Existing Assets
 
-- **Orac Rust codebase** (`~/thinking/building/orac/`): 7k lines. ~55% (parsers, discovery, model) directly useful. Claude + Codex JSONL parsers are solid.
+- **Orac Rust codebase**: 7k lines. ~55% (parsers, discovery, model) directly useful. Claude + Codex JSONL parsers are solid.
 - **RTK** (`github.com/rtk-ai/rtk`): Rust. Session JSONL parser (`ClaudeProvider`), command classification registry, error type detection. Portable code for engine adapter + command clustering.
 - **session_to_markdown.py** (`lib/sessions-tooling/`): JSONL → markdown. Reference for MD generation — Gaal's indexer absorbs this logic.
 - **session-detect skill**: PID → JSONL → session mapping. Powers `gaal active`.
@@ -773,7 +773,7 @@ gaal diff <id-a> <id-b>             # what changed between two sessions?
 
 ## Research Artifacts
 
-- `centerpiece/experiments/active/agents-traces.md` — problem set (P1-P18) with community evidence
-- `centerpiece/_workbench/2026-03-03-opus-orac-first-principles.md` — data-first reasoning
-- `centerpiece/_workbench/2026-03-03-opus-orac-operations-first.md` — operations-first reasoning
-- `centerpiece/_workbench/2026-03-03-coordinator-session-viewer-competitive-analysis.md` — competitive landscape
+- Problem set (P1-P18) with community evidence from Reddit/Twitter sweep
+- Data-first reasoning analysis — why the index-first approach won
+- Operations-first reasoning analysis — verb design and composability
+- Competitive landscape analysis — existing session observability tools

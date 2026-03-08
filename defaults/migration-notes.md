@@ -4,14 +4,14 @@ These edits must be applied manually in external files. Do not modify these file
 
 ## 1) Coordinator CLAUDE.md
 
-File: `/Users/otonashi/thinking/pratchett-os/coordinator/CLAUDE.md`
+File: `<project>/CLAUDE.md`
 
 - Find the line containing: `eywa skill inside subagent`
 - Replace it with: `gaal recall inside subagent`
 
 ## 2) Gaal SKILL.md
 
-File: `/Users/otonashi/thinking/building/gaal/skill/SKILL.md`
+File: `<gaal-repo>/skill/SKILL.md`
 
 - Remove this line:
   - `Do NOT use for: eywa extract/write path (use eywa skill)`

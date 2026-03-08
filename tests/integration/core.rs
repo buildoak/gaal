@@ -139,7 +139,7 @@ fn session_insert_and_query_roundtrip() {
     let parent = session_row(
         "parent-123",
         "claude",
-        Some("/Users/otonashi/thinking/building/gaal"),
+        Some("/tmp/test-project"),
         "2026-03-01T09:00:00Z",
         Some("2026-03-01T09:30:00Z"),
         None,
@@ -150,7 +150,7 @@ fn session_insert_and_query_roundtrip() {
         id: "sess-roundtrip-1".to_string(),
         engine: "claude".to_string(),
         model: Some("claude-3-7-sonnet".to_string()),
-        cwd: Some("/Users/otonashi/thinking/building/gaal".to_string()),
+        cwd: Some("/tmp/test-project".to_string()),
         started_at: "2026-03-01T10:00:00Z".to_string(),
         ended_at: Some("2026-03-01T10:30:00Z".to_string()),
         exit_signal: Some("ok".to_string()),
@@ -262,7 +262,7 @@ fn ls_filters_work() {
     let claude_completed = session_row(
         "s-claude-complete",
         "claude",
-        Some("/Users/otonashi/thinking/building/gaal"),
+        Some("/tmp/test-project"),
         "2026-03-01T09:00:00Z",
         Some("2026-03-01T09:40:00Z"),
         None,
@@ -270,7 +270,7 @@ fn ls_filters_work() {
     let codex_completed = session_row(
         "s-codex-complete",
         "codex",
-        Some("/Users/otonashi/thinking/building/gaal"),
+        Some("/tmp/test-project"),
         "2026-03-02T09:00:00Z",
         Some("2026-03-02T09:25:00Z"),
         None,

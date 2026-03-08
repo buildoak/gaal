@@ -22,7 +22,7 @@ Agent session observability CLI. 9 verbs + 1 utility. JSON default, `-H` for tab
 
 | What | Path |
 |------|------|
-| Binary | `/Users/otonashi/thinking/building/gaal/target/release/gaal` (or `gaal` if on PATH) |
+| Binary | `gaal` (or `./target/release/gaal` if not on PATH) |
 | Data root | `~/.gaal/` |
 | SQLite index | `~/.gaal/index.db` |
 | Config | `~/.gaal/config.toml` |
