@@ -35,8 +35,11 @@ pub fn discover_claude_sessions() -> Result<Vec<DiscoveredSession>> {
             .unwrap_or("unknown")
             .to_string();
 
+        let raw_id = id.unwrap_or(fallback_id);
+        let short_id: String = raw_id.chars().take(8).collect();
+
         sessions.push(DiscoveredSession {
-            id: id.unwrap_or(fallback_id),
+            id: short_id,
             engine: Engine::Claude,
             path,
             model,

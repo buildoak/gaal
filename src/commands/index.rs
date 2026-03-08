@@ -401,7 +401,7 @@ fn index_discovered_session(
     let target_id = existing
         .as_ref()
         .map(|row| row.id.as_str())
-        .unwrap_or(parsed.meta.id.as_str());
+        .unwrap_or(&discovered.id);
     let parent_id = existing.as_ref().and_then(|row| row.parent_id.clone());
     let mut session_row =
         build_full_session_row(&parsed, &discovered.path, file_size_i64, parent_id);

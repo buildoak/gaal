@@ -900,7 +900,13 @@ fn write_handoff_markdown(session: &SessionRow, content: &str) -> Result<PathBuf
         .join(year)
         .join(month)
         .join(day)
-        .join(format!("{}.md", crate::util::sanitize_filename(&session.id)));
+        .join(format!(
+            "{}.md",
+            crate::util::sanitize_filename(&session.id)
+                .chars()
+                .take(8)
+                .collect::<String>()
+        ));
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(GaalError::from)?;
