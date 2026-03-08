@@ -86,7 +86,7 @@ struct ImportEywaSummary {
 }
 
 #[derive(Debug)]
-enum IndexOutcome {
+pub(crate) enum IndexOutcome {
     Indexed,
     Skipped,
 }
@@ -344,7 +344,7 @@ pub fn run_prune(args: PruneArgs) -> Result<(), GaalError> {
     print_json(&payload).map_err(GaalError::from)
 }
 
-fn index_discovered_session(
+pub(crate) fn index_discovered_session(
     conn: &rusqlite::Connection,
     discovered: &DiscoveredSession,
     force: bool,

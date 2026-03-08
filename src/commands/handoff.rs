@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::str::FromStr;
 #[cfg(unix)]
 use std::os::fd::AsFd;
 use std::sync::{Arc, LazyLock, Mutex, mpsc};
@@ -14,10 +15,14 @@ use rusqlite::{named_params, Connection};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::commands::index::{IndexOutcome, index_discovered_session};
 use crate::config::{GaalConfig, gaal_home, load_config};
 use crate::db::open_db;
 use crate::db::queries::{get_facts, get_session, upsert_handoff, SessionRow};
+use crate::detection::DetectedSession;
+use crate::discovery::DiscoveredSession;
 use crate::error::GaalError;
+use crate::parser::types::Engine;
 use crate::model::{Fact, FactType, HandoffRecord};
 use crate::output::json::print_json;
 
@@ -101,8 +106,8 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
         return run_batch(&conn, &config, &args);
     }
 
-    let id_or_today = if let Some(id) = args.id.clone() {
-        id
+    let (id_or_today, detected) = if let Some(id) = args.id.clone() {
+        (id, None)
     } else {
         let detected = crate::detection::detect_current_session()?;
         eprintln!(
@@ -112,7 +117,8 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
             detected.pid,
             detected.jsonl_path.display()
         );
-        detected.session_id
+        let id = detected.session_id.clone();
+        (id, Some(detected))
     };
 
     let engine = args
@@ -137,7 +143,22 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
         .unwrap_or_else(|| config.handoff.prompt.clone());
     let prompt = load_prompt(&prompt_path)?;
 
-    let sessions = resolve_sessions(&conn, &id_or_today)?;
+    let sessions = match resolve_sessions(&conn, &id_or_today) {
+        Ok(sessions) => sessions,
+        Err(GaalError::NotFound(_)) if detected.is_some() => {
+            // Session not in DB yet (active session, cron hasn't indexed it).
+            // Index the JSONL on-the-fly and retry.
+            let detected = detected.as_ref().unwrap();
+            eprintln!(
+                "Session not indexed yet — indexing {} on-the-fly...",
+                detected.jsonl_path.display()
+            );
+            let short_id = index_single_jsonl(&conn, detected)?;
+            // Retry with the truncated ID that the indexer stores in the DB.
+            resolve_sessions(&conn, &short_id)?
+        }
+        Err(err) => return Err(err),
+    };
     if sessions.is_empty() {
         return Err(GaalError::NoResults);
     }
@@ -596,6 +617,60 @@ fn resolve_today_sessions(conn: &Connection) -> Result<Vec<SessionRow>, GaalErro
         }
     }
     Ok(out)
+}
+
+/// Index a single JSONL file on-the-fly so the current (active) session
+/// becomes available in the DB for handoff. This bridges the timing gap
+/// where the cron indexer hasn't picked up the session yet.
+///
+/// Returns the short ID stored in the DB (for retry lookup).
+fn index_single_jsonl(conn: &Connection, detected: &DetectedSession) -> Result<String, GaalError> {
+    let meta = fs::metadata(&detected.jsonl_path).map_err(GaalError::from)?;
+    let engine = Engine::from_str(&detected.engine)?;
+    let short_id = truncate_session_id(&detected.session_id, &engine);
+
+    let discovered = DiscoveredSession {
+        id: short_id.clone(),
+        engine,
+        path: detected.jsonl_path.clone(),
+        model: None,
+        cwd: None,
+        started_at: None,
+        file_size: meta.len(),
+    };
+
+    match index_discovered_session(conn, &discovered, true) {
+        Ok(IndexOutcome::Indexed) => {
+            eprintln!("On-the-fly index complete for session {}", discovered.id);
+            Ok(short_id)
+        }
+        Ok(IndexOutcome::Skipped) => {
+            eprintln!("Session {} already indexed (skipped)", discovered.id);
+            Ok(short_id)
+        }
+        Err(err) => {
+            eprintln!("On-the-fly indexing failed: {err}");
+            Err(err)
+        }
+    }
+}
+
+/// Truncate a session ID to match the short-ID convention used by the indexer.
+///
+/// Claude (UUIDv4): first 8 characters.
+/// Codex (UUIDv7): last 8 hex characters (dashes stripped).
+fn truncate_session_id(raw: &str, engine: &Engine) -> String {
+    match engine {
+        Engine::Claude => raw.chars().take(8).collect(),
+        Engine::Codex => {
+            let hex: String = raw.chars().filter(|c| *c != '-').collect();
+            if hex.len() > 8 {
+                hex[hex.len() - 8..].to_string()
+            } else {
+                hex
+            }
+        }
+    }
 }
 
 fn load_prompt(path: &Path) -> Result<String, GaalError> {
