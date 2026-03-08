@@ -316,7 +316,7 @@ fn ls_filters_work() {
     let cwd_filtered = list_sessions(
         &conn,
         &ListFilter {
-            cwd: Some("building/gaal".to_string()),
+            cwd: Some("test-project".to_string()),
             limit: Some(20),
             ..Default::default()
         },
