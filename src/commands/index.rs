@@ -126,7 +126,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     // --output-dir (or config default) implies --with-markdown.
     let with_markdown = args.with_markdown || output_dir.is_some();
 
-    let conn = open_db()?;
+    let mut conn = open_db()?;
     let engine_filter = parse_engine_filter(args.engine.as_deref())?;
     let mut sessions = discover_sessions(engine_filter).map_err(GaalError::from)?;
     if let Some(since) = args.since.as_deref() {
@@ -155,7 +155,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
             continue;
         }
 
-        match index_discovered_session(&conn, &session, args.force) {
+        match index_discovered_session(&mut conn, &session, args.force) {
             Ok(IndexOutcome::Indexed) => {
                 summary.indexed += 1;
                 eprintln!(
@@ -240,6 +240,15 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     }
 
     search::build_search_index(&conn)?;
+
+    // Auto-run link-parents when any sessions were indexed.
+    if summary.indexed > 0 {
+        eprintln!("Linking parent-child sessions...");
+        match run_link_parents() {
+            Ok(()) => {}
+            Err(err) => eprintln!("link-parents warning: {err}"),
+        }
+    }
 
     if let Some(output_dir) = &output_dir {
         let written = summary.markdown_written.unwrap_or(0);
@@ -418,7 +427,7 @@ pub fn run_link_parents() -> Result<(), GaalError> {
 }
 
 pub(crate) fn index_discovered_session(
-    conn: &rusqlite::Connection,
+    conn: &mut rusqlite::Connection,
     discovered: &DiscoveredSession,
     force: bool,
 ) -> Result<IndexOutcome, GaalError> {
@@ -461,17 +470,23 @@ pub(crate) fn index_discovered_session(
         }
         let normalized_facts = normalize_facts(parsed_delta.facts, &existing_row.id);
 
-        upsert_session(conn, &merged_row)?;
+        // Wrap upsert + facts + links in a single savepoint to reduce lock
+        // acquisition cycles under parallel load.  Savepoints nest safely,
+        // unlike unchecked_transaction() which crashes with "nested transaction"
+        // when init_db leaves a phantom transaction open (I16/I17).
+        let tx = conn.savepoint_with_name("index_session").map_err(GaalError::from)?;
+        upsert_session(&tx, &merged_row)?;
         if !normalized_facts.is_empty() {
-            insert_facts_batch(conn, &normalized_facts)?;
+            insert_facts_batch(&tx, &normalized_facts)?;
         }
-        if !link_children_for_parent(conn, &existing_row.id, &child_links)?.is_empty() {
-            conn.execute(
+        if !link_children_for_parent(&tx, &existing_row.id, &child_links)?.is_empty() {
+            tx.execute(
                 "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
                 named_params! { ":id": &existing_row.id },
             )
             .map_err(GaalError::from)?;
         }
+        tx.commit().map_err(GaalError::from)?;
         return Ok(IndexOutcome::Indexed);
     }
 
@@ -505,25 +520,32 @@ pub(crate) fn index_discovered_session(
     }
     let facts = normalize_facts(parsed.facts, target_id);
 
+    // Wrap delete-old-facts + upsert + insert-facts + links in a single
+    // savepoint to reduce lock acquisition cycles under parallel load.
+    // Savepoints nest safely, unlike unchecked_transaction() which crashes
+    // with "nested transaction" when init_db leaves a phantom transaction
+    // open (I16/I17).
+    let tx = conn.savepoint_with_name("index_full").map_err(GaalError::from)?;
     if let Some(row) = existing.as_ref() {
-        conn.execute(
+        tx.execute(
             "DELETE FROM facts WHERE session_id = :session_id",
             named_params! { ":session_id": &row.id },
         )
         .map_err(GaalError::from)?;
     }
 
-    upsert_session(conn, &session_row)?;
+    upsert_session(&tx, &session_row)?;
     if !facts.is_empty() {
-        insert_facts_batch(conn, &facts)?;
+        insert_facts_batch(&tx, &facts)?;
     }
-    if !link_children_for_parent(conn, target_id, &child_links)?.is_empty() {
-        conn.execute(
+    if !link_children_for_parent(&tx, target_id, &child_links)?.is_empty() {
+        tx.execute(
             "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
             named_params! { ":id": target_id },
         )
         .map_err(GaalError::from)?;
     }
+    tx.commit().map_err(GaalError::from)?;
     Ok(IndexOutcome::Indexed)
 }
 
@@ -627,10 +649,7 @@ fn default_session_markdown_path(discovered: &DiscoveredSession) -> PathBuf {
 ///
 /// Writes the rendered markdown to `~/.gaal/data/{engine}/sessions/YYYY/MM/DD/{id}.md`.
 fn generate_session_markdown(discovered: &DiscoveredSession) -> Result<PathBuf, GaalError> {
-    let started_at = discovered
-        .started_at
-        .as_deref()
-        .unwrap_or(EPOCH_RFC3339);
+    let started_at = discovered.started_at.as_deref().unwrap_or(EPOCH_RFC3339);
 
     // Don't create markdown for sessions with no valid timestamp (epoch fallback).
     if started_at == EPOCH_RFC3339 {
@@ -681,10 +700,7 @@ fn write_session_markdown_to_dir(
     discovered: &DiscoveredSession,
     output_dir: &Path,
 ) -> Result<WriteOutcome, GaalError> {
-    let started_at = discovered
-        .started_at
-        .as_deref()
-        .unwrap_or(EPOCH_RFC3339);
+    let started_at = discovered.started_at.as_deref().unwrap_or(EPOCH_RFC3339);
 
     // Don't create markdown for sessions with no valid timestamp (epoch fallback).
     if started_at == EPOCH_RFC3339 {
@@ -791,19 +807,52 @@ fn resolve_child_session_id(
         return Ok(Some(row.id));
     }
     let like = format!("{short}%");
-    conn.query_row(
-        r#"
+    let result: Option<String> = conn
+        .query_row(
+            r#"
         SELECT id
         FROM sessions
         WHERE id LIKE :like
         ORDER BY CASE WHEN id = :short THEN 0 ELSE 1 END, LENGTH(id) ASC
         LIMIT 1
         "#,
-        named_params! { ":like": &like, ":short": &short },
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(GaalError::from)
+            named_params! { ":like": &like, ":short": &short },
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(GaalError::from)?;
+    if result.is_some() {
+        return Ok(result);
+    }
+
+    // Codex sessions use UUIDv7 where the timestamp prefix is shared across
+    // sessions. gaal stores them truncated to the LAST 8 hex chars (see
+    // truncate_codex_id in discovery/codex.rs). Try last-8 resolution when
+    // first-8 didn't match.
+    let hex: String = raw.chars().filter(|c| *c != '-').collect();
+    if hex.len() > 8 {
+        let last8 = &hex[hex.len() - 8..];
+        if let Some(row) = get_session(conn, last8)? {
+            return Ok(Some(row.id));
+        }
+        let like_last8 = format!("{last8}%");
+        return conn
+            .query_row(
+                r#"
+            SELECT id
+            FROM sessions
+            WHERE id LIKE :like
+            ORDER BY CASE WHEN id = :last8 THEN 0 ELSE 1 END, LENGTH(id) ASC
+            LIMIT 1
+            "#,
+                named_params! { ":like": &like_last8, ":last8": last8 },
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(GaalError::from);
+    }
+
+    Ok(None)
 }
 
 fn parse_engine_filter(engine: Option<&str>) -> Result<Option<Engine>, GaalError> {

@@ -275,7 +275,7 @@ No read-only connection path exists. `gaal ls` takes the same locks as `gaal ind
 
 ---
 
-## I15: `gaal handoff` captures planning phase only — misses execution work
+## I15: `gaal handoff` captures planning phase only — misses execution work [FIXED 2026-03-10]
 
 **Severity:** High (handoff quality — session continuity broken)
 **Session ID:** cd572b60
@@ -310,7 +310,7 @@ A future session reconnecting via this handoff would believe `wet` was still in 
 
 ---
 
-## I16: `gaal show` returns "not found" for current running session
+## I16: `gaal show` returns "not found" for current running session [FIXED 2026-03-10]
 
 **Severity:** High (blocks handoff of active sessions)
 **Session ID:** `019cd256-c7f9-72f0-a2fe-924fe3e8c603`
@@ -338,7 +338,7 @@ cannot start a transaction within a transaction
 
 ---
 
-## I17: Backfill crashes with "nested transaction" on sessions with subagents
+## I17: Backfill crashes with "nested transaction" on sessions with subagents [FIXED 2026-03-10]
 
 **Severity:** High (blocks indexing of coordinator sessions)
 **Evidence:** `gaal index backfill` crashes on Claude sessions that spawned subagents

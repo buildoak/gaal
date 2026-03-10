@@ -103,7 +103,7 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
         config.handoff.prompt = gaal_home().join(&config.handoff.prompt);
     }
 
-    let conn = open_db()?;
+    let mut conn = open_db()?;
     if args.batch {
         return run_batch(&conn, &config, &args);
     }
@@ -159,7 +159,7 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
                 "Session not indexed yet — indexing {} on-the-fly...",
                 detected.jsonl_path.display()
             );
-            let short_id = index_single_jsonl(&conn, detected)?;
+            let short_id = index_single_jsonl(&mut conn, detected)?;
             // Retry with the truncated ID that the indexer stores in the DB.
             resolve_sessions(&conn, &short_id)?
         }
@@ -643,7 +643,7 @@ fn resolve_today_sessions(conn: &Connection) -> Result<Vec<SessionRow>, GaalErro
 /// where the cron indexer hasn't picked up the session yet.
 ///
 /// Returns the short ID stored in the DB (for retry lookup).
-fn index_single_jsonl(conn: &Connection, detected: &DetectedSession) -> Result<String, GaalError> {
+fn index_single_jsonl(conn: &mut Connection, detected: &DetectedSession) -> Result<String, GaalError> {
     let meta = fs::metadata(&detected.jsonl_path).map_err(GaalError::from)?;
     let engine = Engine::from_str(&detected.engine)?;
     let short_id = truncate_session_id(&detected.session_id, &engine);
@@ -768,7 +768,7 @@ fn format_fact(fact: &Fact) -> String {
     let ts = fact.ts.as_str();
     let subject = fact.subject.as_deref().unwrap_or("-");
     let detail = fact.detail.as_deref().unwrap_or("-");
-    let snippet = truncate(detail, 240);
+    let snippet = truncate(detail, 400);
     format!("[{ts}] {subject} | {snippet}")
 }
 
@@ -793,12 +793,31 @@ fn bullet_lines(values: &[String], max: usize) -> String {
     if values.is_empty() {
         return "- (none)".to_string();
     }
-    values
+    let len = values.len();
+    if len <= max {
+        return values
+            .iter()
+            .map(|line| format!("- {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    // Take head (1/4) + tail (3/4) so the execution phase is always preserved.
+    let head_count = max / 4;
+    let tail_count = max - head_count;
+    let skipped = len - head_count - tail_count;
+    let mut lines: Vec<String> = values
         .iter()
-        .take(max)
+        .take(head_count)
         .map(|line| format!("- {line}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect();
+    lines.push(format!("[... {skipped} items skipped ...]"));
+    lines.extend(
+        values
+            .iter()
+            .skip(len - tail_count)
+            .map(|line| format!("- {line}")),
+    );
+    lines.join("\n")
 }
 
 fn invoke_agent_mux(
