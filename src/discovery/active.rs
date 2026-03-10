@@ -513,8 +513,8 @@ fn list_agent_processes() -> Vec<(u32, Engine)> {
         return list_agent_processes_fallback();
     }
 
-    let actual_count = (pid_count as usize) / std::mem::size_of::<c_int>();
-    pid_buffer.truncate(actual_count);
+    // proc_listallpids returns the number of PIDs (not bytes).
+    pid_buffer.truncate(pid_count as usize);
 
     for &pid in &pid_buffer {
         if pid <= 0 || excluded.contains(&(pid as u32)) {
@@ -741,11 +741,17 @@ fn resolve_cwd(pid: u32) -> Option<String> {
         fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: *mut c_char, buffersize: c_int) -> c_int;
     }
 
-    // PROC_PIDVNODEPATHINFO = 10
-    const PROC_PIDVNODEPATHINFO: c_int = 10;
+    // PROC_PIDVNODEPATHINFO = 9 (from sys/proc_info.h)
+    const PROC_PIDVNODEPATHINFO: c_int = 9;
     const MAXPATHLEN: usize = 1024;
 
-    let mut buffer = vec![0u8; MAXPATHLEN];
+    // struct vnode_info = 152 bytes, struct vnode_info_path = vnode_info + char[MAXPATHLEN]
+    // struct proc_vnodepathinfo = 2 * vnode_info_path = 2 * (152 + 1024) = 2352 bytes
+    const VNODE_INFO_SIZE: usize = 152;
+    const VNODE_INFO_PATH_SIZE: usize = VNODE_INFO_SIZE + MAXPATHLEN;
+    const PROC_VNODEPATHINFO_SIZE: usize = 2 * VNODE_INFO_PATH_SIZE;
+
+    let mut buffer = vec![0u8; PROC_VNODEPATHINFO_SIZE];
     let ret = unsafe {
         proc_pidinfo(
             pid as c_int,
@@ -761,12 +767,18 @@ fn resolve_cwd(pid: u32) -> Option<String> {
         return resolve_cwd_fallback(pid);
     }
 
-    // Find the null terminator
-    if let Some(null_pos) = buffer.iter().position(|&b| b == 0) {
-        buffer.truncate(null_pos);
+    // pvi_cdir.vip_path starts at offset VNODE_INFO_SIZE (after vnode_info struct)
+    let path_start = VNODE_INFO_SIZE;
+    let path_end = path_start + MAXPATHLEN;
+    if ret as usize >= path_end {
+        let path_bytes = &buffer[path_start..path_end];
+        let null_pos = path_bytes.iter().position(|&b| b == 0).unwrap_or(MAXPATHLEN);
+        let path_slice = &path_bytes[..null_pos];
+        return String::from_utf8(path_slice.to_vec()).ok();
     }
 
-    String::from_utf8(buffer).ok()
+    // Insufficient data returned — fall back to lsof
+    resolve_cwd_fallback(pid)
 }
 
 #[cfg(target_os = "macos")]
