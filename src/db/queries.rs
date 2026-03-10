@@ -210,39 +210,36 @@ pub fn insert_fact(conn: &Connection, fact: &Fact) -> Result<i64, GaalError> {
     Ok(conn.last_insert_rowid())
 }
 
-/// Insert facts in a single transaction.
+/// Insert facts using the provided connection (which may already be inside a transaction).
+/// Callers are responsible for transaction management.
 pub fn insert_facts_batch(conn: &Connection, facts: &[Fact]) -> Result<(), GaalError> {
-    let tx = conn.unchecked_transaction().map_err(db_err)?;
-    {
-        let mut stmt = tx
-            .prepare(
-                r#"
-                INSERT INTO facts (
-                    session_id, ts, turn_number, fact_type, subject, detail, exit_code, success
-                )
-                VALUES (
-                    :session_id, :ts, :turn_number, :fact_type, :subject, :detail, :exit_code, :success
-                )
-                "#,
+    let mut stmt = conn
+        .prepare(
+            r#"
+            INSERT INTO facts (
+                session_id, ts, turn_number, fact_type, subject, detail, exit_code, success
             )
-            .map_err(db_err)?;
+            VALUES (
+                :session_id, :ts, :turn_number, :fact_type, :subject, :detail, :exit_code, :success
+            )
+            "#,
+        )
+        .map_err(db_err)?;
 
-        for fact in facts {
-            let payload = fact_payload(fact)?;
-            stmt.execute(named_params! {
-                ":session_id": &payload.session_id,
-                ":ts": &payload.ts,
-                ":turn_number": &payload.turn_number,
-                ":fact_type": &payload.fact_type,
-                ":subject": &payload.subject,
-                ":detail": &payload.detail,
-                ":exit_code": &payload.exit_code,
-                ":success": &payload.success,
-            })
-            .map_err(db_err)?;
-        }
+    for fact in facts {
+        let payload = fact_payload(fact)?;
+        stmt.execute(named_params! {
+            ":session_id": &payload.session_id,
+            ":ts": &payload.ts,
+            ":turn_number": &payload.turn_number,
+            ":fact_type": &payload.fact_type,
+            ":subject": &payload.subject,
+            ":detail": &payload.detail,
+            ":exit_code": &payload.exit_code,
+            ":success": &payload.success,
+        })
+        .map_err(db_err)?;
     }
-    tx.commit().map_err(db_err)?;
     Ok(())
 }
 
@@ -645,16 +642,24 @@ pub fn query_who(conn: &Connection, filter: &WhoFilter) -> Result<Vec<WhoResult>
         .map(|pattern| format!("%{pattern}%"));
     let cwd_like = filter.cwd.as_ref().map(|value| format!("%{value}%"));
     let limit = filter.limit.unwrap_or(10).max(1);
-    let sql_limit = if filter.fact_types.is_empty() {
-        limit
-    } else {
-        limit.saturating_mul(8)
-    };
     let failed_only = if filter.failed_only { 1_i64 } else { 0_i64 };
 
-    let mut stmt = conn
-        .prepare(
-            r#"
+    // Build a fact_type IN (...) clause from the enum-derived strings.
+    // Values come from FactType::as_str() (hardcoded &'static str), so
+    // embedding them directly is safe from injection.
+    let fact_type_clause = if filter.fact_types.is_empty() {
+        "1 = 1".to_string()
+    } else {
+        let quoted: Vec<String> = filter
+            .fact_types
+            .iter()
+            .map(|ft| format!("'{}'", ft.as_str()))
+            .collect();
+        format!("f.fact_type IN ({})", quoted.join(", "))
+    };
+
+    let sql = format!(
+        r#"
             SELECT
                 f.session_id,
                 s.engine,
@@ -687,11 +692,13 @@ pub fn query_who(conn: &Connection, filter: &WhoFilter) -> Result<Vec<WhoResult>
                     OR (f.exit_code IS NOT NULL AND f.exit_code != 0)
                     OR f.success = 0
                   )
+              AND {fact_type_clause}
             ORDER BY f.ts DESC, f.id DESC
             LIMIT :limit
             "#,
-        )
-        .map_err(db_err)?;
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(db_err)?;
 
     let mut rows = stmt
         .query(named_params! {
@@ -702,10 +709,12 @@ pub fn query_who(conn: &Connection, filter: &WhoFilter) -> Result<Vec<WhoResult>
             ":subject_pattern": subject_pattern.as_deref(),
             ":tag": filter.tag.as_deref(),
             ":failed_only": failed_only,
-            ":limit": sql_limit,
+            ":limit": limit,
         })
         .map_err(db_err)?;
 
+    // Safety-net post-filter: keeps the allowed_types check in case the SQL
+    // clause and the caller's intent ever drift apart.
     let allowed_types: Option<HashSet<String>> = if filter.fact_types.is_empty() {
         None
     } else {
@@ -784,7 +793,11 @@ pub fn get_index_status(conn: &Connection) -> Result<IndexStatus, GaalError> {
         while let Some(row) = rows.next().map_err(db_err)? {
             let ended_at: Option<String> = row.get(0).map_err(db_err)?;
             let exit_signal: Option<String> = row.get(1).map_err(db_err)?;
-            let status = status_from_fields(ended_at.as_deref(), exit_signal.as_deref());
+            let status = status_from_fields(
+                ended_at.as_deref(),
+                exit_signal.as_deref(),
+                STUCK_SILENCE_SECS,
+            );
             *sessions_by_status.entry(status.to_string()).or_insert(0) += 1;
         }
     }
@@ -868,10 +881,18 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
 }
 
 fn session_status(row: &SessionRow) -> SessionStatus {
-    status_from_fields(row.ended_at.as_deref(), row.exit_signal.as_deref())
+    status_from_fields(
+        row.ended_at.as_deref(),
+        row.exit_signal.as_deref(),
+        STUCK_SILENCE_SECS,
+    )
 }
 
-fn status_from_fields(ended_at: Option<&str>, exit_signal: Option<&str>) -> SessionStatus {
+fn status_from_fields(
+    ended_at: Option<&str>,
+    exit_signal: Option<&str>,
+    stuck_silence_secs: u64,
+) -> SessionStatus {
     compute_session_status(&StatusParams {
         ended_at,
         exit_signal,
@@ -880,7 +901,8 @@ fn status_from_fields(ended_at: Option<&str>, exit_signal: Option<&str>) -> Sess
         loop_detected: false,
         context_pct: 0.0,
         permission_blocked: false,
-        stuck_silence_secs: STUCK_SILENCE_SECS,
+        stuck_silence_secs,
+        executing_command: false,
     })
 }
 

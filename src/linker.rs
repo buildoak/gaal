@@ -1,6 +1,6 @@
-use std::collections::HashSet;
 use crate::parser::event::{EventKind, SessionEvent};
 use serde_json::{de::Deserializer, Value};
+use std::collections::HashSet;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChildLink {
     pub child_session_id: String,
@@ -113,14 +113,20 @@ mod tests {
     }
     #[test]
     fn malformed_json_returns_empty() {
-        let events = vec![bash_use("1", "agent-mux run"), tool_result("1", "oops {bad")];
+        let events = vec![
+            bash_use("1", "agent-mux run"),
+            tool_result("1", "oops {bad"),
+        ];
         assert!(extract_child_links(&events).is_empty());
     }
     #[test]
     fn missing_session_id_returns_empty() {
         let events = vec![
             bash_use("1", "agent-mux run"),
-            tool_result("1", r#"{"success":true,"engine":"codex","metadata":{"model":"gpt-5"}}"#),
+            tool_result(
+                "1",
+                r#"{"success":true,"engine":"codex","metadata":{"model":"gpt-5"}}"#,
+            ),
         ];
         assert!(extract_child_links(&events).is_empty());
     }
@@ -128,7 +134,10 @@ mod tests {
     fn non_agent_mux_bash_commands_ignored() {
         let events = vec![
             bash_use("1", "echo hello"),
-            tool_result("1", r#"{"success":true,"engine":"codex","metadata":{"session_id":"abc"}}"#),
+            tool_result(
+                "1",
+                r#"{"success":true,"engine":"codex","metadata":{"session_id":"abc"}}"#,
+            ),
         ];
         assert!(extract_child_links(&events).is_empty());
     }
@@ -136,9 +145,15 @@ mod tests {
     fn multiple_calls_extract_multiple_links() {
         let events = vec![
             bash_use("1", "agent-mux run"),
-            tool_result("1", r#"{"success":true,"engine":"codex","metadata":{"session_id":"aaa"}}"#),
+            tool_result(
+                "1",
+                r#"{"success":true,"engine":"codex","metadata":{"session_id":"aaa"}}"#,
+            ),
             bash_use("2", "agent-mux run"),
-            tool_result("2", r#"{"success":true,"engine":"claude","metadata":{"session_id":"bbb","model":"sonnet"}}"#),
+            tool_result(
+                "2",
+                r#"{"success":true,"engine":"claude","metadata":{"session_id":"bbb","model":"sonnet"}}"#,
+            ),
         ];
         assert_eq!(extract_child_links(&events).len(), 2);
     }

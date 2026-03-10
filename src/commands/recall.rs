@@ -7,7 +7,7 @@ use clap::{Args, ValueEnum};
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::db::open_db;
+use crate::db::open_db_readonly;
 use crate::db::queries::get_facts;
 use crate::error::GaalError;
 use crate::model::{Fact, FactType, HandoffRecord};
@@ -110,7 +110,7 @@ struct ErrorOutput {
 
 /// Execute `gaal recall`.
 pub fn run(args: RecallArgs) -> Result<(), GaalError> {
-    let conn = open_db()?;
+    let conn = open_db_readonly()?;
     let sessions = load_all_handoffs(&conn)?;
     if sessions.is_empty() {
         return Err(GaalError::NoResults);

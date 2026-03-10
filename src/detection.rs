@@ -3,6 +3,10 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use rusqlite::{named_params, Connection, OptionalExtension};
+
+use crate::db::open_db;
+use crate::db::queries::get_session;
 use crate::error::GaalError;
 
 #[derive(Debug, Clone)]
@@ -13,8 +17,11 @@ pub struct DetectedSession {
     pub pid: u32,
 }
 
-pub fn detect_current_session() -> Result<DetectedSession, GaalError> {
+/// Returns all agent session candidates along the PID ancestor chain.
+/// First element is closest to gaal (likely child), last is furthest (likely parent).
+pub fn detect_session_candidates() -> Result<Vec<DetectedSession>, GaalError> {
     let mut current = std::process::id();
+    let mut candidates = Vec::new();
 
     for _ in 0..20 {
         let Some(name) = get_process_name(current) else {
@@ -27,23 +34,16 @@ pub fn detect_current_session() -> Result<DetectedSession, GaalError> {
             // keep the JSONL open permanently).
             let jsonl_path =
                 resolve_jsonl_for_pid(current).or_else(|| resolve_jsonl_via_cwd(current, &engine));
-            let Some(jsonl_path) = jsonl_path else {
-                return Err(GaalError::Internal(format!(
-                    "Found {engine} process (PID {current}) but could not resolve its JSONL session file."
-                )));
-            };
-            let Some(session_id) = extract_session_id_from_jsonl(&jsonl_path, &engine) else {
-                return Err(GaalError::Internal(format!(
-                    "Found {engine} JSONL at {} but could not extract session ID.",
-                    jsonl_path.display()
-                )));
-            };
-            return Ok(DetectedSession {
-                engine,
-                session_id,
-                jsonl_path,
-                pid: current,
-            });
+            if let Some(jsonl_path) = jsonl_path {
+                if let Some(session_id) = extract_session_id_from_jsonl(&jsonl_path, &engine) {
+                    candidates.push(DetectedSession {
+                        engine: engine.clone(),
+                        session_id,
+                        jsonl_path,
+                        pid: current,
+                    });
+                }
+            }
         }
 
         let Some(parent) = get_ppid(current) else {
@@ -55,7 +55,140 @@ pub fn detect_current_session() -> Result<DetectedSession, GaalError> {
         current = parent;
     }
 
-    Err(GaalError::Internal("Could not detect current session. Provide a session ID, use 'today', or run from within a Claude Code session.".to_string()))
+    if candidates.is_empty() {
+        Err(GaalError::Internal("Could not detect current session. Provide a session ID, use 'today', or run from within a Claude Code session.".to_string()))
+    } else {
+        Ok(candidates)
+    }
+}
+
+pub fn detect_current_session() -> Result<DetectedSession, GaalError> {
+    detect_session_candidates()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            GaalError::Internal(
+                "Could not detect current session. Provide a session ID, use 'today', or run from within a Claude Code session.".to_string(),
+            )
+        })
+}
+
+/// Detect the preferred session for handoff.
+/// Prefers parent sessions over child sessions.
+pub fn detect_preferred_session() -> Result<DetectedSession, GaalError> {
+    let candidates = detect_session_candidates()?;
+    if candidates.len() == 1 {
+        return Ok(candidates.into_iter().next().expect("candidate exists"));
+    }
+
+    let mut preferred_idx = candidates.len() - 1;
+
+    if let Some(db_idx) = choose_parent_from_db(&candidates) {
+        preferred_idx = db_idx;
+    } else if let Some(depth_idx) = choose_furthest_by_pid_depth(&candidates) {
+        preferred_idx = depth_idx;
+    }
+
+    if preferred_idx != 0 {
+        let child = &candidates[0];
+        let parent = &candidates[preferred_idx];
+        eprintln!(
+            "Detected child session {}. Extracting parent session {} instead. Use --this to extract the current session.",
+            child.session_id, parent.session_id,
+        );
+    }
+
+    Ok(candidates[preferred_idx].clone())
+}
+
+fn choose_parent_from_db(candidates: &[DetectedSession]) -> Option<usize> {
+    let conn = open_db().ok()?;
+    let mut saw_null_parent = false;
+    let mut saw_non_null_parent = false;
+    let mut preferred_idx = None;
+
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let Some(parent_id) = lookup_parent_id(&conn, &candidate.session_id) else {
+            continue;
+        };
+        if parent_id.is_some() {
+            saw_non_null_parent = true;
+        } else {
+            saw_null_parent = true;
+            preferred_idx = Some(idx);
+        }
+    }
+
+    if saw_null_parent && saw_non_null_parent {
+        preferred_idx
+    } else {
+        None
+    }
+}
+
+fn lookup_parent_id(conn: &Connection, session_id: &str) -> Option<Option<String>> {
+    if let Ok(Some(row)) = get_session(conn, session_id) {
+        return Some(row.parent_id);
+    }
+
+    let pattern = format!("{session_id}%");
+    conn.query_row(
+        r#"
+        SELECT parent_id
+        FROM sessions
+        WHERE id = :id
+           OR id LIKE :prefix
+           OR :id LIKE (id || '%')
+        ORDER BY
+            CASE WHEN id = :id THEN 0 ELSE 1 END,
+            LENGTH(id) DESC
+        LIMIT 1
+        "#,
+        named_params! {
+            ":id": session_id,
+            ":prefix": pattern,
+        },
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+fn choose_furthest_by_pid_depth(candidates: &[DetectedSession]) -> Option<usize> {
+    let own_pid = std::process::id();
+    let mut best: Option<(usize, usize)> = None;
+
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let Some(depth) = pid_distance_from(own_pid, candidate.pid, 64) else {
+            continue;
+        };
+        match best {
+            Some((_, best_depth)) if depth <= best_depth => {}
+            _ => best = Some((idx, depth)),
+        }
+    }
+
+    best.map(|(idx, _)| idx)
+}
+
+fn pid_distance_from(mut start: u32, target: u32, max_hops: usize) -> Option<usize> {
+    if start == target {
+        return Some(0);
+    }
+
+    for depth in 1..=max_hops {
+        let parent = get_ppid(start)?;
+        if parent <= 1 || parent == start {
+            return None;
+        }
+        if parent == target {
+            return Some(depth);
+        }
+        start = parent;
+    }
+
+    None
 }
 
 pub fn get_ppid(pid: u32) -> Option<u32> {

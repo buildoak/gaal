@@ -11,17 +11,19 @@ use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::db::open_db;
+use crate::config::load_config;
+use crate::db::open_db_readonly;
 use crate::db::queries::{get_facts, get_session, SessionRow};
 use crate::discovery::active::{find_active_sessions, ActiveSession};
 use crate::error::GaalError;
 use crate::model::{compute_session_status, Fact, FactType, SessionStatus, StatusParams};
+use crate::output::human::{format_duration, print_table};
 use crate::parser::parse_session;
 use crate::parser::types::Engine;
 
 #[allow(unused_imports)]
 pub(crate) use crate::model::{IDLE_SECS, STUCK_SILENCE_SECS};
-const LOOP_WINDOW: usize = 6;
+const LOOP_WINDOW: usize = 10;
 const TAIL_LINES: usize = 700;
 
 /// Arguments for `gaal active`.
@@ -33,7 +35,7 @@ pub struct ActiveArgs {
     /// Re-poll every 2s and refresh output.
     #[arg(long)]
     pub watch: bool,
-    /// Human-readable mode (pretty JSON for now).
+    /// Human-readable table output.
     #[arg(short = 'H', long = "human")]
     pub human: bool,
 }
@@ -59,6 +61,7 @@ struct ActiveOutput {
 #[derive(Debug, Serialize)]
 struct ActiveStuckSignals {
     silence_secs: u64,
+    stuck_silence_secs: u64,
     loop_detected: bool,
     permission_blocked: bool,
 }
@@ -70,6 +73,7 @@ pub(crate) struct RuntimeProbe {
     pub last_action: Option<ActionEvent>,
     pub recent_actions: Vec<ActionEvent>,
     pub permission_blocked: bool,
+    pub executing_command: bool,
     pub usage_samples: Vec<UsageSample>,
 }
 
@@ -107,7 +111,11 @@ pub fn run(args: ActiveArgs) -> Result<(), GaalError> {
         if args.watch {
             print!("\x1B[2J\x1B[H");
         }
-        print_json(&payload, args.human)?;
+        if args.human {
+            print_active_table(&payload);
+        } else {
+            print_json(&payload)?;
+        }
 
         if !args.watch {
             break;
@@ -125,11 +133,19 @@ fn collect_active(args: &ActiveArgs) -> Result<Vec<ActiveOutput>, GaalError> {
     }
     sessions.sort_by_key(|s| s.pid);
 
-    let conn = open_db().ok();
+    let conn = open_db_readonly().ok();
+    let stuck_config = load_config().stuck;
     let mut out = Vec::with_capacity(sessions.len());
 
     for session in sessions {
-        out.push(build_active_row(&session, conn.as_ref())?);
+        let stuck_silence_secs = stuck_config
+            .silence_for_engine(Some(session.engine))
+            .max(IDLE_SECS);
+        out.push(build_active_row(
+            &session,
+            conn.as_ref(),
+            stuck_silence_secs,
+        )?);
     }
 
     Ok(out)
@@ -138,6 +154,7 @@ fn collect_active(args: &ActiveArgs) -> Result<Vec<ActiveOutput>, GaalError> {
 fn build_active_row(
     session: &ActiveSession,
     conn: Option<&Connection>,
+    stuck_silence_secs: u64,
 ) -> Result<ActiveOutput, GaalError> {
     let parsed = session
         .jsonl_path
@@ -167,19 +184,14 @@ fn build_active_row(
         .and_then(|row| row.model.clone())
         .or_else(|| parsed.as_ref().and_then(|p| p.meta.model.clone()));
 
-    let tokens_used = db_row
-        .as_ref()
-        .map(|row| row.total_input_tokens + row.total_output_tokens)
-        .or_else(|| {
-            parsed
-                .as_ref()
-                .map(|p| p.total_input_tokens + p.total_output_tokens)
-        })
-        .unwrap_or(0)
-        .max(0);
-
+    let peak_input = runtime
+        .usage_samples
+        .iter()
+        .map(|sample| sample.input_tokens)
+        .max()
+        .unwrap_or(0);
     let tokens_limit = context_limit_tokens(session.engine, model.as_deref());
-    let context_pct = pct_used(tokens_used, tokens_limit);
+    let context_pct = pct_used(peak_input, tokens_limit);
 
     let last_event_ts = runtime
         .last_event_ts
@@ -207,7 +219,8 @@ fn build_active_row(
         loop_detected,
         context_pct,
         permission_blocked,
-        stuck_silence_secs: STUCK_SILENCE_SECS,
+        stuck_silence_secs,
+        executing_command: runtime.executing_command,
     });
 
     let last_action_event = runtime.last_action.clone().or_else(|| {
@@ -246,6 +259,7 @@ fn build_active_row(
         tmux_session: session.tmux_session.clone(),
         stuck_signals: ActiveStuckSignals {
             silence_secs,
+            stuck_silence_secs,
             loop_detected,
             permission_blocked,
         },
@@ -281,6 +295,8 @@ pub(crate) fn probe_runtime(path: &Path, engine: Engine, max_lines: usize) -> Ru
     let mut usage_samples: Vec<UsageSample> = Vec::new();
 
     let mut pending_calls: HashSet<String> = HashSet::new();
+    let mut last_tool_use_id: Option<String> = None;
+    let mut last_tool_use_kind: Option<String> = None;
 
     for line in lines {
         let trimmed = line.trim();
@@ -321,6 +337,11 @@ pub(crate) fn probe_runtime(path: &Path, engine: Engine, max_lines: usize) -> Ru
                             if block.get("type").and_then(Value::as_str) == Some("tool_use") {
                                 if let Some(id) = block.get("id").and_then(Value::as_str) {
                                     pending_calls.insert(id.to_string());
+                                    last_tool_use_id = Some(id.to_string());
+                                    last_tool_use_kind = block
+                                        .get("name")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_string);
                                 }
                             }
                         }
@@ -351,6 +372,11 @@ pub(crate) fn probe_runtime(path: &Path, engine: Engine, max_lines: usize) -> Ru
                             record.pointer("/payload/call_id").and_then(Value::as_str)
                         {
                             pending_calls.insert(call_id.to_string());
+                            last_tool_use_id = Some(call_id.to_string());
+                            last_tool_use_kind = record
+                                .pointer("/payload/name")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
                         }
                     }
                     if matches!(
@@ -373,12 +399,39 @@ pub(crate) fn probe_runtime(path: &Path, engine: Engine, max_lines: usize) -> Ru
         recent_actions = recent_actions.split_off(keep_from);
     }
 
+    let permission_blocked = if pending_calls.len() == 1 {
+        let dominated_by_self = last_tool_use_id
+            .as_ref()
+            .map(|id| pending_calls.contains(id))
+            .unwrap_or(false)
+            && last_tool_use_kind
+                .as_ref()
+                .map(|kind| {
+                    let kind_lower = kind.to_ascii_lowercase();
+                    kind_lower == "bash" || kind_lower == "exec_command"
+                })
+                .unwrap_or(false);
+        !dominated_by_self
+    } else {
+        !pending_calls.is_empty()
+    };
+
+    let executing_command = last_action
+        .as_ref()
+        .map(|action| {
+            let kind_lower = action.kind.to_ascii_lowercase();
+            kind_lower == "bash" || kind_lower == "exec_command"
+        })
+        .unwrap_or(false)
+        && !pending_calls.is_empty();
+
     RuntimeProbe {
         session_id,
         last_event_ts,
         last_action,
         recent_actions,
-        permission_blocked: !pending_calls.is_empty(),
+        permission_blocked,
+        executing_command,
         usage_samples,
     }
 }
@@ -650,11 +703,29 @@ pub(crate) fn action_loop_detected(actions: &[ActionEvent]) -> bool {
         return false;
     }
 
+    let window: Vec<&ActionEvent> = actions.iter().rev().take(LOOP_WINDOW).collect();
+
     let mut unique = HashSet::new();
-    for action in actions.iter().rev().take(LOOP_WINDOW) {
+    for action in &window {
         unique.insert(action.signature_key());
     }
-    unique.len() <= 2
+    if unique.len() > 2 {
+        return false;
+    }
+
+    let now = Utc::now();
+    window.iter().all(|action| {
+        action
+            .ts
+            .as_deref()
+            .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+            .map(|ts| {
+                now.signed_duration_since(ts.with_timezone(&Utc))
+                    .num_seconds()
+                    <= 300
+            })
+            .unwrap_or(false)
+    })
 }
 
 pub(crate) fn facts_loop_detected(facts: &[Fact]) -> bool {
@@ -792,13 +863,87 @@ fn truncate(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
-fn print_json<T: Serialize>(value: &T, pretty: bool) -> Result<(), GaalError> {
-    let rendered = if pretty {
-        serde_json::to_string_pretty(value)
-    } else {
-        serde_json::to_string(value)
-    }
-    .map_err(|e| GaalError::Internal(format!("failed to serialize output: {e}")))?;
+fn print_json<T: Serialize>(value: &T) -> Result<(), GaalError> {
+    let rendered = serde_json::to_string(value)
+        .map_err(|e| GaalError::Internal(format!("failed to serialize output: {e}")))?;
     println!("{rendered}");
     Ok(())
+}
+
+fn print_active_table(sessions: &[ActiveOutput]) {
+    if sessions.is_empty() {
+        println!("No active sessions.");
+        return;
+    }
+
+    let headers = [
+        "ID",
+        "Engine",
+        "Status",
+        "Duration",
+        "Ctx%",
+        "Last Action",
+        "Stuck",
+        "CWD",
+    ];
+
+    let rows: Vec<Vec<String>> = sessions
+        .iter()
+        .map(|s| {
+            let id = s.id.chars().take(8).collect::<String>();
+            let engine = format!("{}", s.engine);
+            let status = s.status.to_string();
+            let duration = format_duration(s.uptime_secs as i64);
+            let ctx = format!("{:.0}%", s.context_pct);
+
+            let last_action = s
+                .last_action
+                .as_deref()
+                .map(|a| truncate(a, 40))
+                .unwrap_or_else(|| "-".to_string());
+
+            let stuck = stuck_reason(
+                &s.stuck_signals,
+                &s.status,
+                s.stuck_signals.stuck_silence_secs,
+            );
+
+            let cwd = truncate_cwd(&s.cwd, 2);
+
+            vec![id, engine, status, duration, ctx, last_action, stuck, cwd]
+        })
+        .collect();
+
+    print_table(&headers, &rows);
+}
+
+/// Derive a short stuck-reason label from signals and status.
+fn stuck_reason(
+    signals: &ActiveStuckSignals,
+    status: &SessionStatus,
+    stuck_silence_secs: u64,
+) -> String {
+    if !matches!(status, SessionStatus::Stuck) {
+        return "-".to_string();
+    }
+    if signals.permission_blocked {
+        return "permission".to_string();
+    }
+    if signals.loop_detected {
+        return "loop".to_string();
+    }
+    if signals.silence_secs >= stuck_silence_secs {
+        return format!("silence ({}s)", signals.silence_secs);
+    }
+    // context_pct >= 95% is the remaining trigger
+    "context".to_string()
+}
+
+/// Truncate a path to its last `n` components for readability.
+fn truncate_cwd(path: &str, components: usize) -> String {
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() <= components {
+        return path.to_string();
+    }
+    format!(".../{}", parts[parts.len() - components..].join("/"))
 }

@@ -171,7 +171,6 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
     Ok(events)
 }
 
-
 fn filter_model(model: &str) -> Option<String> {
     (!model.is_empty() && !model.starts_with('<')).then(|| model.to_string())
 }
@@ -414,4 +413,3 @@ fn as_i64_opt(value: Option<&Value>) -> Option<i64> {
             .or_else(|| v.as_u64().and_then(|raw| i64::try_from(raw).ok()))
     })
 }
-

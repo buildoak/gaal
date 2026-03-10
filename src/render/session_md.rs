@@ -14,8 +14,8 @@ use serde_json::Value;
 use crate::parser::event::{
     ContentBlock as ParserContentBlock, EventKind, SessionEvent, ToolUseEvent,
 };
-use crate::parser::{claude, codex, detect_engine};
 use crate::parser::types::Engine;
+use crate::parser::{claude, codex, detect_engine};
 
 // Dubai timezone: UTC+4.
 const DUBAI_OFFSET_SECS: i32 = 4 * 3600;
@@ -336,9 +336,7 @@ fn fmt_tool_annotation(name: &str, input: &Value, tool_id: &str) -> Option<ToolA
             };
             Some(ToolAnnotation::Simple(format!("-> Bash: `{display}`")))
         }
-        "apply_patch" => {
-            Some(ToolAnnotation::Simple("-> Patch (apply_patch)".to_string()))
-        }
+        "apply_patch" => Some(ToolAnnotation::Simple("-> Patch (apply_patch)".to_string())),
         "Task" => {
             let desc = get_str(&inp, "description").unwrap_or("").to_string();
             let prompt = get_str(&inp, "prompt").unwrap_or("").to_string();
@@ -640,9 +638,7 @@ fn collect_commands(turns: &[Turn]) -> Vec<String> {
         for block in &turn.assistant_content {
             if let ContentBlock::ToolUse { name, input, .. } = block {
                 if matches!(name.as_str(), "Bash" | "exec_command") {
-                    if let Some(cmd) = get_str(input, "command")
-                        .or_else(|| get_str(input, "cmd"))
-                    {
+                    if let Some(cmd) = get_str(input, "command").or_else(|| get_str(input, "cmd")) {
                         if !commands.contains(&cmd.to_string()) {
                             commands.push(cmd.to_string());
                         }
@@ -814,11 +810,7 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
                 });
             }
 
-            EventKind::AssistantMessage {
-                content,
-                model,
-                ..
-            } => {
+            EventKind::AssistantMessage { content, model, .. } => {
                 if current_turn.is_none() {
                     turn_number += 1;
                     current_turn = Some(Turn {
@@ -854,9 +846,7 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
                 if !tool_use_id.is_empty() {
                     if let Some(text) = result_content {
                         tool_result_contents.insert(tool_use_id.clone(), text.clone());
-                        if let Some((agent_id, stats)) =
-                            extract_subagent_tool_result_stats(text)
-                        {
+                        if let Some((agent_id, stats)) = extract_subagent_tool_result_stats(text) {
                             subagent_stats_by_agent_id.insert(agent_id, stats);
                         }
                     }
@@ -873,27 +863,22 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
                 total_tool_use_count,
                 ..
             } => {
-                let entry =
-                    subagent_deltas_map
-                        .entry(agent_id.clone())
-                        .or_insert_with(|| SubagentDelta {
-                            agent_id: agent_id.clone(),
-                            prompt: prompt.clone(),
-                            files_read: Vec::new(),
-                            files_written: Vec::new(),
-                            commands: Vec::new(),
-                            tool_counts: HashMap::new(),
-                            timestamps: Vec::new(),
-                            total_tokens: None,
-                            total_duration_ms: None,
-                            total_tool_use_count: None,
-                        });
+                let entry = subagent_deltas_map
+                    .entry(agent_id.clone())
+                    .or_insert_with(|| SubagentDelta {
+                        agent_id: agent_id.clone(),
+                        prompt: prompt.clone(),
+                        files_read: Vec::new(),
+                        files_written: Vec::new(),
+                        commands: Vec::new(),
+                        tool_counts: HashMap::new(),
+                        timestamps: Vec::new(),
+                        total_tokens: None,
+                        total_duration_ms: None,
+                        total_tool_use_count: None,
+                    });
 
-                if let Some(ts) = event
-                    .timestamp
-                    .as_deref()
-                    .or(progress_timestamp.as_deref())
-                {
+                if let Some(ts) = event.timestamp.as_deref().or(progress_timestamp.as_deref()) {
                     entry.timestamps.push(ts.to_string());
                 }
 
@@ -1029,9 +1014,7 @@ fn convert_content_blocks(blocks: &[ParserContentBlock]) -> Vec<ContentBlock> {
     blocks
         .iter()
         .map(|block| match block {
-            ParserContentBlock::Text(text) => ContentBlock::Text {
-                text: text.clone(),
-            },
+            ParserContentBlock::Text(text) => ContentBlock::Text { text: text.clone() },
             ParserContentBlock::Thinking => ContentBlock::Thinking,
             ParserContentBlock::ToolUse(ToolUseEvent { id, name, input }) => {
                 ContentBlock::ToolUse {
@@ -1119,9 +1102,7 @@ fn extract_subagent_tool_usage(entry: &mut SubagentDelta, msg: &Value) {
 ///
 /// This preserves legacy behavior where markdown parsing also consumed
 /// `toolUseResult` totals in addition to progress records.
-fn extract_subagent_tool_result_stats(
-    content: &str,
-) -> Option<(String, SubagentToolResultStats)> {
+fn extract_subagent_tool_result_stats(content: &str) -> Option<(String, SubagentToolResultStats)> {
     let parsed_json = serde_json::from_str::<Value>(content).ok();
 
     let agent_id = parsed_json
@@ -1138,10 +1119,8 @@ fn extract_subagent_tool_result_stats(
 
     let mut stats = SubagentToolResultStats::default();
     if let Some(json) = parsed_json.as_ref() {
-        stats.total_tokens = extract_i64_from_value(
-            json.get("totalTokens")
-                .or_else(|| json.get("total_tokens")),
-        );
+        stats.total_tokens =
+            extract_i64_from_value(json.get("totalTokens").or_else(|| json.get("total_tokens")));
         stats.total_duration_ms = extract_i64_from_value(
             json.get("totalDurationMs")
                 .or_else(|| json.get("total_duration_ms")),
@@ -1215,7 +1194,6 @@ fn extract_i64_field(content: &str, keys: &[&str]) -> Option<i64> {
     None
 }
 
-
 /// Compute duration in seconds between two timestamps.
 fn compute_duration(start: Option<&str>, end: Option<&str>) -> Option<f64> {
     let s = parse_ts(start)?;
@@ -1227,7 +1205,6 @@ fn compute_duration(start: Option<&str>, end: Option<&str>) -> Option<f64> {
 // ---------------------------------------------------------------------------
 // Subagent delta extraction
 // ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // Markdown rendering
@@ -1931,9 +1908,7 @@ mod tests {
 
     #[test]
     fn test_interruption_detection() {
-        use crate::parser::event::{
-            ContentBlock as PB, EventKind as EK, SessionEvent as SE,
-        };
+        use crate::parser::event::{ContentBlock as PB, EventKind as EK, SessionEvent as SE};
         // An interruption user message should be skipped during conversion.
         let events = vec![SE {
             timestamp: Some("2026-03-07T10:00:00Z".to_string()),
@@ -1942,7 +1917,10 @@ mod tests {
             },
         }];
         let session = events_to_session_data(&events, Path::new("test.jsonl"));
-        assert!(session.turns.is_empty(), "interruption turn should be skipped");
+        assert!(
+            session.turns.is_empty(),
+            "interruption turn should be skipped"
+        );
 
         // A normal user message should produce a turn.
         let events2 = vec![SE {
@@ -1952,7 +1930,11 @@ mod tests {
             },
         }];
         let session2 = events_to_session_data(&events2, Path::new("test.jsonl"));
-        assert_eq!(session2.turns.len(), 1, "normal message should produce a turn");
+        assert_eq!(
+            session2.turns.len(),
+            1,
+            "normal message should produce a turn"
+        );
     }
 
     #[test]
@@ -1974,9 +1956,7 @@ mod tests {
 
     #[test]
     fn test_subagent_stats_merged_from_tool_result_payload() {
-        use crate::parser::event::{
-            ContentBlock as PB, EventKind as EK, SessionEvent as SE,
-        };
+        use crate::parser::event::{ContentBlock as PB, EventKind as EK, SessionEvent as SE};
 
         let events = vec![
             SE {

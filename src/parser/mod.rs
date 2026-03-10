@@ -6,13 +6,13 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
 pub mod claude;
-pub mod common;
 pub mod codex;
+pub mod common;
 pub mod event;
 pub mod facts;
 pub mod types;
 
-pub use event::{SessionEvent, EventKind, ToolUseEvent, ContentBlock};
+pub use event::{ContentBlock, EventKind, SessionEvent, ToolUseEvent};
 pub use types::{Engine, ParsedSession, SessionMeta};
 
 /// Detects which engine produced the JSONL stream at `path`.

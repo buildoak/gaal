@@ -217,6 +217,9 @@ enum Commands {
         /// Minimum turns required for batch candidates.
         #[arg(long, default_value_t = 3)]
         min_turns: usize,
+        /// Extract the current (nearest) detected session instead of preferring a parent session.
+        #[arg(long)]
+        this: bool,
         /// Preview candidates without processing.
         #[arg(long)]
         dry_run: bool,
@@ -509,6 +512,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             since,
             parallel,
             min_turns,
+            this,
             dry_run,
         } => {
             let args = gaal::commands::handoff::HandoffArgs {
@@ -522,6 +526,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 since: Some(since),
                 parallel,
                 min_turns,
+                force_this: this,
                 dry_run,
             };
             gaal::commands::handoff::run(args)

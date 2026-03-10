@@ -100,6 +100,9 @@ pub fn probe_pid(pid: u32) -> Option<ProcessInfo> {
 
 /// Check whether a PID exists (`kill(pid, 0)`).
 pub fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
     #[cfg(unix)]
     {
         // SAFETY: kill with signal 0 performs existence/permission check only.
@@ -112,11 +115,15 @@ pub fn is_pid_alive(pid: u32) -> bool {
     }
 }
 
-/// Discover currently running Claude/Codex sessions from process state.
+/// Discover currently running Claude/Codex sessions from process state,
+/// then also check for API-spawned Codex sessions (no live process) via
+/// recent JSONL file mtime.
 pub fn find_active_sessions() -> Result<Vec<ActiveSession>> {
     #[cfg(unix)]
     {
         let mut sessions = Vec::new();
+        let mut discovered_jsonl_paths: HashSet<PathBuf> = HashSet::new();
+
         for (pid, engine) in list_agent_processes() {
             if !is_pid_alive(pid) {
                 continue;
@@ -134,6 +141,10 @@ pub fn find_active_sessions() -> Result<Vec<ActiveSession>> {
                 .and_then(|path| extract_session_id(path, &engine));
             let tmux_session = find_tmux_session(pid);
 
+            if let Some(path) = jsonl_path.as_ref() {
+                discovered_jsonl_paths.insert(path.clone());
+            }
+
             sessions.push(ActiveSession {
                 id,
                 engine,
@@ -144,11 +155,165 @@ pub fn find_active_sessions() -> Result<Vec<ActiveSession>> {
                 tmux_session,
             });
         }
+
+        // Check for API-spawned Codex sessions: JSONL files in
+        // ~/.codex/sessions/ with mtime < 5 minutes and no matching
+        // process-discovered session.
+        if let Some(api_sessions) = discover_api_active_codex_sessions(&discovered_jsonl_paths) {
+            sessions.extend(api_sessions);
+        }
+
         Ok(sessions)
     }
     #[cfg(not(unix))]
     {
         Ok(Vec::new())
+    }
+}
+
+/// Scan `~/.codex/sessions/` for JSONL files modified within the last 5
+/// minutes that were not already discovered via process inspection.
+/// These represent API-spawned Codex sessions (via agent-mux) that have
+/// no live process on this machine.
+fn discover_api_active_codex_sessions(
+    already_discovered: &HashSet<PathBuf>,
+) -> Option<Vec<ActiveSession>> {
+    let home = dirs::home_dir()?;
+    let sessions_root = home.join(".codex").join("sessions");
+    if !sessions_root.exists() {
+        return None;
+    }
+
+    let five_minutes = std::time::Duration::from_secs(5 * 60);
+    let mut results = Vec::new();
+
+    // Walk directories recursively looking for rollout-*.jsonl files.
+    let mut stack = vec![sessions_root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            let path = entry.path();
+
+            if ft.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
+
+            let is_rollout = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
+                .unwrap_or(false);
+            if !is_rollout {
+                continue;
+            }
+
+            // Skip files already matched to a live process.
+            if already_discovered.contains(&path) {
+                continue;
+            }
+
+            // Check mtime is within 5 minutes.
+            let Ok(meta) = fs::metadata(&path) else {
+                continue;
+            };
+            let Ok(modified) = meta.modified() else {
+                continue;
+            };
+            let Ok(elapsed) = modified.elapsed() else {
+                continue;
+            };
+            if elapsed > five_minutes {
+                continue;
+            }
+
+            // Parse head to get session metadata.
+            let head = super::discover::read_head_lines(&path, 30);
+            let (id, _model, cwd) = parse_codex_api_head(&head);
+
+            let session_id = id.map(|raw| truncate_codex_id(&raw));
+            let cwd_str = cwd.unwrap_or_else(|| "unknown".to_string());
+
+            results.push(ActiveSession {
+                id: session_id,
+                engine: Engine::Codex,
+                pid: 0,
+                cwd: cwd_str,
+                jsonl_path: Some(path),
+                process: ProcessInfo {
+                    pid: 0,
+                    cpu_pct: 0.0,
+                    rss_mb: 0.0,
+                },
+                tmux_session: None,
+            });
+        }
+    }
+
+    if results.is_empty() {
+        None
+    } else {
+        Some(results)
+    }
+}
+
+/// Parse head lines of a Codex JSONL to extract session ID, model, and CWD.
+fn parse_codex_api_head(lines: &[String]) -> (Option<String>, Option<String>, Option<String>) {
+    let mut id: Option<String> = None;
+    let mut model: Option<String> = None;
+    let mut cwd: Option<String> = None;
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+
+        if id.is_none() {
+            id = record
+                .pointer("/payload/id")
+                .or_else(|| record.get("session_id"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+        if cwd.is_none() {
+            cwd = record
+                .pointer("/payload/cwd")
+                .or_else(|| record.get("cwd"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+        if model.is_none() {
+            model = record
+                .pointer("/payload/model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
+
+        if id.is_some() && model.is_some() && cwd.is_some() {
+            break;
+        }
+    }
+
+    (id, model, cwd)
+}
+
+/// Truncate a Codex session ID (UUIDv7) to its last 8 hex characters.
+fn truncate_codex_id(raw: &str) -> String {
+    let hex: String = raw.chars().filter(|c| *c != '-').collect();
+    if hex.len() > 8 {
+        hex[hex.len() - 8..].to_string()
+    } else {
+        hex
     }
 }
 
@@ -210,6 +375,8 @@ fn list_agent_processes() -> Vec<(u32, Engine)> {
 
     collect_pgrep_matches("claude", &excluded, &mut seen, &mut found);
     collect_pgrep_matches("codex", &excluded, &mut seen, &mut found);
+    collect_pgrep_matches("codex-cli", &excluded, &mut seen, &mut found);
+    collect_pgrep_matches("codex-rs", &excluded, &mut seen, &mut found);
 
     let output = match Command::new("ps").args(["aux"]).output() {
         Ok(output) if output.status.success() => output,
@@ -262,6 +429,11 @@ fn collect_pgrep_matches(
 
         let engine = if process_name == "claude" {
             Engine::Claude
+        } else if process_name == "codex"
+            || process_name == "codex-cli"
+            || process_name == "codex-rs"
+        {
+            Engine::Codex
         } else {
             Engine::Codex
         };
@@ -325,7 +497,7 @@ fn engine_from_ps_command(cmd0: &str, full_cmd: &str) -> Option<Engine> {
     if basename == "claude" {
         return Some(Engine::Claude);
     }
-    if basename == "codex" {
+    if basename == "codex" || basename == "codex-cli" || basename == "codex-rs" {
         return Some(Engine::Codex);
     }
 

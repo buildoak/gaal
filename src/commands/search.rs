@@ -17,7 +17,7 @@ use tantivy::snippet::SnippetGenerator;
 use tantivy::{doc, Index, ReloadPolicy, Term};
 
 use crate::config::gaal_home;
-use crate::db::open_db;
+use crate::db::open_db_readonly;
 use crate::error::GaalError;
 use crate::output::human::{format_timestamp, print_table};
 use crate::output::json::print_json;
@@ -102,7 +102,7 @@ struct SearchIndexFields {
 
 /// Executes `gaal search`.
 pub fn run(args: SearchArgs) -> Result<(), GaalError> {
-    let conn = open_db()?;
+    let conn = open_db_readonly()?;
     let since_bound = parse_since_bound(&args.since)?;
     let fetch_limit = args.limit.max(1).saturating_mul(10);
     let mut results =
@@ -217,9 +217,12 @@ fn search_facts_with_context(
     let searcher = reader.searcher();
 
     let parser = QueryParser::for_index(&index, vec![fields.subject, fields.detail]);
-    let parsed_query = parser
-        .parse_query(query)
-        .map_err(|err| GaalError::ParseError(format!("invalid search query: {err}")))?;
+    // Use lenient parsing so that special characters like parentheses,
+    // brackets, etc. don't cause hard parse failures. Tantivy's strict
+    // parser treats () as grouping operators which breaks queries like
+    // "sqrt(36)". Lenient mode drops unparseable fragments and returns
+    // partial results.
+    let (parsed_query, _parse_errors) = parser.parse_query_lenient(query);
 
     let combined_query =
         combine_query_with_fact_filter(parsed_query, field_filter, fields.fact_type);

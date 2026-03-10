@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use clap::Args;
 use serde::Serialize;
 
-use crate::db::open_db;
+use crate::db::open_db_readonly;
 use crate::db::queries::{query_who, FactType, WhoFilter, WhoResult};
 use crate::error::GaalError;
 use crate::output::human::{format_timestamp, print_table};
@@ -97,7 +97,7 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     let since = normalize_since(&args.since)?;
     let before = args.before.as_deref().map(normalize_before).transpose()?;
 
-    let conn = open_db()?;
+    let conn = open_db_readonly()?;
     let filter = WhoFilter {
         fact_types: spec.fact_types.clone(),
         subject_pattern: target.clone(),

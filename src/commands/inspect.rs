@@ -13,13 +13,13 @@ use crate::commands::active::{
     facts_loop_detected, latest_action_from_facts, parse_ts, pct_used, probe_runtime,
     tokens_per_minute_from_samples,
 };
-use crate::db::open_db;
+use crate::config::load_config;
+use crate::db::open_db_readonly;
 use crate::db::queries::{get_facts, get_session, list_sessions, ListFilter, SessionRow};
 use crate::discovery::active::{find_active_sessions, ActiveSession};
 use crate::error::GaalError;
 use crate::model::{
-    compute_session_status, Fact, FactType, SessionStatus, StatusParams, StuckSignals,
-    STUCK_SILENCE_SECS,
+    compute_session_status, Fact, FactType, SessionStatus, StatusParams, StuckSignals, IDLE_SECS,
 };
 use crate::parser::parse_session;
 use crate::parser::types::Engine;
@@ -141,7 +141,7 @@ pub fn run(args: InspectArgs) -> Result<(), GaalError> {
 }
 
 fn collect_payload(args: &InspectArgs) -> Result<InspectPayload, GaalError> {
-    let conn = open_db().ok();
+    let conn = open_db_readonly().ok();
     let active_sessions = find_active_sessions().map_err(GaalError::from)?;
     let tagged_ids = tagged_session_ids(conn.as_ref(), args.tag.as_deref())?;
 
@@ -329,6 +329,11 @@ fn inspect_live(
     active: &ActiveSession,
     conn: Option<&Connection>,
 ) -> Result<InspectOutput, GaalError> {
+    let stuck_silence_secs = load_config()
+        .stuck
+        .silence_for_engine(Some(active.engine))
+        .max(IDLE_SECS);
+
     let parsed = active
         .jsonl_path
         .as_deref()
@@ -406,7 +411,8 @@ fn inspect_live(
         loop_detected,
         context_pct,
         permission_blocked,
-        stuck_silence_secs: STUCK_SILENCE_SECS,
+        stuck_silence_secs,
+        executing_command: runtime.executing_command,
     });
 
     let uptime_secs = row
@@ -753,6 +759,10 @@ fn archived_status(
     row: &SessionRow,
     parsed: Option<&crate::parser::types::ParsedSession>,
 ) -> SessionStatus {
+    let stuck_silence_secs = load_config()
+        .stuck
+        .silence_for_engine(Some(parse_engine(&row.engine)))
+        .max(IDLE_SECS);
     let signal = row
         .exit_signal
         .as_deref()
@@ -767,7 +777,8 @@ fn archived_status(
         loop_detected: false,
         context_pct: 0.0,
         permission_blocked: false,
-        stuck_silence_secs: STUCK_SILENCE_SECS,
+        stuck_silence_secs,
+        executing_command: false,
     })
 }
 

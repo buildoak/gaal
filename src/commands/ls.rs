@@ -11,7 +11,7 @@ use crate::commands::active::{
     action_loop_detected, context_limit_tokens, pct_used, probe_runtime,
 };
 use crate::config::load_config;
-use crate::db::open_db;
+use crate::db::open_db_readonly;
 use crate::db::queries::{self, ListFilter, SessionRow};
 use crate::discovery::active::{find_active_sessions, is_pid_alive};
 use crate::error::GaalError;
@@ -125,7 +125,7 @@ struct AggregateJson {
 
 /// Run `gaal ls`.
 pub fn run(args: LsArgs) -> Result<(), GaalError> {
-    let conn = open_db()?;
+    let conn = open_db_readonly()?;
     let requested_statuses = resolve_requested_statuses(&args);
     let filter = build_filter(&args, &requested_statuses)?;
 
@@ -152,13 +152,12 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
 
     let live_pids = load_live_pid_index();
     let now = Utc::now();
-    let stuck_silence_secs = load_config().stuck.silence_secs.max(IDLE_SECS);
+    let stuck_config = load_config().stuck;
 
     let mut summaries = Vec::with_capacity(rows.len());
     for row in rows {
         let pid = resolve_pid(&live_pids, &row);
-        let status =
-            compute_session_status(&status_params_for_row(&row, pid, now, stuck_silence_secs));
+        let status = compute_session_status(&status_params_for_row(&row, pid, now, &stuck_config));
         if !matches_status_filter(&status, &requested_statuses) {
             continue;
         }
@@ -173,7 +172,9 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
     } else {
         OutputFormat::Json
     };
-    output::print_output(&summaries, format).map_err(GaalError::from)
+    output::print_output(&summaries, format).map_err(GaalError::from)?;
+
+    Ok(())
 }
 
 fn requires_precise_aggregate(args: &LsArgs, statuses: &HashSet<LsStatus>) -> bool {
@@ -197,7 +198,7 @@ fn build_precise_aggregate(
 
     let live_pids = load_live_pid_index();
     let now = Utc::now();
-    let stuck_silence_secs = load_config().stuck.silence_secs.max(IDLE_SECS);
+    let stuck_config = load_config().stuck;
 
     let mut by_engine: HashMap<String, i64> = HashMap::new();
     let mut by_status: HashMap<String, i64> = HashMap::new();
@@ -207,8 +208,7 @@ fn build_precise_aggregate(
 
     for row in rows {
         let pid = resolve_pid(&live_pids, &row);
-        let status =
-            compute_session_status(&status_params_for_row(&row, pid, now, stuck_silence_secs));
+        let status = compute_session_status(&status_params_for_row(&row, pid, now, &stuck_config));
         if !matches_status_filter(&status, requested_statuses) {
             continue;
         }
@@ -465,8 +465,11 @@ fn status_params_for_row<'a>(
     row: &'a SessionRow,
     pid: Option<u32>,
     now: DateTime<Utc>,
-    stuck_silence_secs: u64,
+    stuck_config: &crate::config::StuckConfig,
 ) -> StatusParams<'a> {
+    let stuck_silence_secs = stuck_config
+        .silence_for_engine(parse_engine(&row.engine))
+        .max(IDLE_SECS);
     let pid_alive = pid.map(is_pid_alive).unwrap_or(false);
     if row.ended_at.is_some() || !pid_alive {
         return StatusParams {
@@ -478,10 +481,11 @@ fn status_params_for_row<'a>(
             context_pct: 0.0,
             permission_blocked: false,
             stuck_silence_secs,
+            executing_command: false,
         };
     }
 
-    let (silence_secs, loop_detected, context_pct, permission_blocked) =
+    let (silence_secs, loop_detected, context_pct, permission_blocked, executing_command) =
         if let Some(engine) = parse_engine(&row.engine) {
             let runtime = probe_runtime(Path::new(&row.jsonl_path), engine, STATUS_TAIL_LINES);
             let silence_secs = runtime
@@ -493,11 +497,18 @@ fn status_params_for_row<'a>(
                 .unwrap_or(0);
             let loop_detected = action_loop_detected(&runtime.recent_actions);
             let permission_blocked = runtime.permission_blocked;
+            let executing_command = runtime.executing_command;
 
             let tokens_used = (row.total_input_tokens + row.total_output_tokens).max(0);
             let tokens_limit = context_limit_tokens(engine, row.model.as_deref());
             let context_pct = pct_used(tokens_used, tokens_limit);
-            (silence_secs, loop_detected, context_pct, permission_blocked)
+            (
+                silence_secs,
+                loop_detected,
+                context_pct,
+                permission_blocked,
+                executing_command,
+            )
         } else {
             let silence_secs = row
                 .last_event_at
@@ -505,7 +516,7 @@ fn status_params_for_row<'a>(
                 .and_then(parse_timestamp)
                 .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
                 .unwrap_or(0);
-            (silence_secs, false, 0.0, false)
+            (silence_secs, false, 0.0, false, false)
         };
 
     StatusParams {
@@ -517,6 +528,7 @@ fn status_params_for_row<'a>(
         context_pct,
         permission_blocked,
         stuck_silence_secs,
+        executing_command,
     }
 }
 

@@ -11,7 +11,8 @@ use serde_json::Value;
 use crate::commands::active::{
     action_loop_detected, context_limit_tokens, pct_used, probe_runtime,
 };
-use crate::db::open_db;
+use crate::config::{load_config, StuckConfig};
+use crate::db::open_db_readonly;
 use crate::db::queries::{
     count_children, get_children, get_facts, get_handoff, get_session, get_tags, SessionRow,
 };
@@ -19,7 +20,7 @@ use crate::discovery::active::{find_active_sessions, is_pid_alive};
 use crate::error::GaalError;
 use crate::model::{
     compute_session_status, CommandEntry, ErrorEntry, Fact, FactType, FileOps, GitOp,
-    SessionRecord, SessionStatus, StatusParams, TokenUsage, STUCK_SILENCE_SECS,
+    SessionRecord, SessionStatus, StatusParams, TokenUsage, IDLE_SECS,
 };
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
@@ -140,7 +141,7 @@ struct LivePidIndex {
 
 /// Execute the `gaal show` command.
 pub fn run(args: ShowArgs) -> Result<(), GaalError> {
-    let conn = open_db()?;
+    let conn = open_db_readonly()?;
     let session_rows = resolve_sessions(&conn, &args)?;
 
     // Handle --markdown: render JSONL to markdown directly.
@@ -164,10 +165,18 @@ pub fn run(args: ShowArgs) -> Result<(), GaalError> {
 
     let live_pids = load_live_pid_index();
     let now = Utc::now();
+    let stuck_config = load_config().stuck;
 
     let mut out = Vec::with_capacity(session_rows.len());
     for row in session_rows {
-        out.push(build_show_data(&conn, &row, &args, &live_pids, now)?);
+        out.push(build_show_data(
+            &conn,
+            &row,
+            &args,
+            &live_pids,
+            &stuck_config,
+            now,
+        )?);
     }
 
     if args.human {
@@ -304,6 +313,7 @@ fn build_show_data(
     row: &SessionRow,
     args: &ShowArgs,
     live_pids: &LivePidIndex,
+    stuck_config: &StuckConfig,
     now: DateTime<Utc>,
 ) -> Result<ShowData, GaalError> {
     let any_fact_filter = args.files.is_some() || args.commands || args.errors || args.git;
@@ -357,7 +367,7 @@ fn build_show_data(
         id: row.id.clone(),
         engine: row.engine.clone(),
         model: row.model.clone().unwrap_or_else(|| "unknown".to_string()),
-        status: status_from_row(row, live_pids, now).to_string(),
+        status: status_from_row(row, live_pids, stuck_config, now).to_string(),
         cwd: row.cwd.clone().unwrap_or_default(),
         started_at: row.started_at.clone(),
         ended_at: row.ended_at.clone(),
@@ -391,12 +401,18 @@ fn build_show_data(
         None
     };
     let tree = if args.tree {
-        Some(build_tree(conn, row, live_pids, now)?)
+        Some(build_tree(conn, row, live_pids, stuck_config, now)?)
     } else {
         None
     };
     let child_sessions = if args.children {
-        Some(build_child_summaries(conn, &child_rows, live_pids, now)?)
+        Some(build_child_summaries(
+            conn,
+            &child_rows,
+            live_pids,
+            stuck_config,
+            now,
+        )?)
     } else {
         None
     };
@@ -494,6 +510,7 @@ fn build_tree(
     conn: &Connection,
     row: &SessionRow,
     live_pids: &LivePidIndex,
+    stuck_config: &StuckConfig,
     now: DateTime<Utc>,
 ) -> Result<TreeNode, GaalError> {
     let handoff = get_handoff(conn, &row.id)?;
@@ -501,7 +518,7 @@ fn build_tree(
     let mut tree_children = Vec::with_capacity(children.len());
 
     for child in &children {
-        tree_children.push(build_tree(conn, child, live_pids, now)?);
+        tree_children.push(build_tree(conn, child, live_pids, stuck_config, now)?);
     }
 
     Ok(TreeNode {
@@ -509,7 +526,7 @@ fn build_tree(
         intent: handoff
             .and_then(|h| h.headline)
             .unwrap_or_else(|| "".to_string()),
-        status: status_from_row(row, live_pids, now).to_string(),
+        status: status_from_row(row, live_pids, stuck_config, now).to_string(),
         duration_secs: duration_secs(row),
         children: tree_children,
     })
@@ -519,6 +536,7 @@ fn build_child_summaries(
     conn: &Connection,
     child_rows: &[SessionRow],
     live_pids: &LivePidIndex,
+    stuck_config: &StuckConfig,
     now: DateTime<Utc>,
 ) -> Result<Vec<ChildSummary>, GaalError> {
     let mut out = Vec::with_capacity(child_rows.len());
@@ -526,7 +544,7 @@ fn build_child_summaries(
         let handoff = get_handoff(conn, &child.id)?;
         out.push(ChildSummary {
             id: child.id.clone(),
-            status: status_from_row(child, live_pids, now).to_string(),
+            status: status_from_row(child, live_pids, stuck_config, now).to_string(),
             started_at: child.started_at.clone(),
             duration_secs: duration_secs(child),
             headline: handoff.and_then(|h| h.headline),
@@ -748,11 +766,20 @@ fn resolve_pid(index: &LivePidIndex, row: &SessionRow) -> Option<u32> {
         .or_else(|| index.by_path.get(&row.jsonl_path).copied())
 }
 
-fn status_from_row(row: &SessionRow, live_pids: &LivePidIndex, now: DateTime<Utc>) -> &'static str {
+fn status_from_row(
+    row: &SessionRow,
+    live_pids: &LivePidIndex,
+    stuck_config: &StuckConfig,
+    now: DateTime<Utc>,
+) -> &'static str {
+    let stuck_silence_secs = stuck_config
+        .silence_for_engine(parse_engine(&row.engine))
+        .max(IDLE_SECS);
     match compute_session_status(&status_params_for_row(
         row,
         resolve_pid(live_pids, row),
         now,
+        stuck_silence_secs,
     )) {
         SessionStatus::Active => "active",
         SessionStatus::Idle => "idle",
@@ -767,6 +794,7 @@ fn status_params_for_row<'a>(
     row: &'a SessionRow,
     pid: Option<u32>,
     now: DateTime<Utc>,
+    stuck_silence_secs: u64,
 ) -> StatusParams<'a> {
     let pid_alive = pid.map(is_pid_alive).unwrap_or(false);
     if row.ended_at.is_some() || !pid_alive {
@@ -778,11 +806,12 @@ fn status_params_for_row<'a>(
             loop_detected: false,
             context_pct: 0.0,
             permission_blocked: false,
-            stuck_silence_secs: STUCK_SILENCE_SECS,
+            stuck_silence_secs,
+            executing_command: false,
         };
     }
 
-    let (silence_secs, loop_detected, context_pct, permission_blocked) =
+    let (silence_secs, loop_detected, context_pct, permission_blocked, executing_command) =
         if let Some(engine) = parse_engine(&row.engine) {
             let runtime = probe_runtime(Path::new(&row.jsonl_path), engine, STATUS_TAIL_LINES);
             let silence_secs = runtime
@@ -794,11 +823,18 @@ fn status_params_for_row<'a>(
                 .unwrap_or(0);
             let loop_detected = action_loop_detected(&runtime.recent_actions);
             let permission_blocked = runtime.permission_blocked;
+            let executing_command = runtime.executing_command;
 
             let tokens_used = (row.total_input_tokens + row.total_output_tokens).max(0);
             let tokens_limit = context_limit_tokens(engine, row.model.as_deref());
             let context_pct = pct_used(tokens_used, tokens_limit);
-            (silence_secs, loop_detected, context_pct, permission_blocked)
+            (
+                silence_secs,
+                loop_detected,
+                context_pct,
+                permission_blocked,
+                executing_command,
+            )
         } else {
             let silence_secs = row
                 .last_event_at
@@ -806,7 +842,7 @@ fn status_params_for_row<'a>(
                 .and_then(parse_ts)
                 .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
                 .unwrap_or(0);
-            (silence_secs, false, 0.0, false)
+            (silence_secs, false, 0.0, false, false)
         };
 
     StatusParams {
@@ -817,7 +853,8 @@ fn status_params_for_row<'a>(
         loop_detected,
         context_pct,
         permission_blocked,
-        stuck_silence_secs: STUCK_SILENCE_SECS,
+        stuck_silence_secs,
+        executing_command,
     }
 }
 
@@ -852,6 +889,8 @@ fn avg_tokens(total: u64, turns: u32) -> u64 {
 }
 
 fn print_human(records: &[ShowData], args: &ShowArgs) {
+    let any_fact_filter = args.files.is_some() || args.commands || args.errors || args.git;
+
     for (idx, data) in records.iter().enumerate() {
         if idx > 0 {
             println!();
@@ -886,24 +925,40 @@ fn print_human(records: &[ShowData], args: &ShowArgs) {
             println!("Tags: {}", record.tags.join(", "));
         }
 
+        if let Some(exit_signal) = &record.exit_signal {
+            println!("Exit: {}", exit_signal);
+        }
+
+        println!("Last Event: {}", record.last_event_at);
+
+        if !record.children.is_empty() {
+            println!("Child IDs: {}", record.children.join(", "));
+        }
+
         if args.source {
             println!("Source: {}", record.jsonl_path);
         }
 
-        if args.files.is_some() {
+        // Show files: when explicitly requested OR when no fact filter is set (show all)
+        let show_files = args.files.is_some() || !any_fact_filter;
+        if show_files {
             print_path_group("Files read", &record.files.read);
             print_path_group("Files written", &record.files.written);
             print_path_group("Files edited", &record.files.edited);
         }
 
-        if args.commands && !record.commands.is_empty() {
+        // Show commands: when explicitly requested OR when no fact filter is set
+        let show_commands = args.commands || !any_fact_filter;
+        if show_commands && !record.commands.is_empty() {
             println!("Commands:");
             for cmd in &record.commands {
-                println!("  - [{}] exit={} {}", cmd.ts, cmd.exit_code, cmd.cmd);
+                println!("  $ {} (exit {})", cmd.cmd, cmd.exit_code);
             }
         }
 
-        if args.errors && !record.errors.is_empty() {
+        // Show errors: when explicitly requested OR when no fact filter is set
+        let show_errors = args.errors || !any_fact_filter;
+        if show_errors && !record.errors.is_empty() {
             println!("Errors:");
             for err in &record.errors {
                 println!(
@@ -913,10 +968,12 @@ fn print_human(records: &[ShowData], args: &ShowArgs) {
             }
         }
 
-        if args.git && !record.git_ops.is_empty() {
+        // Show git ops: when explicitly requested OR when no fact filter is set
+        let show_git = args.git || !any_fact_filter;
+        if show_git && !record.git_ops.is_empty() {
             println!("Git ops:");
             for op in &record.git_ops {
-                println!("  - [{}] {} {}", op.ts, op.op, op.message);
+                println!("  - {} {}", op.op, op.message);
             }
         }
 

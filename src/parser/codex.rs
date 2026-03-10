@@ -167,8 +167,7 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                         events.push(SessionEvent {
                             timestamp: ts.clone(),
                             kind: EventKind::StopSignal {
-                                reason: stop_reason
-                                    .unwrap_or_else(|| "task_complete".to_string()),
+                                reason: stop_reason.unwrap_or_else(|| "task_complete".to_string()),
                             },
                         });
                     }
@@ -249,7 +248,6 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
 
     Ok(events)
 }
-
 
 fn event_msg_text_block(value: Option<&Value>) -> Vec<ContentBlock> {
     match value {
@@ -350,4 +348,3 @@ fn extract_assistant_text(record: &Value, event_type: &str) -> Option<String> {
         .unwrap_or_default();
     (!text.is_empty()).then(|| text.to_string())
 }
-

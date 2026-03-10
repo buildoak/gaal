@@ -189,12 +189,8 @@ pub fn extract_parsed_session(
                     None
                 };
 
-                let fact = tool_call_fact(
-                    &tool_use.name,
-                    &tool_use.input,
-                    ts_str.clone(),
-                    turn_number,
-                );
+                let fact =
+                    tool_call_fact(&tool_use.name, &tool_use.input, ts_str.clone(), turn_number);
 
                 let mut state = ToolCallState {
                     tool_name: tool_use.name.clone(),
@@ -246,8 +242,7 @@ pub fn extract_parsed_session(
                 } else {
                     None
                 };
-                let exit_code =
-                    parse_exit_code(output_text.as_deref().unwrap_or_default());
+                let exit_code = parse_exit_code(output_text.as_deref().unwrap_or_default());
 
                 // Backfill exit_code on the matching tool-call fact.
                 if let Some(state) = tool_state_by_id.get(tool_use_id) {
@@ -386,7 +381,12 @@ mod tests {
         }
     }
 
-    fn tool_result_event(ts: &str, tool_use_id: &str, content: &str, is_error: bool) -> SessionEvent {
+    fn tool_result_event(
+        ts: &str,
+        tool_use_id: &str,
+        content: &str,
+        is_error: bool,
+    ) -> SessionEvent {
         SessionEvent {
             timestamp: Some(ts.to_string()),
             kind: EventKind::ToolResult {
@@ -458,7 +458,8 @@ mod tests {
                 version: None,
             },
         }];
-        let result = extract_parsed_session(&events, Engine::Claude, Path::new("/path/to/abc123.jsonl"));
+        let result =
+            extract_parsed_session(&events, Engine::Claude, Path::new("/path/to/abc123.jsonl"));
         assert_eq!(result.meta.id, "abc123");
     }
 
@@ -585,8 +586,18 @@ mod tests {
     #[test]
     fn tool_result_backfills_exit_code_on_bash() {
         let events = vec![
-            tool_use_event("2026-03-07T10:00:00Z", "call_1", "Bash", json!({"command": "echo hi"})),
-            tool_result_event("2026-03-07T10:01:00Z", "call_1", "hi\nProcess exited with code 0", false),
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "Bash",
+                json!({"command": "echo hi"}),
+            ),
+            tool_result_event(
+                "2026-03-07T10:01:00Z",
+                "call_1",
+                "hi\nProcess exited with code 0",
+                false,
+            ),
         ];
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
         let cmd_fact = result
@@ -601,7 +612,12 @@ mod tests {
     #[test]
     fn tool_result_backfills_exit_code_on_exec_command() {
         let events = vec![
-            tool_use_event("2026-03-07T10:00:00Z", "call_1", "exec_command", json!({"command": "ls"})),
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "exec_command",
+                json!({"command": "ls"}),
+            ),
             tool_result_event("2026-03-07T10:01:00Z", "call_1", "Exit code 1", false),
         ];
         let result = extract_parsed_session(&events, Engine::Codex, Path::new("test.jsonl"));
@@ -617,7 +633,12 @@ mod tests {
     #[test]
     fn error_tool_result_creates_error_fact() {
         let events = vec![
-            tool_use_event("2026-03-07T10:00:00Z", "call_1", "Bash", json!({"command": "bad"})),
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "Bash",
+                json!({"command": "bad"}),
+            ),
             tool_result_event("2026-03-07T10:01:00Z", "call_1", "error: not found", true),
         ];
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
@@ -633,8 +654,18 @@ mod tests {
     #[test]
     fn output_containing_error_creates_error_fact() {
         let events = vec![
-            tool_use_event("2026-03-07T10:00:00Z", "call_1", "Bash", json!({"command": "compile"})),
-            tool_result_event("2026-03-07T10:01:00Z", "call_1", "compilation failed with error", false),
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "Bash",
+                json!({"command": "compile"}),
+            ),
+            tool_result_event(
+                "2026-03-07T10:01:00Z",
+                "call_1",
+                "compilation failed with error",
+                false,
+            ),
         ];
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
         let error_facts: Vec<_> = result
@@ -708,7 +739,10 @@ mod tests {
         ];
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
         assert_eq!(result.meta.started_at, "2026-03-07T10:00:00Z");
-        assert_eq!(result.last_event_at, Some("2026-03-07T11:00:00Z".to_string()));
+        assert_eq!(
+            result.last_event_at,
+            Some("2026-03-07T11:00:00Z".to_string())
+        );
         assert_eq!(result.ended_at, Some("2026-03-07T11:00:00Z".to_string()));
     }
 
@@ -736,7 +770,11 @@ mod tests {
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
         assert_eq!(result.total_turns, 2);
 
-        let prompts: Vec<_> = result.facts.iter().filter(|f| f.fact_type.as_str() == "user_prompt").collect();
+        let prompts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "user_prompt")
+            .collect();
         assert_eq!(prompts[0].turn_number, Some(1));
         assert_eq!(prompts[1].turn_number, Some(2));
     }
@@ -774,12 +812,37 @@ mod tests {
             usage_event("2026-03-07T10:00:00Z", 500, 1000, "msg_1"),
             user_msg("2026-03-07T10:00:00Z", "Build a web server"),
             assistant_msg("2026-03-07T10:01:00Z", "I'll create a web server for you."),
-            tool_use_event("2026-03-07T10:02:00Z", "call_1", "Write", json!({"file_path": "/src/main.rs", "content": "fn main() {}"})),
+            tool_use_event(
+                "2026-03-07T10:02:00Z",
+                "call_1",
+                "Write",
+                json!({"file_path": "/src/main.rs", "content": "fn main() {}"}),
+            ),
             tool_result_event("2026-03-07T10:02:00Z", "call_1", "File written", false),
-            tool_use_event("2026-03-07T10:03:00Z", "call_2", "Bash", json!({"command": "cargo build"})),
-            tool_result_event("2026-03-07T10:03:00Z", "call_2", "Compiling...\nProcess exited with code 0", false),
-            tool_use_event("2026-03-07T10:04:00Z", "call_3", "Bash", json!({"command": "git commit -m 'init'"})),
-            tool_result_event("2026-03-07T10:04:00Z", "call_3", "Process exited with code 0", false),
+            tool_use_event(
+                "2026-03-07T10:03:00Z",
+                "call_2",
+                "Bash",
+                json!({"command": "cargo build"}),
+            ),
+            tool_result_event(
+                "2026-03-07T10:03:00Z",
+                "call_2",
+                "Compiling...\nProcess exited with code 0",
+                false,
+            ),
+            tool_use_event(
+                "2026-03-07T10:04:00Z",
+                "call_3",
+                "Bash",
+                json!({"command": "git commit -m 'init'"}),
+            ),
+            tool_result_event(
+                "2026-03-07T10:04:00Z",
+                "call_3",
+                "Process exited with code 0",
+                false,
+            ),
             stop_event("2026-03-07T10:05:00Z", "end_turn"),
         ];
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
@@ -792,11 +855,26 @@ mod tests {
         assert_eq!(result.exit_signal, Some("end_turn".to_string()));
 
         // Should have: user_prompt, assistant_reply, file_write, command, git_op, command
-        assert!(result.facts.iter().any(|f| f.fact_type.as_str() == "user_prompt"));
-        assert!(result.facts.iter().any(|f| f.fact_type.as_str() == "assistant_reply"));
-        assert!(result.facts.iter().any(|f| f.fact_type.as_str() == "file_write"));
-        assert!(result.facts.iter().any(|f| f.fact_type.as_str() == "git_op"));
-        assert!(result.facts.iter().any(|f| f.fact_type.as_str() == "command"));
+        assert!(result
+            .facts
+            .iter()
+            .any(|f| f.fact_type.as_str() == "user_prompt"));
+        assert!(result
+            .facts
+            .iter()
+            .any(|f| f.fact_type.as_str() == "assistant_reply"));
+        assert!(result
+            .facts
+            .iter()
+            .any(|f| f.fact_type.as_str() == "file_write"));
+        assert!(result
+            .facts
+            .iter()
+            .any(|f| f.fact_type.as_str() == "git_op"));
+        assert!(result
+            .facts
+            .iter()
+            .any(|f| f.fact_type.as_str() == "command"));
     }
 
     #[test]

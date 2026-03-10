@@ -81,6 +81,7 @@ pub struct StatusParams<'a> {
     pub context_pct: f64,
     pub permission_blocked: bool,
     pub stuck_silence_secs: u64,
+    pub executing_command: bool,
 }
 
 pub fn compute_session_status(params: &StatusParams<'_>) -> SessionStatus {
@@ -95,8 +96,12 @@ pub fn compute_session_status(params: &StatusParams<'_>) -> SessionStatus {
         return SessionStatus::Unknown;
     }
 
-    let silence_stuck =
-        params.silence_secs >= params.stuck_silence_secs && !params.permission_blocked;
+    let effective_silence = if params.executing_command {
+        params.stuck_silence_secs.saturating_mul(3)
+    } else {
+        params.stuck_silence_secs
+    };
+    let silence_stuck = params.silence_secs >= effective_silence && !params.permission_blocked;
     if silence_stuck
         || params.loop_detected
         || params.context_pct >= 95.0
