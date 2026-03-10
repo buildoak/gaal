@@ -4,7 +4,6 @@ pub mod db;
 pub mod detection;
 pub mod discovery;
 pub mod error;
-pub mod linker;
 pub mod model;
 pub mod output;
 pub mod parser;

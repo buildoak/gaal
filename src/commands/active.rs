@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -53,10 +53,6 @@ struct ActiveOutput {
     all_pids: Vec<u32>,
     /// Number of OS processes for this session.
     process_count: usize,
-    /// PID of the parent session's process, if this is a child worker.
-    parent_pid: Option<u32>,
-    /// Session IDs of children (populated during tree assembly).
-    children: Vec<String>,
     cwd: String,
     uptime_secs: u64,
     cpu_pct: f64,
@@ -170,29 +166,6 @@ fn collect_active(args: &ActiveArgs) -> Result<Vec<ActiveOutput>, GaalError> {
 
     // I28: Final dedup by session ID - simple approach
     out = dedup_active_output_simple(out);
-
-    // Populate children lists for tree view.
-    // Build a map from PID → session ID for parent resolution.
-    let pid_to_id: HashMap<u32, String> = out
-        .iter()
-        .flat_map(|o| o.all_pids.iter().map(move |&pid| (pid, o.id.clone())))
-        .collect();
-    // For each session with a parent_pid, find the parent's ID and add self to its children.
-    let child_parents: Vec<(usize, String)> = out
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, o)| {
-            o.parent_pid
-                .and_then(|ppid| pid_to_id.get(&ppid))
-                .map(|parent_id| (idx, parent_id.clone()))
-        })
-        .collect();
-    for (child_idx, parent_id) in &child_parents {
-        let child_id = out[*child_idx].id.clone();
-        if let Some(parent) = out.iter_mut().find(|o| o.id == *parent_id) {
-            parent.children.push(child_id);
-        }
-    }
 
     Ok(out)
 }
@@ -315,8 +288,6 @@ fn build_active_row(
         pid: session.pid,
         all_pids: session.all_pids.clone(),
         process_count,
-        parent_pid: session.parent_pid,
-        children: Vec::new(), // populated later during tree assembly
         cwd: session.cwd.clone(),
         uptime_secs,
         cpu_pct: round1(session.process.cpu_pct),
@@ -965,9 +936,8 @@ fn print_json<T: Serialize>(value: &T) -> Result<(), GaalError> {
     Ok(())
 }
 
-/// I21: Tree view for active sessions with fleet summary.
-/// Default: tree with children indented under parents.
-/// --flat: original flat list.
+/// Active sessions view with fleet summary.
+/// `--flat` uses a table format; default uses a compact per-session line format.
 fn print_active_tree(sessions: &[ActiveOutput], flat: bool) {
     if sessions.is_empty() {
         println!("No active sessions.");
@@ -1010,26 +980,8 @@ fn print_active_tree(sessions: &[ActiveOutput], flat: bool) {
         return;
     }
 
-    // Tree mode: top-level first, children indented.
-    let child_ids: HashSet<&str> = sessions
-        .iter()
-        .filter(|s| s.parent_pid.is_some())
-        .map(|s| s.id.as_str())
-        .collect();
-
-    let top_level: Vec<&ActiveOutput> = sessions
-        .iter()
-        .filter(|s| !child_ids.contains(s.id.as_str()))
-        .collect();
-
-    for parent in &top_level {
-        println!("{}", format_session_line(parent, ""));
-        // Find children of this parent.
-        for child_id in &parent.children {
-            if let Some(child) = sessions.iter().find(|s| &s.id == child_id) {
-                println!("{}", format_session_line(child, "  "));
-            }
-        }
+    for session in sessions {
+        println!("{}", format_session_line(session, ""));
     }
 }
 

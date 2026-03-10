@@ -1,11 +1,10 @@
 //! `gaal index` — build, manage, and inspect the session index.
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use rusqlite::{named_params, OptionalExtension};
+use rusqlite::named_params;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -13,12 +12,11 @@ use crate::commands::search;
 use crate::config::{gaal_home, load_config};
 use crate::db::open_db;
 use crate::db::queries::{
-    delete_session, get_handoff, get_index_status, get_session, insert_facts_batch, list_sessions,
-    upsert_handoff, upsert_session, ListFilter, SessionRow,
+    delete_session, get_handoff, get_index_status, get_session, insert_facts_batch, upsert_handoff,
+    upsert_session, SessionRow,
 };
 use crate::discovery::{discover_sessions, DiscoveredSession};
 use crate::error::GaalError;
-use crate::linker::ChildLink;
 use crate::model::{Fact, HandoffRecord};
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
@@ -85,12 +83,6 @@ struct ImportEywaSummary {
     imported: usize,
     skipped: usize,
     errors: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct LinkParentsSummary {
-    linked_children: usize,
-    coordinators: usize,
 }
 
 #[derive(Debug)]
@@ -241,15 +233,6 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
 
     search::build_search_index(&conn)?;
 
-    // Auto-run link-parents when any sessions were indexed.
-    if summary.indexed > 0 {
-        eprintln!("Linking parent-child sessions...");
-        match run_link_parents() {
-            Ok(()) => {}
-            Err(err) => eprintln!("link-parents warning: {err}"),
-        }
-    }
-
     if let Some(output_dir) = &output_dir {
         let written = summary.markdown_written.unwrap_or(0);
         if written > 0 {
@@ -299,10 +282,6 @@ pub fn run_reindex(args: ReindexArgs) -> Result<(), GaalError> {
     let mut row = build_full_session_row(&parsed, &path, offset, existing.parent_id);
     row.id = existing.id.clone();
     row.session_type = existing.session_type.clone();
-    let child_links = parsed.child_links.clone();
-    if !child_links.is_empty() {
-        row.session_type = "coordinator".to_string();
-    }
     let facts = normalize_facts(parsed.facts, &existing.id);
 
     conn.execute(
@@ -314,13 +293,6 @@ pub fn run_reindex(args: ReindexArgs) -> Result<(), GaalError> {
     upsert_session(&conn, &row)?;
     if !facts.is_empty() {
         insert_facts_batch(&conn, &facts)?;
-    }
-    if !link_children_for_parent(&conn, &existing.id, &child_links)?.is_empty() {
-        conn.execute(
-            "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
-            named_params! { ":id": &existing.id },
-        )
-        .map_err(GaalError::from)?;
     }
     search::build_search_index(&conn)?;
 
@@ -381,51 +353,6 @@ pub fn run_prune(args: PruneArgs) -> Result<(), GaalError> {
     print_json(&payload).map_err(GaalError::from)
 }
 
-/// Run `gaal index link-parents`.
-pub fn run_link_parents() -> Result<(), GaalError> {
-    let conn = open_db()?;
-    let sessions = list_sessions(
-        &conn,
-        &ListFilter {
-            limit: Some(1_000_000),
-            include_children: true,
-            ..ListFilter::default()
-        },
-    )?;
-    let mut linked_children: HashSet<String> = HashSet::new();
-    let mut coordinators: HashSet<String> = HashSet::new();
-
-    for session in sessions {
-        let path = PathBuf::from(&session.jsonl_path);
-        if !path.exists() {
-            continue;
-        }
-        let parsed = match parse_session(&path) {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                eprintln!("failed parsing {}: {}", path.display(), err);
-                continue;
-            }
-        };
-        if !parsed.child_links.is_empty() {
-            conn.execute(
-                "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
-                named_params! { ":id": &session.id },
-            )
-            .map_err(GaalError::from)?;
-            coordinators.insert(session.id.clone());
-        }
-        let linked = link_children_for_parent(&conn, &session.id, &parsed.child_links)?;
-        linked_children.extend(linked);
-    }
-
-    let summary = LinkParentsSummary {
-        linked_children: linked_children.len(),
-        coordinators: coordinators.len(),
-    };
-    print_json(&summary).map_err(GaalError::from)
-}
-
 pub(crate) fn index_discovered_session(
     conn: &mut rusqlite::Connection,
     discovered: &DiscoveredSession,
@@ -458,16 +385,12 @@ pub(crate) fn index_discovered_session(
         })?;
         let (parsed_delta, new_offset) =
             parse_session_incremental(&discovered.path, offset).map_err(GaalError::from)?;
-        let mut merged_row = build_incremental_session_row(
+        let merged_row = build_incremental_session_row(
             &existing_row,
             &parsed_delta,
             &discovered.path,
             new_offset,
         )?;
-        let child_links = parsed_delta.child_links.clone();
-        if !child_links.is_empty() {
-            merged_row.session_type = "coordinator".to_string();
-        }
         let normalized_facts = normalize_facts(parsed_delta.facts, &existing_row.id);
 
         // Wrap upsert + facts + links in a single savepoint to reduce lock
@@ -478,13 +401,6 @@ pub(crate) fn index_discovered_session(
         upsert_session(&tx, &merged_row)?;
         if !normalized_facts.is_empty() {
             insert_facts_batch(&tx, &normalized_facts)?;
-        }
-        if !link_children_for_parent(&tx, &existing_row.id, &child_links)?.is_empty() {
-            tx.execute(
-                "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
-                named_params! { ":id": &existing_row.id },
-            )
-            .map_err(GaalError::from)?;
         }
         tx.commit().map_err(GaalError::from)?;
         return Ok(IndexOutcome::Indexed);
@@ -514,10 +430,6 @@ pub(crate) fn index_discovered_session(
     if let Some(row) = existing.as_ref() {
         session_row.session_type = row.session_type.clone();
     }
-    let child_links = parsed.child_links.clone();
-    if !child_links.is_empty() {
-        session_row.session_type = "coordinator".to_string();
-    }
     let facts = normalize_facts(parsed.facts, target_id);
 
     // Wrap delete-old-facts + upsert + insert-facts + links in a single
@@ -537,13 +449,6 @@ pub(crate) fn index_discovered_session(
     upsert_session(&tx, &session_row)?;
     if !facts.is_empty() {
         insert_facts_batch(&tx, &facts)?;
-    }
-    if !link_children_for_parent(&tx, target_id, &child_links)?.is_empty() {
-        tx.execute(
-            "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
-            named_params! { ":id": target_id },
-        )
-        .map_err(GaalError::from)?;
     }
     tx.commit().map_err(GaalError::from)?;
     Ok(IndexOutcome::Indexed)
@@ -762,97 +667,6 @@ fn normalize_facts(mut facts: Vec<Fact>, session_id: &str) -> Vec<Fact> {
         fact.session_id = session_id.to_string();
     }
     facts
-}
-
-fn link_children_for_parent(
-    conn: &rusqlite::Connection,
-    parent_id: &str,
-    links: &[ChildLink],
-) -> Result<Vec<String>, GaalError> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    for link in links {
-        let Some(child_id) = resolve_child_session_id(conn, &link.child_session_id)? else {
-            continue;
-        };
-        if child_id == parent_id || !seen.insert(child_id.clone()) {
-            continue;
-        }
-        conn.execute(
-            "UPDATE sessions SET parent_id = :parent_id, session_type = 'subagent' WHERE id = :id",
-            named_params! { ":parent_id": parent_id, ":id": &child_id },
-        )
-        .map_err(GaalError::from)?;
-        out.push(child_id);
-    }
-    Ok(out)
-}
-
-fn resolve_child_session_id(
-    conn: &rusqlite::Connection,
-    child_session_id: &str,
-) -> Result<Option<String>, GaalError> {
-    let raw = child_session_id.trim();
-    if raw.is_empty() {
-        return Ok(None);
-    }
-    if let Some(row) = get_session(conn, raw)? {
-        return Ok(Some(row.id));
-    }
-    let short = raw.chars().take(8).collect::<String>();
-    if short.is_empty() {
-        return Ok(None);
-    }
-    if let Some(row) = get_session(conn, &short)? {
-        return Ok(Some(row.id));
-    }
-    let like = format!("{short}%");
-    let result: Option<String> = conn
-        .query_row(
-            r#"
-        SELECT id
-        FROM sessions
-        WHERE id LIKE :like
-        ORDER BY CASE WHEN id = :short THEN 0 ELSE 1 END, LENGTH(id) ASC
-        LIMIT 1
-        "#,
-            named_params! { ":like": &like, ":short": &short },
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(GaalError::from)?;
-    if result.is_some() {
-        return Ok(result);
-    }
-
-    // Codex sessions use UUIDv7 where the timestamp prefix is shared across
-    // sessions. gaal stores them truncated to the LAST 8 hex chars (see
-    // truncate_codex_id in discovery/codex.rs). Try last-8 resolution when
-    // first-8 didn't match.
-    let hex: String = raw.chars().filter(|c| *c != '-').collect();
-    if hex.len() > 8 {
-        let last8 = &hex[hex.len() - 8..];
-        if let Some(row) = get_session(conn, last8)? {
-            return Ok(Some(row.id));
-        }
-        let like_last8 = format!("{last8}%");
-        return conn
-            .query_row(
-                r#"
-            SELECT id
-            FROM sessions
-            WHERE id LIKE :like
-            ORDER BY CASE WHEN id = :last8 THEN 0 ELSE 1 END, LENGTH(id) ASC
-            LIMIT 1
-            "#,
-                named_params! { ":like": &like_last8, ":last8": last8 },
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(GaalError::from);
-    }
-
-    Ok(None)
 }
 
 fn parse_engine_filter(engine: Option<&str>) -> Result<Option<Engine>, GaalError> {

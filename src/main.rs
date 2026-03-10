@@ -296,8 +296,6 @@ enum IndexCommand {
         #[arg(long)]
         before: String,
     },
-    /// Retroactively link parent/child sessions from agent-mux traces.
-    LinkParents,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -564,7 +562,6 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 let args = gaal::commands::index::PruneArgs { before };
                 gaal::commands::index::run_prune(args)
             }
-            IndexCommand::LinkParents => gaal::commands::index::run_link_parents(),
         },
         Commands::Active { engine, watch, flat } => {
             let args = gaal::commands::active::ActiveArgs {
