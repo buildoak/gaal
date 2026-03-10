@@ -523,8 +523,10 @@ fn truncate_summary(text: &str, max_chars: usize) -> String {
 /// These represent API-spawned Codex sessions (via agent-mux) that have
 /// no live process on this machine.
 ///
-/// I30: Ghost filtering — pid=0 sessions with mtime > 120s are excluded.
-/// Sessions with mtime < 120s are kept and marked as `starting`.
+/// I30: Ghost filtering — pid=0 sessions are excluded when BOTH the file
+/// mtime AND the last JSONL event timestamp are older than 120s.  Checking
+/// only mtime was insufficient because OS-level metadata writes can bump
+/// mtime long after the session has died.
 fn discover_api_active_codex_sessions(
     already_discovered: &HashSet<PathBuf>,
 ) -> Option<Vec<ActiveSession>> {
@@ -584,8 +586,12 @@ fn discover_api_active_codex_sessions(
                 continue;
             }
 
-            // I30: Ghost filtering — pid=0 with mtime > 120s is a dead session.
-            if elapsed > ghost_threshold {
+            // I30: Ghost filtering — a pid=0 session is a ghost if its last
+            // JSONL event timestamp exceeds the threshold.  File mtime is
+            // unreliable (gaal reads, OS indexing, etc. can bump it), so we
+            // use the actual event timestamp as the authoritative signal.
+            // Fall back to mtime only when no event timestamp is parseable.
+            if is_last_event_stale(&path, ghost_threshold) {
                 continue;
             }
 
@@ -624,6 +630,63 @@ fn discover_api_active_codex_sessions(
         None
     } else {
         Some(results)
+    }
+}
+
+/// Check if the last event in a JSONL file is older than the given threshold.
+/// Reads the tail of the file to find the most recent timestamp.
+/// Returns true (stale) when no timestamp is found or it exceeds the threshold.
+fn is_last_event_stale(path: &Path, threshold: std::time::Duration) -> bool {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+    let Ok(mut file) = fs::File::open(path) else {
+        return true;
+    };
+    let Ok(file_len) = file.metadata().map(|m| m.len()) else {
+        return true;
+    };
+    if file_len == 0 {
+        return true;
+    }
+
+    // Read the last ~32KB to find recent timestamps.
+    let read_from = file_len.saturating_sub(32 * 1024);
+    if file.seek(SeekFrom::Start(read_from)).is_err() {
+        return true;
+    }
+    let reader = BufReader::new(file);
+    let mut latest_ts: Option<chrono::DateTime<chrono::Utc>> = None;
+
+    for line in reader.lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        // Try common timestamp fields.
+        let ts_str = record
+            .get("timestamp")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| record.pointer("/payload/timestamp").and_then(serde_json::Value::as_str));
+        if let Some(ts_str) = ts_str {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+                let dt_utc = dt.with_timezone(&chrono::Utc);
+                if latest_ts.map_or(true, |prev| dt_utc > prev) {
+                    latest_ts = Some(dt_utc);
+                }
+            }
+        }
+    }
+
+    match latest_ts {
+        Some(ts) => {
+            let age = chrono::Utc::now().signed_duration_since(ts);
+            age.num_seconds() > threshold.as_secs() as i64
+        }
+        // No timestamp found — treat as stale.
+        None => true,
     }
 }
 

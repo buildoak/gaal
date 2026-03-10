@@ -168,6 +168,13 @@ fn collect_active(args: &ActiveArgs) -> Result<Vec<ActiveOutput>, GaalError> {
         out.push(row);
     }
 
+    // I28: Dedup by final resolved session ID.
+    // The discovery-layer dedup (in find_active_sessions) runs before IDs are
+    // fully enriched (parsed JSONL, runtime probe, DB fallback).  Multiple OS
+    // processes for the same session may have id=None at that stage and slip
+    // through.  Dedup again here with the authoritative IDs.
+    out = dedup_active_output(out);
+
     // Populate children lists for tree view.
     // Build a map from PID → session ID for parent resolution.
     let pid_to_id: HashMap<u32, String> = out
@@ -192,6 +199,57 @@ fn collect_active(args: &ActiveArgs) -> Result<Vec<ActiveOutput>, GaalError> {
     }
 
     Ok(out)
+}
+
+/// I28: Deduplicate `ActiveOutput` rows sharing the same session ID.
+/// Keeps the entry with the highest CPU%, merges all_pids.
+fn dedup_active_output(rows: Vec<ActiveOutput>) -> Vec<ActiveOutput> {
+    let mut by_id: HashMap<String, Vec<ActiveOutput>> = HashMap::new();
+
+    for row in rows {
+        by_id.entry(row.id.clone()).or_default().push(row);
+    }
+
+    let mut result = Vec::new();
+    for (_id, mut group) in by_id {
+        if group.len() == 1 {
+            result.push(group.remove(0));
+            continue;
+        }
+        // Pick entry with highest CPU as representative.
+        group.sort_by(|a, b| {
+            b.cpu_pct
+                .partial_cmp(&a.cpu_pct)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut best = group.remove(0);
+        // Merge PIDs and metadata from duplicates.
+        for other in &group {
+            for &pid in &other.all_pids {
+                if !best.all_pids.contains(&pid) {
+                    best.all_pids.push(pid);
+                }
+            }
+            if best.parent_pid.is_none() && other.parent_pid.is_some() {
+                best.parent_pid = other.parent_pid;
+            }
+            if best.summary.is_none() && other.summary.is_some() {
+                best.summary = other.summary.clone();
+            }
+            if best.tmux_session.is_none() && other.tmux_session.is_some() {
+                best.tmux_session = other.tmux_session.clone();
+            }
+            if best.model.is_none() && other.model.is_some() {
+                best.model = other.model.clone();
+            }
+        }
+        best.process_count = best.all_pids.len().max(1);
+        result.push(best);
+    }
+
+    // Preserve stable ordering by PID.
+    result.sort_by_key(|r| r.pid);
+    result
 }
 
 fn build_active_row(
