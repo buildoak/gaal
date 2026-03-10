@@ -63,6 +63,8 @@ pub struct HandoffArgs {
     pub parallel: usize,
     /// Minimum turns required to process a session.
     pub min_turns: usize,
+    /// Force using the nearest detected session (this process lineage).
+    pub force_this: bool,
     /// Preview candidates without processing.
     pub dry_run: bool,
 }
@@ -109,7 +111,11 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
     let (id_or_today, detected) = if let Some(id) = args.id.clone() {
         (id, None)
     } else {
-        let detected = crate::detection::detect_current_session()?;
+        let detected = if args.force_this {
+            crate::detection::detect_current_session()?
+        } else {
+            crate::detection::detect_preferred_session()?
+        };
         eprintln!(
             "Auto-detected {} session {} (PID {}, JSONL: {})",
             detected.engine,
@@ -454,7 +460,12 @@ fn process_session_handoff(
         }
     }
 
-    let frontmatter = build_handoff_frontmatter(session, &extracted, engine, model);
+    // Use the session's own engine/model for frontmatter (ground truth),
+    // not the extraction LLM engine/model.
+    let session_engine = &session.engine;
+    let session_model = session.model.as_deref().unwrap_or("unknown");
+    let frontmatter =
+        build_handoff_frontmatter(session, &extracted, session_engine, session_model);
     let full_content = format!("{}{}", frontmatter, response);
     let handoff_path = write_handoff_markdown(session, &full_content)?;
 
@@ -718,8 +729,15 @@ fn build_context(session: &SessionRow, facts: &[Fact], provider: &str, format: &
     let file_block = bullet_lines(&files, 40);
     let decision_block = bullet_lines(&decisions, 20);
 
+    let engine = &session.engine;
+    let model = session.model.as_deref().unwrap_or("unknown");
+
     format!(
         "Requested provider: {provider}\nRequested format: {format}\n\n\
+GROUND TRUTH (do not override in your output):\n\
+- engine: {engine}\n\
+- model: {model}\n\
+These values are determined from the session source. Do not infer or hallucinate different engine/model values.\n\n\
 Session Summary:\n\
 - id: {id}\n\
 - engine: {engine}\n\
@@ -736,8 +754,6 @@ Errors:\n{error_block}\n\n\
 Files:\n{file_block}\n\n\
 Key Decisions:\n{decision_block}\n",
         id = session.id,
-        engine = session.engine,
-        model = session.model.as_deref().unwrap_or("unknown"),
         cwd = session.cwd.as_deref().unwrap_or("."),
         started_at = session.started_at,
         ended_at = session.ended_at.as_deref().unwrap_or("in_progress"),
