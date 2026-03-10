@@ -239,6 +239,9 @@ enum Commands {
         /// Re-poll every 2s and refresh output.
         #[arg(long)]
         watch: bool,
+        /// Flat list (no tree nesting).
+        #[arg(long)]
+        flat: bool,
     },
 
     /// Apply or remove tags on a session.
@@ -563,11 +566,12 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             }
             IndexCommand::LinkParents => gaal::commands::index::run_link_parents(),
         },
-        Commands::Active { engine, watch } => {
+        Commands::Active { engine, watch, flat } => {
             let args = gaal::commands::active::ActiveArgs {
                 engine: engine.map(convert_active_engine),
                 watch,
                 human,
+                flat,
             };
             gaal::commands::active::run(args)
         }

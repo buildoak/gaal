@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::GaalError;
 
 /// Computed runtime/archive status for a session.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
     /// Process alive and events are flowing.
@@ -21,6 +21,8 @@ pub enum SessionStatus {
     Failed,
     /// Session was killed or crashed without clean exit.
     Interrupted,
+    /// API-discovered session with no live process, very recent mtime (< 2 min).
+    Starting,
     /// Status could not be determined.
     Unknown,
 }
@@ -34,6 +36,7 @@ impl fmt::Display for SessionStatus {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Interrupted => "interrupted",
+            Self::Starting => "starting",
             Self::Unknown => "unknown",
         })
     }
@@ -50,6 +53,7 @@ impl FromStr for SessionStatus {
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
             "interrupted" => Ok(Self::Interrupted),
+            "starting" => Ok(Self::Starting),
             "unknown" => Ok(Self::Unknown),
             other => Err(GaalError::ParseError(format!(
                 "invalid session status: {other}"

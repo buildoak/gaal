@@ -26,8 +26,12 @@ pub struct ActiveSession {
     pub id: Option<String>,
     /// Source engine.
     pub engine: Engine,
-    /// Process ID.
+    /// Process ID (representative — highest CPU among all_pids).
     pub pid: u32,
+    /// All PIDs associated with this session (after dedup).
+    pub all_pids: Vec<u32>,
+    /// PID of the parent session's process, if this is a child worker.
+    pub parent_pid: Option<u32>,
     /// Process current working directory.
     pub cwd: String,
     /// Best-effort resolved JSONL path.
@@ -36,6 +40,8 @@ pub struct ActiveSession {
     pub process: ProcessInfo,
     /// Owning tmux session name, if found.
     pub tmux_session: Option<String>,
+    /// One-line summary of what the session is doing.
+    pub summary: Option<String>,
 }
 
 /// Probe process metrics for a PID on Unix systems.
@@ -239,12 +245,15 @@ pub fn is_pid_alive(pid: u32) -> bool {
 
 /// Discover currently running Claude/Codex sessions from process state,
 /// then also check for API-spawned Codex sessions (no live process) via
-/// recent JSONL file mtime.
+/// recent JSONL file mtime. Applies dedup (I28), child collapsing (I29),
+/// ghost filtering (I30), and summary extraction (I20).
 pub fn find_active_sessions() -> Result<Vec<ActiveSession>> {
     #[cfg(unix)]
     {
         let mut sessions = Vec::new();
         let mut discovered_jsonl_paths: HashSet<PathBuf> = HashSet::new();
+        // Map from PID → index in sessions vec, for parent-child detection.
+        let mut pid_to_idx: HashMap<u32, usize> = HashMap::new();
 
         for (pid, engine) in list_agent_processes() {
             if !is_pid_alive(pid) {
@@ -267,23 +276,57 @@ pub fn find_active_sessions() -> Result<Vec<ActiveSession>> {
                 discovered_jsonl_paths.insert(path.clone());
             }
 
+            let summary = extract_summary(id.as_deref(), jsonl_path.as_deref(), &cwd);
+
+            let idx = sessions.len();
+            pid_to_idx.insert(pid, idx);
+
             sessions.push(ActiveSession {
                 id,
                 engine,
                 pid,
+                all_pids: vec![pid],
+                parent_pid: None,
                 cwd,
                 jsonl_path,
                 process,
                 tmux_session,
+                summary,
             });
+        }
+
+        // I29: Child worker collapsing via PID tree.
+        // For each discovered PID, walk ppid chain up to 4 hops.
+        // If an ancestor PID matches another discovered session → mark as child.
+        let discovered_pids: HashSet<u32> = pid_to_idx.keys().copied().collect();
+        for idx in 0..sessions.len() {
+            let session_pid = sessions[idx].pid;
+            let mut cur = session_pid;
+            for _ in 0..4 {
+                let Some(ppid) = parent_pid(cur) else {
+                    break;
+                };
+                if ppid <= 1 || ppid == cur {
+                    break;
+                }
+                if ppid != session_pid && discovered_pids.contains(&ppid) {
+                    sessions[idx].parent_pid = Some(ppid);
+                    break;
+                }
+                cur = ppid;
+            }
         }
 
         // Check for API-spawned Codex sessions: JSONL files in
         // ~/.codex/sessions/ with mtime < 5 minutes and no matching
         // process-discovered session.
+        // I30: Ghost filtering is applied inside discover_api_active_codex_sessions.
         if let Some(api_sessions) = discover_api_active_codex_sessions(&discovered_jsonl_paths) {
             sessions.extend(api_sessions);
         }
+
+        // I28: Dedup by session ID — group entries by id, keep highest CPU.
+        sessions = dedup_by_session_id(sessions);
 
         Ok(sessions)
     }
@@ -293,10 +336,195 @@ pub fn find_active_sessions() -> Result<Vec<ActiveSession>> {
     }
 }
 
+/// I28: Deduplicate sessions sharing the same session ID.
+/// For each group, keep the entry with highest CPU%, merge all PIDs.
+fn dedup_by_session_id(sessions: Vec<ActiveSession>) -> Vec<ActiveSession> {
+    let mut by_id: HashMap<String, Vec<ActiveSession>> = HashMap::new();
+    let mut no_id: Vec<ActiveSession> = Vec::new();
+
+    for session in sessions {
+        if let Some(ref id) = session.id {
+            by_id.entry(id.clone()).or_default().push(session);
+        } else {
+            no_id.push(session);
+        }
+    }
+
+    let mut result = Vec::new();
+    for (_id, mut group) in by_id {
+        if group.len() == 1 {
+            result.push(group.remove(0));
+            continue;
+        }
+        // Pick entry with highest CPU as representative.
+        group.sort_by(|a, b| {
+            b.process
+                .cpu_pct
+                .partial_cmp(&a.process.cpu_pct)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut best = group.remove(0);
+        // Merge all PIDs from the group.
+        let mut all_pids: Vec<u32> = best.all_pids.clone();
+        for other in &group {
+            for &pid in &other.all_pids {
+                if !all_pids.contains(&pid) {
+                    all_pids.push(pid);
+                }
+            }
+            // Carry forward parent_pid if any entry had one.
+            if best.parent_pid.is_none() && other.parent_pid.is_some() {
+                best.parent_pid = other.parent_pid;
+            }
+            // Carry forward summary if the best didn't have one.
+            if best.summary.is_none() && other.summary.is_some() {
+                best.summary = other.summary.clone();
+            }
+            // Carry forward tmux session if the best didn't have one.
+            if best.tmux_session.is_none() && other.tmux_session.is_some() {
+                best.tmux_session = other.tmux_session.clone();
+            }
+        }
+        best.all_pids = all_pids;
+        result.push(best);
+    }
+    result.extend(no_id);
+    result
+}
+
+/// I20: Extract a one-line summary for a session.
+/// Priority: (1) handoff headline from DB, (2) first user prompt from JSONL, (3) CWD project name.
+fn extract_summary(
+    session_id: Option<&str>,
+    jsonl_path: Option<&Path>,
+    cwd: &str,
+) -> Option<String> {
+    // 1. Try handoff headline from DB.
+    if let Some(id) = session_id {
+        if let Some(headline) = get_handoff_headline(id) {
+            return Some(headline);
+        }
+    }
+
+    // 2. Try first user prompt from JSONL.
+    if let Some(path) = jsonl_path {
+        if let Some(prompt) = extract_first_user_prompt(path) {
+            return Some(prompt);
+        }
+    }
+
+    // 3. Fallback: CWD project name (last path component).
+    let project = cwd
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(cwd);
+    if !project.is_empty() && project != "." {
+        return Some(project.to_string());
+    }
+
+    None
+}
+
+/// Query the handoffs table for a session's headline.
+fn get_handoff_headline(session_id: &str) -> Option<String> {
+    let conn = crate::db::open_db_readonly().ok()?;
+    let headline: Option<String> = conn
+        .query_row(
+            "SELECT headline FROM handoffs WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .ok()?;
+    headline.filter(|h| !h.is_empty())
+}
+
+/// Read first ~30 lines of JSONL and extract the first user/human prompt text.
+fn extract_first_user_prompt(path: &Path) -> Option<String> {
+    let lines = super::discover::read_head_lines(path, 50);
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let record: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+
+        // Claude format: type == "human" or "user", message.content is array or string
+        let msg_type = record.get("type").and_then(serde_json::Value::as_str);
+        if matches!(msg_type, Some("human") | Some("user")) {
+            // Try message.content as array of blocks
+            if let Some(blocks) = record
+                .pointer("/message/content")
+                .and_then(serde_json::Value::as_array)
+            {
+                for block in blocks {
+                    if block.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+                        if let Some(text) = block.get("text").and_then(serde_json::Value::as_str) {
+                            let truncated = truncate_summary(text, 60);
+                            if !truncated.is_empty() {
+                                return Some(truncated);
+                            }
+                        }
+                    }
+                }
+            }
+            // Try message.content as plain string
+            if let Some(text) = record
+                .pointer("/message/content")
+                .and_then(serde_json::Value::as_str)
+            {
+                let truncated = truncate_summary(text, 60);
+                if !truncated.is_empty() {
+                    return Some(truncated);
+                }
+            }
+        }
+
+        // Codex format: type == "message" with role == "user"
+        if msg_type == Some("message") {
+            if record.get("role").and_then(serde_json::Value::as_str) == Some("user") {
+                if let Some(text) = record.get("content").and_then(serde_json::Value::as_str) {
+                    let truncated = truncate_summary(text, 60);
+                    if !truncated.is_empty() {
+                        return Some(truncated);
+                    }
+                }
+            }
+        }
+
+        // Codex responses API format: payload with user input_text
+        if let Some(text) = record
+            .pointer("/payload/input_text")
+            .and_then(serde_json::Value::as_str)
+        {
+            let truncated = truncate_summary(text, 60);
+            if !truncated.is_empty() {
+                return Some(truncated);
+            }
+        }
+    }
+    None
+}
+
+/// Truncate a string to max_chars, taking the first line and trimming whitespace.
+fn truncate_summary(text: &str, max_chars: usize) -> String {
+    let first_line = text.lines().next().unwrap_or(text).trim();
+    if first_line.chars().count() <= max_chars {
+        first_line.to_string()
+    } else {
+        let mut s: String = first_line.chars().take(max_chars - 3).collect();
+        s.push_str("...");
+        s
+    }
+}
+
 /// Scan `~/.codex/sessions/` for JSONL files modified within the last 5
 /// minutes that were not already discovered via process inspection.
 /// These represent API-spawned Codex sessions (via agent-mux) that have
 /// no live process on this machine.
+///
+/// I30: Ghost filtering — pid=0 sessions with mtime > 120s are excluded.
+/// Sessions with mtime < 120s are kept and marked as `starting`.
 fn discover_api_active_codex_sessions(
     already_discovered: &HashSet<PathBuf>,
 ) -> Option<Vec<ActiveSession>> {
@@ -307,6 +535,7 @@ fn discover_api_active_codex_sessions(
     }
 
     let five_minutes = std::time::Duration::from_secs(5 * 60);
+    let ghost_threshold = std::time::Duration::from_secs(120);
     let mut results = Vec::new();
 
     // Walk directories recursively looking for rollout-*.jsonl files.
@@ -355,17 +584,29 @@ fn discover_api_active_codex_sessions(
                 continue;
             }
 
+            // I30: Ghost filtering — pid=0 with mtime > 120s is a dead session.
+            if elapsed > ghost_threshold {
+                continue;
+            }
+
             // Parse head to get session metadata.
             let head = super::discover::read_head_lines(&path, 30);
             let (id, _model, cwd) = parse_codex_api_head(&head);
 
             let session_id = id.map(|raw| truncate_codex_id(&raw));
             let cwd_str = cwd.unwrap_or_else(|| "unknown".to_string());
+            let summary = extract_summary(
+                session_id.as_deref(),
+                Some(path.as_path()),
+                &cwd_str,
+            );
 
             results.push(ActiveSession {
                 id: session_id,
                 engine: Engine::Codex,
                 pid: 0,
+                all_pids: vec![],
+                parent_pid: None,
                 cwd: cwd_str,
                 jsonl_path: Some(path),
                 process: ProcessInfo {
@@ -374,6 +615,7 @@ fn discover_api_active_codex_sessions(
                     rss_mb: 0.0,
                 },
                 tmux_session: None,
+                summary,
             });
         }
     }

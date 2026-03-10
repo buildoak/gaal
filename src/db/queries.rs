@@ -916,6 +916,7 @@ fn session_status_label(row: &SessionRow) -> &'static str {
         SessionStatus::Completed => "completed",
         SessionStatus::Failed => "failed",
         SessionStatus::Interrupted => "interrupted",
+        SessionStatus::Starting => "starting",
         SessionStatus::Unknown => "unknown",
     }
 }

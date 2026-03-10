@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -38,6 +38,9 @@ pub struct ActiveArgs {
     /// Human-readable table output.
     #[arg(short = 'H', long = "human")]
     pub human: bool,
+    /// Flat list (no tree nesting).
+    #[arg(long)]
+    pub flat: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -46,6 +49,14 @@ struct ActiveOutput {
     engine: Engine,
     model: Option<String>,
     pid: u32,
+    /// All PIDs associated with this session (after dedup).
+    all_pids: Vec<u32>,
+    /// Number of OS processes for this session.
+    process_count: usize,
+    /// PID of the parent session's process, if this is a child worker.
+    parent_pid: Option<u32>,
+    /// Session IDs of children (populated during tree assembly).
+    children: Vec<String>,
     cwd: String,
     uptime_secs: u64,
     cpu_pct: f64,
@@ -55,6 +66,8 @@ struct ActiveOutput {
     last_action: Option<String>,
     last_action_age_secs: Option<u64>,
     tmux_session: Option<String>,
+    /// One-line summary of what the session is doing.
+    summary: Option<String>,
     stuck_signals: ActiveStuckSignals,
 }
 
@@ -114,7 +127,7 @@ pub fn run(args: ActiveArgs) -> Result<(), GaalError> {
             print!("\x1B[2J\x1B[H");
         }
         if args.human {
-            print_active_table(&payload);
+            print_active_tree(&payload, args.flat);
         } else {
             print_json(&payload)?;
         }
@@ -139,15 +152,43 @@ fn collect_active(args: &ActiveArgs) -> Result<Vec<ActiveOutput>, GaalError> {
     let stuck_config = load_config().stuck;
     let mut out = Vec::with_capacity(sessions.len());
 
-    for session in sessions {
+    for session in &sessions {
         let stuck_silence_secs = stuck_config
             .silence_for_engine(Some(session.engine))
             .max(IDLE_SECS);
-        out.push(build_active_row(
-            &session,
+        let mut row = build_active_row(
+            session,
             conn.as_ref(),
             stuck_silence_secs,
-        )?);
+        )?;
+        // I30: Mark pid=0 API sessions as "starting".
+        if session.pid == 0 && row.status == SessionStatus::Active {
+            row.status = SessionStatus::Starting;
+        }
+        out.push(row);
+    }
+
+    // Populate children lists for tree view.
+    // Build a map from PID → session ID for parent resolution.
+    let pid_to_id: HashMap<u32, String> = out
+        .iter()
+        .flat_map(|o| o.all_pids.iter().map(move |&pid| (pid, o.id.clone())))
+        .collect();
+    // For each session with a parent_pid, find the parent's ID and add self to its children.
+    let child_parents: Vec<(usize, String)> = out
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, o)| {
+            o.parent_pid
+                .and_then(|ppid| pid_to_id.get(&ppid))
+                .map(|parent_id| (idx, parent_id.clone()))
+        })
+        .collect();
+    for (child_idx, parent_id) in &child_parents {
+        let child_id = out[*child_idx].id.clone();
+        if let Some(parent) = out.iter_mut().find(|o| o.id == *parent_id) {
+            parent.children.push(child_id);
+        }
     }
 
     Ok(out)
@@ -247,11 +288,17 @@ fn build_active_row(
         .and_then(|ts| age_from_ts(ts, Utc::now()))
         .unwrap_or(0);
 
+    let process_count = session.all_pids.len().max(1);
+
     Ok(ActiveOutput {
         id,
         engine: session.engine,
         model,
         pid: session.pid,
+        all_pids: session.all_pids.clone(),
+        process_count,
+        parent_pid: session.parent_pid,
+        children: Vec::new(), // populated later during tree assembly
         cwd: session.cwd.clone(),
         uptime_secs,
         cpu_pct: round1(session.process.cpu_pct),
@@ -261,6 +308,7 @@ fn build_active_row(
         last_action,
         last_action_age_secs,
         tmux_session: session.tmux_session.clone(),
+        summary: session.summary.clone(),
         stuck_signals: ActiveStuckSignals {
             silence_secs,
             stuck_silence_secs,
@@ -884,18 +932,108 @@ fn print_json<T: Serialize>(value: &T) -> Result<(), GaalError> {
     Ok(())
 }
 
-fn print_active_table(sessions: &[ActiveOutput]) {
+/// I21: Tree view for active sessions with fleet summary.
+/// Default: tree with children indented under parents.
+/// --flat: original flat list.
+fn print_active_tree(sessions: &[ActiveOutput], flat: bool) {
     if sessions.is_empty() {
         println!("No active sessions.");
         return;
     }
 
+    // Fleet summary header.
+    let mut active_count = 0usize;
+    let mut idle_count = 0usize;
+    let mut stuck_count = 0usize;
+    let mut starting_count = 0usize;
+    for s in sessions {
+        match s.status {
+            SessionStatus::Active => active_count += 1,
+            SessionStatus::Idle => idle_count += 1,
+            SessionStatus::Stuck => stuck_count += 1,
+            SessionStatus::Starting => starting_count += 1,
+            _ => {}
+        }
+    }
+    let mut fleet_parts = Vec::new();
+    if active_count > 0 {
+        fleet_parts.push(format!("{active_count} active"));
+    }
+    if idle_count > 0 {
+        fleet_parts.push(format!("{idle_count} idle"));
+    }
+    if stuck_count > 0 {
+        fleet_parts.push(format!("{stuck_count} stuck"));
+    }
+    if starting_count > 0 {
+        fleet_parts.push(format!("{starting_count} starting"));
+    }
+    println!("FLEET: {}", fleet_parts.join(", "));
+    println!();
+
+    if flat {
+        // Flat mode: original table with summary column.
+        print_flat_table(sessions);
+        return;
+    }
+
+    // Tree mode: top-level first, children indented.
+    let child_ids: HashSet<&str> = sessions
+        .iter()
+        .filter(|s| s.parent_pid.is_some())
+        .map(|s| s.id.as_str())
+        .collect();
+
+    let top_level: Vec<&ActiveOutput> = sessions
+        .iter()
+        .filter(|s| !child_ids.contains(s.id.as_str()))
+        .collect();
+
+    for parent in &top_level {
+        println!("{}", format_session_line(parent, ""));
+        // Find children of this parent.
+        for child_id in &parent.children {
+            if let Some(child) = sessions.iter().find(|s| &s.id == child_id) {
+                println!("{}", format_session_line(child, "  "));
+            }
+        }
+    }
+}
+
+/// Format a single session as a compact one-line display.
+fn format_session_line(s: &ActiveOutput, indent: &str) -> String {
+    let id = s.id.chars().take(8).collect::<String>();
+    let engine = format!("{:6}", s.engine.to_string());
+    let status = format!("{:8}", s.status.to_string());
+    let duration = format!("{:>6}", format_duration(s.uptime_secs as i64));
+    let ctx = format!("{:>4.0}% ctx", s.context_pct);
+
+    let summary_part = s
+        .summary
+        .as_deref()
+        .map(|sum| format!("  \"{}\"", truncate(sum, 50)))
+        .unwrap_or_default();
+
+    let pids_part = if s.process_count > 1 {
+        format!("  [{} PIDs]", s.process_count)
+    } else {
+        String::new()
+    };
+
+    format!(
+        "{indent}{id}  {engine}  {status}  {duration}  {ctx}{summary_part}{pids_part}"
+    )
+}
+
+/// Flat table view (--flat flag).
+fn print_flat_table(sessions: &[ActiveOutput]) {
     let headers = [
         "ID",
         "Engine",
         "Status",
         "Duration",
         "Ctx%",
+        "Summary",
         "Last Action",
         "Stuck",
         "CWD",
@@ -909,6 +1047,12 @@ fn print_active_table(sessions: &[ActiveOutput]) {
             let status = s.status.to_string();
             let duration = format_duration(s.uptime_secs as i64);
             let ctx = format!("{:.0}%", s.context_pct);
+
+            let summary = s
+                .summary
+                .as_deref()
+                .map(|sum| truncate(sum, 40))
+                .unwrap_or_else(|| "-".to_string());
 
             let last_action = s
                 .last_action
@@ -924,7 +1068,7 @@ fn print_active_table(sessions: &[ActiveOutput]) {
 
             let cwd = truncate_cwd(&s.cwd, 2);
 
-            vec![id, engine, status, duration, ctx, last_action, stuck, cwd]
+            vec![id, engine, status, duration, ctx, summary, last_action, stuck, cwd]
         })
         .collect();
 

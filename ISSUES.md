@@ -402,7 +402,7 @@ cannot start a transaction within a transaction
 
 ---
 
-## I20: `gaal active` lacks session summary — unclear what each session is doing
+## I20: `gaal active` lacks session summary — unclear what each session is doing [FIXED 2026-03-10]
 
 **Severity:** Medium (UX — table is just IDs and durations, no context)
 **Command:** `gaal active -H`
@@ -417,7 +417,7 @@ cannot start a transaction within a transaction
 
 ---
 
-## I21: `gaal active` needs first-principles rethink — mixed session types, subagent noise
+## I21: `gaal active` needs first-principles rethink — mixed session types, subagent noise [FIXED 2026-03-10]
 
 **Severity:** High (architectural — active view is unusable for fleet management)
 
@@ -542,3 +542,61 @@ Option 3 is ideal for the common case — a worker wanting to inspect its own se
 3. In-session: gaal detects its own session ending and writes the handoff as a final action
 
 **Status:** Deferred until I18-I26 are resolved. Log now so the vision is captured.
+
+---
+
+## I28: `gaal active` shows duplicate entries for same session ID [FIXED 2026-03-10]
+
+**Severity:** High (active view is noisy and misleading)
+**Command:** `gaal active -H`
+
+**Problem:** Multiple OS processes can map to the same Claude Code session ID — e.g., three `claude --dangerously-skip-permissions` processes all reconnected/resumed the same session UUID `68b37d6c`. Gaal lists each PID as a separate entry, tripling the session in the output.
+
+**Root cause:** `find_active_sessions()` iterates PIDs and builds one `ActiveSession` per PID. No dedup by session ID happens before output.
+
+**Expected:** Group by session ID. Show one entry per unique session with:
+- The most recently active PID (highest CPU, or most recent JSONL event)
+- A `pids: [98520, 8009, 40481]` field showing all associated processes
+- A `process_count` indicator in human output
+
+**Fix:** After building the `Vec<ActiveSession>`, group by `id`, keep the entry with highest CPU% or most recent action, merge PIDs into a list.
+
+---
+
+## I29: `gaal active` lists child `codex exec` workers as independent sessions [FIXED 2026-03-10]
+
+**Severity:** High (flat list mixes coordinators and their workers)
+**Command:** `gaal active -H`
+
+**Problem:** When a parent `codex --yolo` session spawns a child `codex exec` worker via agent-mux, both appear as independent entries in `gaal active`. The user sees 2 sessions when there's really 1 coordinator + 1 worker.
+
+**Evidence:** PID 38425 (`codex --yolo`, parent) and PID 40693 (`codex exec`, child of agent-mux 40661, which is child of 38425). Both map to session `019cd634`.
+
+**Root cause:** No parent-child PID tree walking to detect that one process spawned the other. No session hierarchy in the output.
+
+**Expected:** Detect parent-child via PID tree (`ppid` chain). Child workers should either:
+1. Be collapsed under their parent in default view
+2. Be shown indented/nested in tree view (`--tree`)
+3. Be excluded from default view with `--flat` to see them
+
+**Fix:** After PID discovery, walk `ppid` chain for each process. If a process's ancestor (up to 4 hops) is another discovered session, mark it as a child. Add `parent_pid: Option<u32>` to `ActiveSession`.
+
+---
+
+## I30: `gaal active` shows ghost sessions — pid=0, no live process [FIXED 2026-03-10]
+
+**Severity:** Medium (dead sessions pollute active view)
+**Command:** `gaal active -H`
+
+**Problem:** API-discovered Codex sessions (from `~/.codex/sessions/` mtime scan) appear in `gaal active` with `pid=0` even when no actual process exists. These are stale state files from terminated workers that weren't cleaned up.
+
+**Evidence:** Session `3ffb65d8` shows as active with pid=0, `permission_blocked: true`, but no OS process matches.
+
+**Root cause:** `discover_api_active_codex_sessions()` checks JSONL mtime < 5 min but doesn't verify a live process exists for the session.
+
+**Expected:** API-discovered sessions should be cross-checked:
+1. If a matching PID is found → real session, merge with PID-discovered entry
+2. If no PID and mtime < 2 min → possibly just started, show as `starting`
+3. If no PID and mtime > 2 min → dead/ghost, either filter out or mark as `dead`
+
+**Fix:** After API discovery, check each session against the PID-discovered set. If no PID match and mtime > 2 min, exclude or mark status as `dead`.

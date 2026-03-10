@@ -572,6 +572,7 @@ fn matches_status_filter(status: &SessionStatus, requested: &HashSet<LsStatus>) 
         SessionStatus::Completed => LsStatus::Completed,
         SessionStatus::Failed => LsStatus::Failed,
         SessionStatus::Interrupted => LsStatus::Interrupted,
+        SessionStatus::Starting => LsStatus::Active,
         SessionStatus::Unknown => LsStatus::Unknown,
     };
     requested.contains(&comparable)
