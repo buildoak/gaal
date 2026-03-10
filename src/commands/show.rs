@@ -8,10 +8,7 @@ use rusqlite::{named_params, Connection};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::commands::active::{
-    action_loop_detected, context_limit_tokens, pct_used, probe_runtime,
-};
-use crate::config::{load_config, StuckConfig};
+use crate::commands::active::probe_runtime;
 use crate::db::{open_db, open_db_readonly};
 use crate::db::queries::{
     count_children, get_children, get_facts, get_handoff, get_session, get_tags, SessionRow,
@@ -21,7 +18,7 @@ use crate::discovery::active::{find_active_sessions, is_pid_alive, probe_pid};
 use crate::error::GaalError;
 use crate::model::{
     compute_session_status, CommandEntry, ErrorEntry, Fact, FactType, FileOps, GitOp,
-    SessionRecord, SessionStatus, StatusParams, TokenUsage, IDLE_SECS,
+    SessionRecord, SessionStatus, StatusParams, TokenUsage,
 };
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
@@ -177,7 +174,6 @@ pub fn run(args: ShowArgs) -> Result<(), GaalError> {
 
     let live_pids = load_live_pid_index();
     let now = Utc::now();
-    let stuck_config = load_config().stuck;
 
     let mut out = Vec::with_capacity(session_rows.len());
     for row in session_rows {
@@ -186,7 +182,6 @@ pub fn run(args: ShowArgs) -> Result<(), GaalError> {
             &row,
             &args,
             &live_pids,
-            &stuck_config,
             now,
         )?);
     }
@@ -325,7 +320,6 @@ fn build_show_data(
     row: &SessionRow,
     args: &ShowArgs,
     live_pids: &LivePidIndex,
-    stuck_config: &StuckConfig,
     now: DateTime<Utc>,
 ) -> Result<ShowData, GaalError> {
     let any_fact_filter = args.files.is_some() || args.commands || args.errors || args.git;
@@ -379,7 +373,7 @@ fn build_show_data(
         id: row.id.clone(),
         engine: row.engine.clone(),
         model: row.model.clone().unwrap_or_else(|| "unknown".to_string()),
-        status: status_from_row(row, live_pids, stuck_config, now).to_string(),
+        status: status_from_row(row, live_pids, now).to_string(),
         cwd: row.cwd.clone().unwrap_or_default(),
         started_at: row.started_at.clone(),
         ended_at: row.ended_at.clone(),
@@ -413,18 +407,12 @@ fn build_show_data(
         None
     };
     let tree = if args.tree {
-        Some(build_tree(conn, row, live_pids, stuck_config, now)?)
+        Some(build_tree(conn, row, live_pids, now)?)
     } else {
         None
     };
     let child_sessions = if args.children {
-        Some(build_child_summaries(
-            conn,
-            &child_rows,
-            live_pids,
-            stuck_config,
-            now,
-        )?)
+        Some(build_child_summaries(conn, &child_rows, live_pids, now)?)
     } else {
         None
     };
@@ -522,7 +510,6 @@ fn build_tree(
     conn: &Connection,
     row: &SessionRow,
     live_pids: &LivePidIndex,
-    stuck_config: &StuckConfig,
     now: DateTime<Utc>,
 ) -> Result<TreeNode, GaalError> {
     let handoff = get_handoff(conn, &row.id)?;
@@ -530,7 +517,7 @@ fn build_tree(
     let mut tree_children = Vec::with_capacity(children.len());
 
     for child in &children {
-        tree_children.push(build_tree(conn, child, live_pids, stuck_config, now)?);
+        tree_children.push(build_tree(conn, child, live_pids, now)?);
     }
 
     Ok(TreeNode {
@@ -538,7 +525,7 @@ fn build_tree(
         intent: handoff
             .and_then(|h| h.headline)
             .unwrap_or_else(|| "".to_string()),
-        status: status_from_row(row, live_pids, stuck_config, now).to_string(),
+        status: status_from_row(row, live_pids, now).to_string(),
         duration_secs: duration_secs(row),
         children: tree_children,
     })
@@ -548,7 +535,6 @@ fn build_child_summaries(
     conn: &Connection,
     child_rows: &[SessionRow],
     live_pids: &LivePidIndex,
-    stuck_config: &StuckConfig,
     now: DateTime<Utc>,
 ) -> Result<Vec<ChildSummary>, GaalError> {
     let mut out = Vec::with_capacity(child_rows.len());
@@ -556,7 +542,7 @@ fn build_child_summaries(
         let handoff = get_handoff(conn, &child.id)?;
         out.push(ChildSummary {
             id: child.id.clone(),
-            status: status_from_row(child, live_pids, stuck_config, now).to_string(),
+            status: status_from_row(child, live_pids, now).to_string(),
             started_at: child.started_at.clone(),
             duration_secs: duration_secs(child),
             headline: handoff.and_then(|h| h.headline),
@@ -781,21 +767,15 @@ fn resolve_pid(index: &LivePidIndex, row: &SessionRow) -> Option<u32> {
 fn status_from_row(
     row: &SessionRow,
     live_pids: &LivePidIndex,
-    stuck_config: &StuckConfig,
     now: DateTime<Utc>,
 ) -> &'static str {
-    let stuck_silence_secs = stuck_config
-        .silence_for_engine(parse_engine(&row.engine))
-        .max(IDLE_SECS);
     match compute_session_status(&status_params_for_row(
         row,
         resolve_pid(live_pids, row),
         now,
-        stuck_silence_secs,
     )) {
         SessionStatus::Active => "active",
         SessionStatus::Idle => "idle",
-        SessionStatus::Stuck => "stuck",
         SessionStatus::Completed => "completed",
         SessionStatus::Failed => "failed",
         SessionStatus::Interrupted => "interrupted",
@@ -808,7 +788,6 @@ fn status_params_for_row<'a>(
     row: &'a SessionRow,
     pid: Option<u32>,
     now: DateTime<Utc>,
-    stuck_silence_secs: u64,
 ) -> StatusParams<'a> {
     let pid_alive = pid.map(is_pid_alive).unwrap_or(false);
     if row.ended_at.is_some() || !pid_alive {
@@ -817,51 +796,26 @@ fn status_params_for_row<'a>(
             exit_signal: row.exit_signal.as_deref(),
             pid_alive,
             silence_secs: 0,
-            loop_detected: false,
-            context_pct: 0.0,
-            permission_blocked: false,
-            stuck_silence_secs,
-            executing_command: false,
-            executing_agent: false,
             cpu_pct: 0.0,
         };
     }
 
-    let (silence_secs, loop_detected, context_pct, permission_blocked, executing_command, executing_agent) =
-        if let Some(engine) = parse_engine(&row.engine) {
-            let runtime = probe_runtime(Path::new(&row.jsonl_path), engine, STATUS_TAIL_LINES);
-            let silence_secs = runtime
-                .last_event_ts
-                .as_deref()
-                .and_then(parse_ts)
-                .or_else(|| row.last_event_at.as_deref().and_then(parse_ts))
-                .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
-                .unwrap_or(0);
-            let loop_detected = action_loop_detected(&runtime.recent_actions);
-            let permission_blocked = runtime.permission_blocked;
-            let executing_command = runtime.executing_command;
-            let executing_agent = runtime.executing_agent;
-
-            let tokens_used = (row.total_input_tokens + row.total_output_tokens).max(0);
-            let tokens_limit = context_limit_tokens(engine, row.model.as_deref());
-            let context_pct = pct_used(tokens_used, tokens_limit);
-            (
-                silence_secs,
-                loop_detected,
-                context_pct,
-                permission_blocked,
-                executing_command,
-                executing_agent,
-            )
-        } else {
-            let silence_secs = row
-                .last_event_at
-                .as_deref()
-                .and_then(parse_ts)
-                .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
-                .unwrap_or(0);
-            (silence_secs, false, 0.0, false, false, false)
-        };
+    let silence_secs = if let Some(engine) = parse_engine(&row.engine) {
+        let runtime = probe_runtime(Path::new(&row.jsonl_path), engine, STATUS_TAIL_LINES);
+        runtime
+            .last_event_ts
+            .as_deref()
+            .and_then(parse_ts)
+            .or_else(|| row.last_event_at.as_deref().and_then(parse_ts))
+            .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
+            .unwrap_or(0)
+    } else {
+        row.last_event_at
+            .as_deref()
+            .and_then(parse_ts)
+            .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
+            .unwrap_or(0)
+    };
 
     let cpu_pct = pid.and_then(probe_pid).map(|info| info.cpu_pct).unwrap_or(0.0);
 
@@ -870,12 +824,6 @@ fn status_params_for_row<'a>(
         exit_signal: row.exit_signal.as_deref(),
         pid_alive,
         silence_secs,
-        loop_detected,
-        context_pct,
-        permission_blocked,
-        stuck_silence_secs,
-        executing_command,
-        executing_agent,
         cpu_pct,
     }
 }

@@ -7,15 +7,12 @@ use clap::{ArgAction, Args, ValueEnum};
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::commands::active::{
-    action_loop_detected, context_limit_tokens, pct_used, probe_runtime,
-};
-use crate::config::load_config;
+use crate::commands::active::probe_runtime;
 use crate::db::open_db_readonly;
 use crate::db::queries::{self, ListFilter, SessionRow};
 use crate::discovery::active::{find_active_sessions, is_pid_alive, probe_pid};
 use crate::error::GaalError;
-use crate::model::{compute_session_status, SessionStatus, StatusParams, TokenUsage, IDLE_SECS};
+use crate::model::{compute_session_status, SessionStatus, StatusParams, TokenUsage};
 use crate::output::human::{format_duration, format_timestamp, format_tokens, print_table};
 use crate::output::{self, HumanReadable, OutputFormat};
 use crate::parser::types::Engine;
@@ -40,9 +37,6 @@ pub struct LsArgs {
     /// Filter by working-directory substring.
     #[arg(long)]
     pub cwd: Option<String>,
-    /// Shorthand filter for sessions needing attention (`stuck` + `idle`).
-    #[arg(long, action = ArgAction::SetTrue)]
-    pub stuck: bool,
     /// Filter by tag; repeat for AND semantics.
     #[arg(long, action = ArgAction::Append)]
     pub tag: Vec<String>,
@@ -69,7 +63,6 @@ pub struct LsArgs {
 pub enum LsStatus {
     Active,
     Idle,
-    Stuck,
     Completed,
     Failed,
     Interrupted,
@@ -153,12 +146,11 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
 
     let live_pids = load_live_pid_index();
     let now = Utc::now();
-    let stuck_config = load_config().stuck;
 
     let mut summaries = Vec::with_capacity(rows.len());
     for row in rows {
         let pid = resolve_pid(&live_pids, &row);
-        let status = compute_session_status(&status_params_for_row(&row, pid, now, &stuck_config));
+        let status = compute_session_status(&status_params_for_row(&row, pid, now));
         if !matches_status_filter(&status, &requested_statuses) {
             continue;
         }
@@ -181,7 +173,6 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
 fn requires_precise_aggregate(args: &LsArgs, statuses: &HashSet<LsStatus>) -> bool {
     args.tag.len() > 1
         || statuses.contains(&LsStatus::Idle)
-        || statuses.contains(&LsStatus::Stuck)
         || statuses.contains(&LsStatus::Unknown)
 }
 
@@ -199,7 +190,6 @@ fn build_precise_aggregate(
 
     let live_pids = load_live_pid_index();
     let now = Utc::now();
-    let stuck_config = load_config().stuck;
 
     let mut by_engine: HashMap<String, i64> = HashMap::new();
     let mut by_status: HashMap<String, i64> = HashMap::new();
@@ -209,7 +199,7 @@ fn build_precise_aggregate(
 
     for row in rows {
         let pid = resolve_pid(&live_pids, &row);
-        let status = compute_session_status(&status_params_for_row(&row, pid, now, &stuck_config));
+        let status = compute_session_status(&status_params_for_row(&row, pid, now));
         if !matches_status_filter(&status, requested_statuses) {
             continue;
         }
@@ -260,12 +250,7 @@ struct LivePidIndex {
 }
 
 fn resolve_requested_statuses(args: &LsArgs) -> HashSet<LsStatus> {
-    let mut statuses: HashSet<LsStatus> = args.status.iter().copied().collect();
-    if args.stuck {
-        statuses.insert(LsStatus::Stuck);
-        statuses.insert(LsStatus::Idle);
-    }
-    statuses
+    args.status.iter().copied().collect()
 }
 
 fn build_filter(args: &LsArgs, statuses: &HashSet<LsStatus>) -> Result<ListFilter, GaalError> {
@@ -310,7 +295,7 @@ fn db_status_prefilter(statuses: &HashSet<LsStatus>) -> Option<Vec<String>> {
             LsStatus::Failed => {
                 out.insert("failed".to_string());
             }
-            LsStatus::Active | LsStatus::Idle | LsStatus::Stuck | LsStatus::Unknown | LsStatus::Interrupted => {
+            LsStatus::Active | LsStatus::Idle | LsStatus::Unknown | LsStatus::Interrupted => {
                 out.insert("unknown".to_string());
                 out.insert("interrupted".to_string());
             }
@@ -467,11 +452,7 @@ fn status_params_for_row<'a>(
     row: &'a SessionRow,
     pid: Option<u32>,
     now: DateTime<Utc>,
-    stuck_config: &crate::config::StuckConfig,
 ) -> StatusParams<'a> {
-    let stuck_silence_secs = stuck_config
-        .silence_for_engine(parse_engine(&row.engine))
-        .max(IDLE_SECS);
     let pid_alive = pid.map(is_pid_alive).unwrap_or(false);
     if row.ended_at.is_some() || !pid_alive {
         return StatusParams {
@@ -479,51 +460,26 @@ fn status_params_for_row<'a>(
             exit_signal: row.exit_signal.as_deref(),
             pid_alive,
             silence_secs: 0,
-            loop_detected: false,
-            context_pct: 0.0,
-            permission_blocked: false,
-            stuck_silence_secs,
-            executing_command: false,
-            executing_agent: false,
             cpu_pct: 0.0,
         };
     }
 
-    let (silence_secs, loop_detected, context_pct, permission_blocked, executing_command, executing_agent) =
-        if let Some(engine) = parse_engine(&row.engine) {
-            let runtime = probe_runtime(Path::new(&row.jsonl_path), engine, STATUS_TAIL_LINES);
-            let silence_secs = runtime
-                .last_event_ts
-                .as_deref()
-                .and_then(parse_timestamp)
-                .or_else(|| row.last_event_at.as_deref().and_then(parse_timestamp))
-                .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
-                .unwrap_or(0);
-            let loop_detected = action_loop_detected(&runtime.recent_actions);
-            let permission_blocked = runtime.permission_blocked;
-            let executing_command = runtime.executing_command;
-            let executing_agent = runtime.executing_agent;
-
-            let tokens_used = (row.total_input_tokens + row.total_output_tokens).max(0);
-            let tokens_limit = context_limit_tokens(engine, row.model.as_deref());
-            let context_pct = pct_used(tokens_used, tokens_limit);
-            (
-                silence_secs,
-                loop_detected,
-                context_pct,
-                permission_blocked,
-                executing_command,
-                executing_agent,
-            )
-        } else {
-            let silence_secs = row
-                .last_event_at
-                .as_deref()
-                .and_then(parse_timestamp)
-                .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
-                .unwrap_or(0);
-            (silence_secs, false, 0.0, false, false, false)
-        };
+    let silence_secs = if let Some(engine) = parse_engine(&row.engine) {
+        let runtime = probe_runtime(Path::new(&row.jsonl_path), engine, STATUS_TAIL_LINES);
+        runtime
+            .last_event_ts
+            .as_deref()
+            .and_then(parse_timestamp)
+            .or_else(|| row.last_event_at.as_deref().and_then(parse_timestamp))
+            .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
+            .unwrap_or(0)
+    } else {
+        row.last_event_at
+            .as_deref()
+            .and_then(parse_timestamp)
+            .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
+            .unwrap_or(0)
+    };
 
     let cpu_pct = pid.and_then(probe_pid).map(|info| info.cpu_pct).unwrap_or(0.0);
 
@@ -532,12 +488,6 @@ fn status_params_for_row<'a>(
         exit_signal: row.exit_signal.as_deref(),
         pid_alive,
         silence_secs,
-        loop_detected,
-        context_pct,
-        permission_blocked,
-        stuck_silence_secs,
-        executing_command,
-        executing_agent,
         cpu_pct,
     }
 }
@@ -568,7 +518,6 @@ fn matches_status_filter(status: &SessionStatus, requested: &HashSet<LsStatus>) 
     let comparable = match status {
         SessionStatus::Active => LsStatus::Active,
         SessionStatus::Idle => LsStatus::Idle,
-        SessionStatus::Stuck => LsStatus::Stuck,
         SessionStatus::Completed => LsStatus::Completed,
         SessionStatus::Failed => LsStatus::Failed,
         SessionStatus::Interrupted => LsStatus::Interrupted,

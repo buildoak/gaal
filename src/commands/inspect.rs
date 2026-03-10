@@ -9,18 +9,14 @@ use rusqlite::{named_params, Connection};
 use serde::Serialize;
 
 use crate::commands::active::{
-    action_loop_detected, age_from_ts, context_limit_tokens, count_actions_in_window,
-    facts_loop_detected, latest_action_from_facts, parse_ts, pct_used, probe_runtime,
+    age_from_ts, count_actions_in_window, latest_action_from_facts, parse_ts, probe_runtime,
     tokens_per_minute_from_samples,
 };
-use crate::config::load_config;
 use crate::db::open_db_readonly;
 use crate::db::queries::{get_facts, get_session, list_sessions, ListFilter, SessionRow};
 use crate::discovery::active::{find_active_sessions, ActiveSession};
 use crate::error::GaalError;
-use crate::model::{
-    compute_session_status, Fact, FactType, SessionStatus, StatusParams, StuckSignals, IDLE_SECS,
-};
+use crate::model::{compute_session_status, Fact, FactType, SessionStatus, StatusParams};
 use crate::parser::parse_session;
 use crate::parser::types::Engine;
 
@@ -70,7 +66,6 @@ struct InspectOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     last_turn: Option<TurnSnapshot>,
     velocity: Velocity,
-    stuck_signals: StuckSignals,
     recent_errors: Vec<RecentError>,
 }
 
@@ -88,8 +83,6 @@ struct InspectContext {
     context_window: i64,
     /// Context window limit for this engine/model.
     context_limit: i64,
-    /// Percentage of context window used (context_window / context_limit).
-    pct_context: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -329,11 +322,6 @@ fn inspect_live(
     active: &ActiveSession,
     conn: Option<&Connection>,
 ) -> Result<InspectOutput, GaalError> {
-    let stuck_silence_secs = load_config()
-        .stuck
-        .silence_for_engine(Some(active.engine))
-        .max(IDLE_SECS);
-
     let parsed = active
         .jsonl_path
         .as_deref()
@@ -383,7 +371,6 @@ fn inspect_live(
 
     let context_window = peak_input_tokens(&runtime.usage_samples);
     let tokens_limit = context_limit_tokens(active.engine, model.as_deref());
-    let context_pct = pct_used(context_window, tokens_limit);
 
     let now = Utc::now();
     let last_event_ts = runtime
@@ -396,24 +383,11 @@ fn inspect_live(
         .and_then(|ts| age_from_ts(ts, now))
         .unwrap_or(0);
 
-    let loop_detected = if action_loop_detected(&runtime.recent_actions) {
-        true
-    } else {
-        facts_loop_detected(&facts)
-    };
-    let permission_blocked = runtime.permission_blocked;
-
     let status = compute_session_status(&StatusParams {
         ended_at: None,
         exit_signal: None,
         pid_alive: true,
         silence_secs,
-        loop_detected,
-        context_pct,
-        permission_blocked,
-        stuck_silence_secs,
-        executing_command: runtime.executing_command,
-        executing_agent: runtime.executing_agent,
         cpu_pct: active.process.cpu_pct,
     });
 
@@ -451,17 +425,10 @@ fn inspect_live(
             total_tokens,
             context_window,
             context_limit: tokens_limit,
-            pct_context: context_pct,
         },
         current_turn: turn,
         last_turn: None,
         velocity,
-        stuck_signals: StuckSignals {
-            silence_secs,
-            loop_detected,
-            context_pct,
-            permission_blocked,
-        },
         recent_errors,
     })
 }
@@ -496,7 +463,6 @@ fn inspect_archived(row: &SessionRow, conn: &Connection) -> Result<InspectOutput
         );
     let context_window = peak_input_tokens(&runtime.usage_samples);
     let tokens_limit = context_limit_tokens(engine, model.as_deref());
-    let context_pct = pct_used(context_window, tokens_limit);
 
     let now = Utc::now();
     let anchor = row
@@ -554,17 +520,10 @@ fn inspect_archived(row: &SessionRow, conn: &Connection) -> Result<InspectOutput
             total_tokens,
             context_window,
             context_limit: tokens_limit,
-            pct_context: context_pct,
         },
         current_turn: None,
         last_turn: turn,
         velocity,
-        stuck_signals: StuckSignals {
-            silence_secs: 0,
-            loop_detected: facts_loop_detected(&facts),
-            context_pct,
-            permission_blocked: false,
-        },
         recent_errors,
     })
 }
@@ -761,10 +720,6 @@ fn archived_status(
     row: &SessionRow,
     parsed: Option<&crate::parser::types::ParsedSession>,
 ) -> SessionStatus {
-    let stuck_silence_secs = load_config()
-        .stuck
-        .silence_for_engine(Some(parse_engine(&row.engine)))
-        .max(IDLE_SECS);
     let signal = row
         .exit_signal
         .as_deref()
@@ -776,12 +731,6 @@ fn archived_status(
         exit_signal: Some(signal),
         pid_alive: false,
         silence_secs: 0,
-        loop_detected: false,
-        context_pct: 0.0,
-        permission_blocked: false,
-        stuck_silence_secs,
-        executing_command: false,
-        executing_agent: false,
         cpu_pct: 0.0,
     })
 }
@@ -806,6 +755,21 @@ fn duration_between(start: &str, end: &str) -> Option<u64> {
         return Some(0);
     }
     u64::try_from(end.signed_duration_since(start).num_seconds()).ok()
+}
+
+fn context_limit_tokens(engine: Engine, model: Option<&str>) -> i64 {
+    let model_lower = model.unwrap_or_default().to_ascii_lowercase();
+    if model_lower.contains("claude") {
+        return 200_000;
+    }
+    if model_lower.contains("codex") {
+        return 128_000;
+    }
+
+    match engine {
+        Engine::Claude => 200_000,
+        Engine::Codex => 128_000,
+    }
 }
 
 /// Return the highest input_tokens value from any single usage sample.

@@ -5,9 +5,7 @@ use serde::Serialize;
 use serde_json::{Map as JsonMap, Number, Value};
 
 use crate::error::GaalError;
-use crate::model::{
-    compute_session_status, Fact, HandoffRecord, SessionStatus, StatusParams, STUCK_SILENCE_SECS,
-};
+use crate::model::{compute_session_status, Fact, HandoffRecord, SessionStatus, StatusParams};
 
 /// Database-level session row, flattened to only SQLite-backed fields.
 #[derive(Debug, Clone)]
@@ -796,7 +794,6 @@ pub fn get_index_status(conn: &Connection) -> Result<IndexStatus, GaalError> {
             let status = status_from_fields(
                 ended_at.as_deref(),
                 exit_signal.as_deref(),
-                STUCK_SILENCE_SECS,
             );
             *sessions_by_status.entry(status.to_string()).or_insert(0) += 1;
         }
@@ -881,29 +878,15 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
 }
 
 fn session_status(row: &SessionRow) -> SessionStatus {
-    status_from_fields(
-        row.ended_at.as_deref(),
-        row.exit_signal.as_deref(),
-        STUCK_SILENCE_SECS,
-    )
+    status_from_fields(row.ended_at.as_deref(), row.exit_signal.as_deref())
 }
 
-fn status_from_fields(
-    ended_at: Option<&str>,
-    exit_signal: Option<&str>,
-    stuck_silence_secs: u64,
-) -> SessionStatus {
+fn status_from_fields(ended_at: Option<&str>, exit_signal: Option<&str>) -> SessionStatus {
     compute_session_status(&StatusParams {
         ended_at,
         exit_signal,
         pid_alive: false,
         silence_secs: 0,
-        loop_detected: false,
-        context_pct: 0.0,
-        permission_blocked: false,
-        stuck_silence_secs,
-        executing_command: false,
-        executing_agent: false,
         cpu_pct: 0.0,
     })
 }
@@ -912,7 +895,6 @@ fn session_status_label(row: &SessionRow) -> &'static str {
     match session_status(row) {
         SessionStatus::Active => "active",
         SessionStatus::Idle => "idle",
-        SessionStatus::Stuck => "stuck",
         SessionStatus::Completed => "completed",
         SessionStatus::Failed => "failed",
         SessionStatus::Interrupted => "interrupted",

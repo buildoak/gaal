@@ -13,8 +13,6 @@ pub enum SessionStatus {
     Active,
     /// Process alive but no recent activity.
     Idle,
-    /// Process alive and one or more stuck signals present.
-    Stuck,
     /// Session ended cleanly.
     Completed,
     /// Session ended with failure conditions.
@@ -32,7 +30,6 @@ impl fmt::Display for SessionStatus {
         f.write_str(match self {
             Self::Active => "active",
             Self::Idle => "idle",
-            Self::Stuck => "stuck",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Interrupted => "interrupted",
@@ -49,7 +46,6 @@ impl FromStr for SessionStatus {
         match s.trim().to_ascii_lowercase().as_str() {
             "active" => Ok(Self::Active),
             "idle" => Ok(Self::Idle),
-            "stuck" => Ok(Self::Stuck),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
             "interrupted" => Ok(Self::Interrupted),
@@ -62,21 +58,7 @@ impl FromStr for SessionStatus {
     }
 }
 
-/// Inputs used by stuck-status detection heuristics.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct StuckSignals {
-    /// Seconds since last observed activity.
-    pub silence_secs: u64,
-    /// True when rolling action signature indicates a loop.
-    pub loop_detected: bool,
-    /// Percentage of context window consumed (0-100).
-    pub context_pct: f64,
-    /// True when waiting on unresolved permission gate.
-    pub permission_blocked: bool,
-}
-
 pub const IDLE_SECS: u64 = 120;
-pub const STUCK_SILENCE_SECS: u64 = 300;
 
 /// Inputs required to compute a session's authoritative status.
 #[derive(Debug, Clone, Copy)]
@@ -85,13 +67,6 @@ pub struct StatusParams<'a> {
     pub exit_signal: Option<&'a str>,
     pub pid_alive: bool,
     pub silence_secs: u64,
-    pub loop_detected: bool,
-    pub context_pct: f64,
-    pub permission_blocked: bool,
-    pub stuck_silence_secs: u64,
-    pub executing_command: bool,
-    /// True when the last action is an Agent tool dispatch waiting for subagent completion.
-    pub executing_agent: bool,
     pub cpu_pct: f64,
 }
 
@@ -115,7 +90,7 @@ pub fn compute_session_status(params: &StatusParams<'_>) -> SessionStatus {
         return SessionStatus::Interrupted;
     }
 
-    // CPU-awareness: if process CPU > 1%, it's working, not stuck
+    // CPU-awareness: if process CPU > 1%, it's actively working.
     if params.cpu_pct > 1.0 {
         if params.silence_secs >= IDLE_SECS {
             return SessionStatus::Idle;
@@ -124,28 +99,7 @@ pub fn compute_session_status(params: &StatusParams<'_>) -> SessionStatus {
         }
     }
 
-    // Extend silence tolerance when executing a command (build in progress)
-    // or waiting for a subagent (Agent tool dispatch).
-    // I32: Agent/Task dispatches can run for hours — 10x tolerance.
-    // Regular command execution (builds) gets 3x.
-    let effective_silence = if params.executing_agent {
-        params.stuck_silence_secs.saturating_mul(10)
-    } else if params.executing_command {
-        params.stuck_silence_secs.saturating_mul(3)
-    } else {
-        params.stuck_silence_secs
-    };
-    let silence_stuck = params.silence_secs >= effective_silence && !params.permission_blocked;
-
-    // Don't mark as stuck if context percentage alone is the trigger - high context is normal
-    let context_only_stuck = params.context_pct >= 95.0
-        && !silence_stuck
-        && !params.loop_detected
-        && !params.permission_blocked;
-
-    if (silence_stuck || params.loop_detected || params.permission_blocked) && !context_only_stuck {
-        SessionStatus::Stuck
-    } else if params.silence_secs >= IDLE_SECS {
+    if params.silence_secs >= IDLE_SECS {
         SessionStatus::Idle
     } else {
         SessionStatus::Active

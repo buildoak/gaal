@@ -11,7 +11,6 @@ use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::config::load_config;
 use crate::db::open_db_readonly;
 use crate::db::queries::{get_facts, get_session, SessionRow};
 use crate::discovery::active::{find_active_sessions, ActiveSession};
@@ -21,9 +20,6 @@ use crate::output::human::{format_duration, print_table};
 use crate::parser::parse_session;
 use crate::parser::types::Engine;
 
-#[allow(unused_imports)]
-pub(crate) use crate::model::{IDLE_SECS, STUCK_SILENCE_SECS};
-const LOOP_WINDOW: usize = 10;
 const TAIL_LINES: usize = 700;
 
 /// Arguments for `gaal active`.
@@ -57,22 +53,12 @@ struct ActiveOutput {
     uptime_secs: u64,
     cpu_pct: f64,
     rss_mb: f64,
-    context_pct: f64,
     status: SessionStatus,
     last_action: Option<String>,
     last_action_age_secs: Option<u64>,
     tmux_session: Option<String>,
     /// One-line summary of what the session is doing.
     summary: Option<String>,
-    stuck_signals: ActiveStuckSignals,
-}
-
-#[derive(Debug, Serialize)]
-struct ActiveStuckSignals {
-    silence_secs: u64,
-    stuck_silence_secs: u64,
-    loop_detected: bool,
-    permission_blocked: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -80,11 +66,6 @@ pub(crate) struct RuntimeProbe {
     pub session_id: Option<String>,
     pub last_event_ts: Option<String>,
     pub last_action: Option<ActionEvent>,
-    pub recent_actions: Vec<ActionEvent>,
-    pub permission_blocked: bool,
-    pub executing_command: bool,
-    /// True when the last action is an Agent/Task tool dispatch waiting for subagent completion.
-    pub executing_agent: bool,
     pub usage_samples: Vec<UsageSample>,
 }
 
@@ -101,15 +82,6 @@ pub(crate) struct ActionEvent {
     pub kind: String,
     pub subject: String,
     pub summary: String,
-}
-
-impl ActionEvent {
-    pub(crate) fn signature_key(&self) -> (String, String) {
-        (
-            self.kind.to_ascii_lowercase(),
-            self.subject.to_ascii_lowercase(),
-        )
-    }
 }
 
 /// Run `gaal active`.
@@ -145,18 +117,10 @@ fn collect_active(args: &ActiveArgs) -> Result<Vec<ActiveOutput>, GaalError> {
     sessions.sort_by_key(|s| s.pid);
 
     let conn = open_db_readonly().ok();
-    let stuck_config = load_config().stuck;
     let mut out = Vec::with_capacity(sessions.len());
 
     for session in &sessions {
-        let stuck_silence_secs = stuck_config
-            .silence_for_engine(Some(session.engine))
-            .max(IDLE_SECS);
-        let mut row = build_active_row(
-            session,
-            conn.as_ref(),
-            stuck_silence_secs,
-        )?;
+        let mut row = build_active_row(session, conn.as_ref())?;
         // I30: Mark pid=0 API sessions as "starting".
         if session.pid == 0 && row.status == SessionStatus::Active {
             row.status = SessionStatus::Starting;
@@ -188,7 +152,6 @@ fn dedup_active_output_simple(rows: Vec<ActiveOutput>) -> Vec<ActiveOutput> {
 fn build_active_row(
     session: &ActiveSession,
     conn: Option<&Connection>,
-    stuck_silence_secs: u64,
 ) -> Result<ActiveOutput, GaalError> {
     let parsed = session
         .jsonl_path
@@ -218,15 +181,6 @@ fn build_active_row(
         .and_then(|row| row.model.clone())
         .or_else(|| parsed.as_ref().and_then(|p| p.meta.model.clone()));
 
-    // I32: Use most recent usage sample instead of peak to get current context usage
-    let recent_input = runtime
-        .usage_samples
-        .last()
-        .map(|sample| sample.input_tokens)
-        .unwrap_or(0);
-    let tokens_limit = context_limit_tokens(session.engine, model.as_deref());
-    let context_pct = pct_used(recent_input, tokens_limit);
-
     let last_event_ts = runtime
         .last_event_ts
         .clone()
@@ -238,24 +192,11 @@ fn build_active_row(
         .and_then(|ts| age_from_ts(ts, Utc::now()))
         .unwrap_or(0);
 
-    let loop_detected = if action_loop_detected(&runtime.recent_actions) {
-        true
-    } else {
-        facts_loop_detected(db_facts.as_deref().unwrap_or(&[]))
-    };
-
-    let permission_blocked = runtime.permission_blocked;
     let status = compute_session_status(&StatusParams {
         ended_at: None,
         exit_signal: None,
         pid_alive: true,
         silence_secs,
-        loop_detected,
-        context_pct,
-        permission_blocked,
-        stuck_silence_secs,
-        executing_command: runtime.executing_command,
-        executing_agent: runtime.executing_agent,
         cpu_pct: session.process.cpu_pct,
     });
 
@@ -292,18 +233,11 @@ fn build_active_row(
         uptime_secs,
         cpu_pct: round1(session.process.cpu_pct),
         rss_mb: round1(session.process.rss_mb),
-        context_pct,
         status,
         last_action,
         last_action_age_secs,
         tmux_session: session.tmux_session.clone(),
         summary: session.summary.clone(),
-        stuck_signals: ActiveStuckSignals {
-            silence_secs,
-            stuck_silence_secs,
-            loop_detected,
-            permission_blocked,
-        },
     })
 }
 
@@ -332,12 +266,7 @@ pub(crate) fn probe_runtime(path: &Path, engine: Engine, max_lines: usize) -> Ru
     let mut session_id: Option<String> = None;
     let mut last_event_ts: Option<String> = None;
     let mut last_action: Option<ActionEvent> = None;
-    let mut recent_actions: Vec<ActionEvent> = Vec::new();
     let mut usage_samples: Vec<UsageSample> = Vec::new();
-
-    let mut pending_calls: HashSet<String> = HashSet::new();
-    let mut last_tool_use_id: Option<String> = None;
-    let mut last_tool_use_kind: Option<String> = None;
 
     for line in lines {
         let trimmed = line.trim();
@@ -364,127 +293,14 @@ pub(crate) fn probe_runtime(path: &Path, engine: Engine, max_lines: usize) -> Ru
         for action in actions {
             if !action.kind.is_empty() {
                 last_action = Some(action.clone());
-                recent_actions.push(action);
-            }
-        }
-
-        match engine {
-            Engine::Claude => {
-                if record.get("type").and_then(Value::as_str) == Some("assistant") {
-                    if let Some(blocks) =
-                        record.pointer("/message/content").and_then(Value::as_array)
-                    {
-                        for block in blocks {
-                            if block.get("type").and_then(Value::as_str) == Some("tool_use") {
-                                if let Some(id) = block.get("id").and_then(Value::as_str) {
-                                    pending_calls.insert(id.to_string());
-                                    last_tool_use_id = Some(id.to_string());
-                                    last_tool_use_kind = block
-                                        .get("name")
-                                        .and_then(Value::as_str)
-                                        .map(str::to_string);
-                                }
-                            }
-                        }
-                    }
-                }
-                if record.get("type").and_then(Value::as_str) == Some("user") {
-                    if let Some(blocks) =
-                        record.pointer("/message/content").and_then(Value::as_array)
-                    {
-                        for block in blocks {
-                            if block.get("type").and_then(Value::as_str) == Some("tool_result") {
-                                if let Some(id) = block.get("tool_use_id").and_then(Value::as_str) {
-                                    pending_calls.remove(id);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            Engine::Codex => {
-                if record.get("type").and_then(Value::as_str) == Some("response_item") {
-                    let payload_type = record
-                        .pointer("/payload/type")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    if matches!(payload_type, "function_call" | "custom_tool_call") {
-                        if let Some(call_id) =
-                            record.pointer("/payload/call_id").and_then(Value::as_str)
-                        {
-                            pending_calls.insert(call_id.to_string());
-                            last_tool_use_id = Some(call_id.to_string());
-                            last_tool_use_kind = record
-                                .pointer("/payload/name")
-                                .and_then(Value::as_str)
-                                .map(str::to_string);
-                        }
-                    }
-                    if matches!(
-                        payload_type,
-                        "function_call_output" | "custom_tool_call_output"
-                    ) {
-                        if let Some(call_id) =
-                            record.pointer("/payload/call_id").and_then(Value::as_str)
-                        {
-                            pending_calls.remove(call_id);
-                        }
-                    }
-                }
             }
         }
     }
-
-    if recent_actions.len() > 64 {
-        let keep_from = recent_actions.len().saturating_sub(64);
-        recent_actions = recent_actions.split_off(keep_from);
-    }
-
-    let permission_blocked = if pending_calls.len() == 1 {
-        let dominated_by_self = last_tool_use_id
-            .as_ref()
-            .map(|id| pending_calls.contains(id))
-            .unwrap_or(false)
-            && last_tool_use_kind
-                .as_ref()
-                .map(|kind| {
-                    let kind_lower = kind.to_ascii_lowercase();
-                    // Include agent tools as "self-dominated" - they're actively executing
-                    kind_lower == "bash" || kind_lower == "exec_command"
-                        || kind_lower == "agent" || kind_lower == "task" || kind_lower == "mcp"
-                })
-                .unwrap_or(false);
-        !dominated_by_self
-    } else {
-        !pending_calls.is_empty()
-    };
-
-    let executing_command = last_action
-        .as_ref()
-        .map(|action| {
-            let kind_lower = action.kind.to_ascii_lowercase();
-            kind_lower == "bash" || kind_lower == "exec_command"
-        })
-        .unwrap_or(false)
-        && !pending_calls.is_empty();
-
-    let executing_agent = last_action
-        .as_ref()
-        .map(|action| {
-            let kind_lower = action.kind.to_ascii_lowercase();
-            kind_lower == "agent" || kind_lower == "task" || kind_lower == "mcp"
-        })
-        .unwrap_or(false)
-        && !pending_calls.is_empty();
 
     RuntimeProbe {
         session_id,
         last_event_ts,
         last_action,
-        recent_actions,
-        permission_blocked,
-        executing_command,
-        executing_agent,
         usage_samples,
     }
 }
@@ -760,44 +576,6 @@ fn read_tail_lines(path: &Path, max_lines: usize) -> Vec<String> {
     lines
 }
 
-pub(crate) fn action_loop_detected(actions: &[ActionEvent]) -> bool {
-    if actions.len() < LOOP_WINDOW {
-        return false;
-    }
-
-    let window: Vec<&ActionEvent> = actions.iter().rev().take(LOOP_WINDOW).collect();
-
-    let mut unique = HashSet::new();
-    for action in &window {
-        unique.insert(action.signature_key());
-    }
-    if unique.len() > 2 {
-        return false;
-    }
-
-    let now = Utc::now();
-    window.iter().all(|action| {
-        action
-            .ts
-            .as_deref()
-            .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
-            .map(|ts| {
-                now.signed_duration_since(ts.with_timezone(&Utc))
-                    .num_seconds()
-                    <= 300
-            })
-            .unwrap_or(false)
-    })
-}
-
-pub(crate) fn facts_loop_detected(facts: &[Fact]) -> bool {
-    let actions = facts
-        .iter()
-        .filter_map(fact_to_action)
-        .collect::<Vec<ActionEvent>>();
-    action_loop_detected(&actions)
-}
-
 pub(crate) fn latest_action_from_facts(facts: &[Fact]) -> Option<ActionEvent> {
     facts.iter().rev().find_map(fact_to_action)
 }
@@ -834,33 +612,6 @@ fn fact_to_action(fact: &Fact) -> Option<ActionEvent> {
 
 pub(crate) fn format_action(kind: &str, summary: &str) -> String {
     format!("{kind}: {summary}")
-}
-
-pub(crate) fn context_limit_tokens(engine: Engine, model: Option<&str>) -> i64 {
-    let model_lower = model.unwrap_or_default().to_ascii_lowercase();
-    if model_lower.contains("claude") {
-        return 200_000;
-    }
-    if model_lower.contains("codex") {
-        return 128_000;
-    }
-
-    match engine {
-        Engine::Claude => 200_000,
-        Engine::Codex => 128_000,
-    }
-}
-
-pub(crate) fn pct_used(used_tokens: i64, limit_tokens: i64) -> f64 {
-    if limit_tokens <= 0 || used_tokens < 0 {
-        return -1.0; // I33: Unknown — no usage data or invalid limit.
-    }
-    if used_tokens == 0 {
-        return 0.0; // Zero usage should be 0%, not -1%
-    }
-    let pct = (used_tokens as f64 / limit_tokens as f64) * 100.0;
-    // Clamp to 0.0..=100.0 with ONE line
-    round1(pct.clamp(0.0, 100.0))
 }
 
 pub(crate) fn parse_ts(ts: &str) -> Option<DateTime<Utc>> {
@@ -947,13 +698,11 @@ fn print_active_tree(sessions: &[ActiveOutput], flat: bool) {
     // Fleet summary header.
     let mut active_count = 0usize;
     let mut idle_count = 0usize;
-    let mut stuck_count = 0usize;
     let mut starting_count = 0usize;
     for s in sessions {
         match s.status {
             SessionStatus::Active => active_count += 1,
             SessionStatus::Idle => idle_count += 1,
-            SessionStatus::Stuck => stuck_count += 1,
             SessionStatus::Starting => starting_count += 1,
             _ => {}
         }
@@ -964,9 +713,6 @@ fn print_active_tree(sessions: &[ActiveOutput], flat: bool) {
     }
     if idle_count > 0 {
         fleet_parts.push(format!("{idle_count} idle"));
-    }
-    if stuck_count > 0 {
-        fleet_parts.push(format!("{stuck_count} stuck"));
     }
     if starting_count > 0 {
         fleet_parts.push(format!("{starting_count} starting"));
@@ -991,11 +737,6 @@ fn format_session_line(s: &ActiveOutput, indent: &str) -> String {
     let engine = format!("{:6}", s.engine.to_string());
     let status = format!("{:8}", s.status.to_string());
     let duration = format!("{:>6}", format_duration(s.uptime_secs as i64));
-    let ctx = if s.context_pct < 0.0 {
-        format!("{:>4} ctx", "-")
-    } else {
-        format!("{:>4.0}% ctx", s.context_pct)
-    };
 
     let summary_part = s
         .summary
@@ -1010,7 +751,7 @@ fn format_session_line(s: &ActiveOutput, indent: &str) -> String {
     };
 
     format!(
-        "{indent}{id}  {engine}  {status}  {duration}  {ctx}{summary_part}{pids_part}"
+        "{indent}{id}  {engine}  {status}  {duration}{summary_part}{pids_part}"
     )
 }
 
@@ -1021,10 +762,8 @@ fn print_flat_table(sessions: &[ActiveOutput]) {
         "Engine",
         "Status",
         "Duration",
-        "Ctx%",
         "Summary",
         "Last Action",
-        "Stuck",
         "CWD",
     ];
 
@@ -1035,11 +774,6 @@ fn print_flat_table(sessions: &[ActiveOutput]) {
             let engine = format!("{}", s.engine);
             let status = s.status.to_string();
             let duration = format_duration(s.uptime_secs as i64);
-            let ctx = if s.context_pct < 0.0 {
-                "-".to_string()
-            } else {
-                format!("{:.0}%", s.context_pct)
-            };
 
             let summary = s
                 .summary
@@ -1053,41 +787,13 @@ fn print_flat_table(sessions: &[ActiveOutput]) {
                 .map(|a| truncate(a, 40))
                 .unwrap_or_else(|| "-".to_string());
 
-            let stuck = stuck_reason(
-                &s.stuck_signals,
-                &s.status,
-                s.stuck_signals.stuck_silence_secs,
-            );
-
             let cwd = truncate_cwd(&s.cwd, 2);
 
-            vec![id, engine, status, duration, ctx, summary, last_action, stuck, cwd]
+            vec![id, engine, status, duration, summary, last_action, cwd]
         })
         .collect();
 
     print_table(&headers, &rows);
-}
-
-/// Derive a short stuck-reason label from signals and status.
-fn stuck_reason(
-    signals: &ActiveStuckSignals,
-    status: &SessionStatus,
-    stuck_silence_secs: u64,
-) -> String {
-    if !matches!(status, SessionStatus::Stuck) {
-        return "-".to_string();
-    }
-    if signals.permission_blocked {
-        return "permission".to_string();
-    }
-    if signals.loop_detected {
-        return "loop".to_string();
-    }
-    if signals.silence_secs >= stuck_silence_secs {
-        return format!("silence ({}s)", signals.silence_secs);
-    }
-    // context_pct >= 95% is the remaining trigger
-    "context".to_string()
 }
 
 /// Truncate a path to its last `n` components for readability.

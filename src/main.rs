@@ -34,9 +34,6 @@ enum Commands {
         /// Substring match on working directory.
         #[arg(long)]
         cwd: Option<String>,
-        /// Sessions needing attention (stuck + long idle).
-        #[arg(long)]
-        stuck: bool,
         /// Filter by tag (repeatable, AND logic).
         #[arg(long)]
         tag: Vec<String>,
@@ -366,7 +363,6 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             since,
             before,
             cwd,
-            stuck,
             tag,
             sort,
             limit,
@@ -379,7 +375,6 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 since,
                 before,
                 cwd,
-                stuck,
                 tag,
                 sort: Some(convert_ls_sort(sort)),
                 limit: usize_to_i64("limit", limit)?,
@@ -588,13 +583,12 @@ fn convert_ls_statuses(
         let parsed = match normalized.as_str() {
             "active" => gaal::commands::ls::LsStatus::Active,
             "idle" => gaal::commands::ls::LsStatus::Idle,
-            "stuck" => gaal::commands::ls::LsStatus::Stuck,
             "completed" => gaal::commands::ls::LsStatus::Completed,
             "failed" => gaal::commands::ls::LsStatus::Failed,
             "unknown" => gaal::commands::ls::LsStatus::Unknown,
             _ => {
                 return Err(GaalError::ParseError(format!(
-                    "invalid --status value `{raw}` (expected active|idle|stuck|completed|failed|unknown)"
+                    "invalid --status value `{raw}` (expected active|idle|completed|failed|unknown)"
                 )));
             }
         };

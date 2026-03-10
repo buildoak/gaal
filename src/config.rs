@@ -3,8 +3,6 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::parser::types::Engine;
-
 /// Root Gaal configuration loaded from `~/.gaal/config.toml`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -17,8 +15,6 @@ pub struct GaalConfig {
     /// Agent multiplexer executable settings.
     #[serde(rename = "agent-mux")]
     pub agent_mux: AgentMuxConfig,
-    /// Stuck-session thresholds.
-    pub stuck: StuckConfig,
     /// Default output directory for session markdown files.
     /// Used by `index backfill` when `--output-dir` is not specified.
     pub markdown_output_dir: Option<PathBuf>,
@@ -77,44 +73,6 @@ impl Default for AgentMuxConfig {
     fn default() -> Self {
         Self {
             path: "agent-mux".to_string(),
-        }
-    }
-}
-
-/// Thresholds for stuck-session detection.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct StuckConfig {
-    /// Silence threshold in seconds before a session is considered stuck.
-    pub silence_secs: u64,
-    /// Optional Claude-specific silence threshold override.
-    pub claude_silence_secs: Option<u64>,
-    /// Optional Codex-specific silence threshold override.
-    pub codex_silence_secs: Option<u64>,
-    /// Optional future override for action-loop window size.
-    pub loop_window: Option<usize>,
-    /// Optional future override for minimum-unique action threshold.
-    pub loop_min_unique: Option<usize>,
-}
-
-impl StuckConfig {
-    pub fn silence_for_engine(&self, engine: Option<Engine>) -> u64 {
-        match engine {
-            Some(Engine::Claude) => self.claude_silence_secs.unwrap_or(self.silence_secs),
-            Some(Engine::Codex) => self.codex_silence_secs.unwrap_or(self.silence_secs),
-            None => self.silence_secs,
-        }
-    }
-}
-
-impl Default for StuckConfig {
-    fn default() -> Self {
-        Self {
-            silence_secs: 300,
-            claude_silence_secs: Some(300),  // 5 minutes for Claude
-            codex_silence_secs: Some(600),   // 10 minutes for Codex (builds take longer)
-            loop_window: None,
-            loop_min_unique: None,
         }
     }
 }
