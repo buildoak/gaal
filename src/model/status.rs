@@ -19,6 +19,8 @@ pub enum SessionStatus {
     Completed,
     /// Session ended with failure conditions.
     Failed,
+    /// Session was killed or crashed without clean exit.
+    Interrupted,
     /// Status could not be determined.
     Unknown,
 }
@@ -31,6 +33,7 @@ impl fmt::Display for SessionStatus {
             Self::Stuck => "stuck",
             Self::Completed => "completed",
             Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
             Self::Unknown => "unknown",
         })
     }
@@ -46,6 +49,7 @@ impl FromStr for SessionStatus {
             "stuck" => Ok(Self::Stuck),
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
+            "interrupted" => Ok(Self::Interrupted),
             "unknown" => Ok(Self::Unknown),
             other => Err(GaalError::ParseError(format!(
                 "invalid session status: {other}"
@@ -82,6 +86,9 @@ pub struct StatusParams<'a> {
     pub permission_blocked: bool,
     pub stuck_silence_secs: u64,
     pub executing_command: bool,
+    /// True when the last action is an Agent tool dispatch waiting for subagent completion.
+    pub executing_agent: bool,
+    pub cpu_pct: f64,
 }
 
 pub fn compute_session_status(params: &StatusParams<'_>) -> SessionStatus {
@@ -93,20 +100,42 @@ pub fn compute_session_status(params: &StatusParams<'_>) -> SessionStatus {
     }
 
     if !params.pid_alive {
-        return SessionStatus::Unknown;
+        // Process is dead but no ended_at was set — session was killed or crashed.
+        if params.exit_signal.is_some() {
+            if is_failed_exit(params.exit_signal) {
+                return SessionStatus::Failed;
+            }
+            return SessionStatus::Completed;
+        }
+        // No exit signal, no ended_at — interrupted (killed mid-stream).
+        return SessionStatus::Interrupted;
     }
 
-    let effective_silence = if params.executing_command {
+    // CPU-awareness: if process CPU > 1%, it's working, not stuck
+    if params.cpu_pct > 1.0 {
+        if params.silence_secs >= IDLE_SECS {
+            return SessionStatus::Idle;
+        } else {
+            return SessionStatus::Active;
+        }
+    }
+
+    // Extend silence tolerance when executing a command (build in progress)
+    // or waiting for a subagent (Agent tool dispatch).
+    let effective_silence = if params.executing_command || params.executing_agent {
         params.stuck_silence_secs.saturating_mul(3)
     } else {
         params.stuck_silence_secs
     };
     let silence_stuck = params.silence_secs >= effective_silence && !params.permission_blocked;
-    if silence_stuck
-        || params.loop_detected
-        || params.context_pct >= 95.0
-        || params.permission_blocked
-    {
+
+    // Don't mark as stuck if context percentage alone is the trigger - high context is normal
+    let context_only_stuck = params.context_pct >= 95.0
+        && !silence_stuck
+        && !params.loop_detected
+        && !params.permission_blocked;
+
+    if (silence_stuck || params.loop_detected || params.permission_blocked) && !context_only_stuck {
         SessionStatus::Stuck
     } else if params.silence_secs >= IDLE_SECS {
         SessionStatus::Idle

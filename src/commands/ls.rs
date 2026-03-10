@@ -13,7 +13,7 @@ use crate::commands::active::{
 use crate::config::load_config;
 use crate::db::open_db_readonly;
 use crate::db::queries::{self, ListFilter, SessionRow};
-use crate::discovery::active::{find_active_sessions, is_pid_alive};
+use crate::discovery::active::{find_active_sessions, is_pid_alive, probe_pid};
 use crate::error::GaalError;
 use crate::model::{compute_session_status, SessionStatus, StatusParams, TokenUsage, IDLE_SECS};
 use crate::output::human::{format_duration, format_timestamp, format_tokens, print_table};
@@ -72,6 +72,7 @@ pub enum LsStatus {
     Stuck,
     Completed,
     Failed,
+    Interrupted,
     Unknown,
 }
 
@@ -309,8 +310,9 @@ fn db_status_prefilter(statuses: &HashSet<LsStatus>) -> Option<Vec<String>> {
             LsStatus::Failed => {
                 out.insert("failed".to_string());
             }
-            LsStatus::Active | LsStatus::Idle | LsStatus::Stuck | LsStatus::Unknown => {
+            LsStatus::Active | LsStatus::Idle | LsStatus::Stuck | LsStatus::Unknown | LsStatus::Interrupted => {
                 out.insert("unknown".to_string());
+                out.insert("interrupted".to_string());
             }
         }
     }
@@ -482,10 +484,12 @@ fn status_params_for_row<'a>(
             permission_blocked: false,
             stuck_silence_secs,
             executing_command: false,
+            executing_agent: false,
+            cpu_pct: 0.0,
         };
     }
 
-    let (silence_secs, loop_detected, context_pct, permission_blocked, executing_command) =
+    let (silence_secs, loop_detected, context_pct, permission_blocked, executing_command, executing_agent) =
         if let Some(engine) = parse_engine(&row.engine) {
             let runtime = probe_runtime(Path::new(&row.jsonl_path), engine, STATUS_TAIL_LINES);
             let silence_secs = runtime
@@ -498,6 +502,7 @@ fn status_params_for_row<'a>(
             let loop_detected = action_loop_detected(&runtime.recent_actions);
             let permission_blocked = runtime.permission_blocked;
             let executing_command = runtime.executing_command;
+            let executing_agent = runtime.executing_agent;
 
             let tokens_used = (row.total_input_tokens + row.total_output_tokens).max(0);
             let tokens_limit = context_limit_tokens(engine, row.model.as_deref());
@@ -508,6 +513,7 @@ fn status_params_for_row<'a>(
                 context_pct,
                 permission_blocked,
                 executing_command,
+                executing_agent,
             )
         } else {
             let silence_secs = row
@@ -516,8 +522,10 @@ fn status_params_for_row<'a>(
                 .and_then(parse_timestamp)
                 .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
                 .unwrap_or(0);
-            (silence_secs, false, 0.0, false, false)
+            (silence_secs, false, 0.0, false, false, false)
         };
+
+    let cpu_pct = pid.and_then(probe_pid).map(|info| info.cpu_pct).unwrap_or(0.0);
 
     StatusParams {
         ended_at: row.ended_at.as_deref(),
@@ -529,6 +537,8 @@ fn status_params_for_row<'a>(
         permission_blocked,
         stuck_silence_secs,
         executing_command,
+        executing_agent,
+        cpu_pct,
     }
 }
 
@@ -561,6 +571,7 @@ fn matches_status_filter(status: &SessionStatus, requested: &HashSet<LsStatus>) 
         SessionStatus::Stuck => LsStatus::Stuck,
         SessionStatus::Completed => LsStatus::Completed,
         SessionStatus::Failed => LsStatus::Failed,
+        SessionStatus::Interrupted => LsStatus::Interrupted,
         SessionStatus::Unknown => LsStatus::Unknown,
     };
     requested.contains(&comparable)

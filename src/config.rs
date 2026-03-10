@@ -111,8 +111,8 @@ impl Default for StuckConfig {
     fn default() -> Self {
         Self {
             silence_secs: 300,
-            claude_silence_secs: None,
-            codex_silence_secs: None,
+            claude_silence_secs: Some(300),  // 5 minutes for Claude
+            codex_silence_secs: Some(600),   // 10 minutes for Codex (builds take longer)
             loop_window: None,
             loop_min_unique: None,
         }

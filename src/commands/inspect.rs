@@ -413,6 +413,8 @@ fn inspect_live(
         permission_blocked,
         stuck_silence_secs,
         executing_command: runtime.executing_command,
+        executing_agent: runtime.executing_agent,
+        cpu_pct: active.process.cpu_pct,
     });
 
     let uptime_secs = row
@@ -779,6 +781,8 @@ fn archived_status(
         permission_blocked: false,
         stuck_silence_secs,
         executing_command: false,
+        executing_agent: false,
+        cpu_pct: 0.0,
     })
 }
 

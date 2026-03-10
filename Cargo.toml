@@ -18,6 +18,7 @@ tantivy = "0.22"
 toml = "0.8"
 dirs = "5"
 regex = "1"
+libproc = "0.14"
 
 [profile.release]
 lto = true

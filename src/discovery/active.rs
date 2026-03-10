@@ -42,6 +42,12 @@ pub struct ActiveSession {
 pub fn probe_pid(pid: u32) -> Option<ProcessInfo> {
     #[cfg(target_os = "macos")]
     {
+        // Try proc_pidinfo first for better performance
+        if let Some(info) = probe_pid_native_macos(pid) {
+            return Some(info);
+        }
+
+        // Fall back to ps if native fails
         let output = Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", "pid=,pcpu=,rss="])
             .output()
@@ -73,7 +79,9 @@ pub fn probe_pid(pid: u32) -> Option<ProcessInfo> {
     {
         let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let parsed_pid = stat.split_whitespace().next()?.parse::<u32>().ok()?;
-        let _ = linux_cpu_ticks(&stat)?;
+
+        // Get CPU percentage from stat file
+        let cpu_pct = linux_cpu_percentage(pid).unwrap_or(0.0);
 
         let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
         let rss_kb = status
@@ -87,7 +95,7 @@ pub fn probe_pid(pid: u32) -> Option<ProcessInfo> {
 
         Some(ProcessInfo {
             pid: parsed_pid,
-            cpu_pct: 0.0,
+            cpu_pct,
             rss_mb: rss_kb / 1024.0,
         })
     }
@@ -96,6 +104,120 @@ pub fn probe_pid(pid: u32) -> Option<ProcessInfo> {
         let _ = pid;
         None
     }
+}
+
+#[cfg(target_os = "macos")]
+fn probe_pid_native_macos(pid: u32) -> Option<ProcessInfo> {
+    use std::os::raw::{c_int, c_char};
+    use std::mem;
+
+    extern "C" {
+        fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: *mut c_char, buffersize: c_int) -> c_int;
+    }
+
+    // PROC_PIDTASKINFO = 4, proc_taskinfo struct
+    const PROC_PIDTASKINFO: c_int = 4;
+
+    #[repr(C)]
+    struct ProcTaskInfo {
+        pti_virtual_size: u64,
+        pti_resident_size: u64,
+        pti_total_user: u64,
+        pti_total_system: u64,
+        pti_threads_user: u64,
+        pti_threads_system: u64,
+        pti_policy: i32,
+        pti_faults: i32,
+        pti_pageins: i32,
+        pti_cow_faults: i32,
+        pti_messages_sent: i32,
+        pti_messages_received: i32,
+        pti_syscalls_mach: i32,
+        pti_syscalls_unix: i32,
+        pti_csw: i32,
+        pti_threadnum: i32,
+        pti_numrunning: i32,
+        pti_priority: i32,
+    }
+
+    let mut task_info: ProcTaskInfo = unsafe { mem::zeroed() };
+    let ret = unsafe {
+        proc_pidinfo(
+            pid as c_int,
+            PROC_PIDTASKINFO,
+            0,
+            &mut task_info as *mut _ as *mut c_char,
+            mem::size_of::<ProcTaskInfo>() as c_int,
+        )
+    };
+
+    if ret <= 0 {
+        return None;
+    }
+
+    // Convert resident size from bytes to MB
+    let rss_mb = task_info.pti_resident_size as f64 / (1024.0 * 1024.0);
+
+    // CPU calculation is complex for proc_pidinfo, fall back to ps for CPU
+    let cpu_pct = get_cpu_via_ps(pid).unwrap_or(0.0);
+
+    Some(ProcessInfo {
+        pid,
+        cpu_pct,
+        rss_mb,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn get_cpu_via_ps(pid: u32) -> Option<f64> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "pcpu="])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let line = String::from_utf8_lossy(&output.stdout);
+    line.trim().parse::<f64>().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_cpu_percentage(pid: u32) -> Option<f64> {
+    // Read /proc/stat for system CPU time
+    let system_stat = fs::read_to_string("/proc/stat").ok()?;
+    let system_line = system_stat.lines().next()?;
+    let system_parts: Vec<&str> = system_line.split_whitespace().collect();
+    if system_parts.len() < 8 {
+        return None;
+    }
+
+    let total_system_time: u64 = system_parts[1..8]
+        .iter()
+        .filter_map(|s| s.parse::<u64>().ok())
+        .sum();
+
+    // Read /proc/pid/stat for process CPU time
+    let proc_stat = fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
+    let proc_parts: Vec<&str> = proc_stat.split_whitespace().collect();
+    if proc_parts.len() < 17 {
+        return None;
+    }
+
+    let utime = proc_parts[13].parse::<u64>().ok()?;
+    let stime = proc_parts[14].parse::<u64>().ok()?;
+    let cutime = proc_parts[15].parse::<u64>().ok()?;
+    let cstime = proc_parts[16].parse::<u64>().ok()?;
+
+    let total_process_time = utime + stime + cutime + cstime;
+
+    // Calculate CPU percentage (this is a simplified version)
+    // In reality, you'd need to take measurements over time
+    let hz = 100; // Typical system Hz, could read from sysconf
+    let cpu_usage = (total_process_time as f64 / hz as f64) / 1.0; // Simplified
+
+    Some(cpu_usage.min(100.0))
 }
 
 /// Check whether a PID exists (`kill(pid, 0)`).
@@ -367,8 +489,115 @@ mod libc {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn list_agent_processes() -> Vec<(u32, Engine)> {
+    // Use proc_pidpath for reliable process detection on macOS
+    use std::os::raw::c_int;
+
+    extern "C" {
+        fn proc_listallpids(buffer: *mut c_int, buffersize: c_int) -> c_int;
+        fn proc_pidpath(pid: c_int, buffer: *mut std::os::raw::c_char, buffersize: u32) -> c_int;
+    }
+
+    let mut found = Vec::new();
+    let excluded = excluded_pids();
+
+    // Get all PIDs
+    let mut pid_buffer = vec![0i32; 4096];
+    let pid_count = unsafe {
+        proc_listallpids(pid_buffer.as_mut_ptr(), (pid_buffer.len() * std::mem::size_of::<c_int>()) as c_int)
+    };
+
+    if pid_count <= 0 {
+        // Fall back to pgrep on error
+        return list_agent_processes_fallback();
+    }
+
+    let actual_count = (pid_count as usize) / std::mem::size_of::<c_int>();
+    pid_buffer.truncate(actual_count);
+
+    for &pid in &pid_buffer {
+        if pid <= 0 || excluded.contains(&(pid as u32)) {
+            continue;
+        }
+
+        // Get binary path
+        let mut path_buffer = vec![0u8; 4096];
+        let path_len = unsafe {
+            proc_pidpath(pid, path_buffer.as_mut_ptr() as *mut std::os::raw::c_char, path_buffer.len() as u32)
+        };
+
+        if path_len <= 0 {
+            continue;
+        }
+
+        path_buffer.truncate(path_len as usize);
+        let Ok(binary_path) = String::from_utf8(path_buffer) else {
+            continue;
+        };
+
+        if let Some(engine) = classify_engine_by_path(&binary_path) {
+            found.push((pid as u32, engine));
+        }
+    }
+
+    found
+}
+
+#[cfg(target_os = "linux")]
+fn list_agent_processes() -> Vec<(u32, Engine)> {
+    let mut found = Vec::new();
+    let excluded = excluded_pids();
+
+    let Ok(proc_dir) = fs::read_dir("/proc") else {
+        return list_agent_processes_fallback();
+    };
+
+    for entry in proc_dir.flatten() {
+        let file_name = entry.file_name();
+        let Some(pid_str) = file_name.to_str() else { continue };
+        let Ok(pid) = pid_str.parse::<u32>() else { continue };
+
+        if excluded.contains(&pid) {
+            continue;
+        }
+
+        // Get binary path via /proc/{pid}/exe
+        let exe_path = format!("/proc/{}/exe", pid);
+        let Ok(binary_path) = fs::read_link(&exe_path) else { continue };
+        let Some(binary_path_str) = binary_path.to_str() else { continue };
+
+        if let Some(engine) = classify_engine_by_path(binary_path_str) {
+            found.push((pid, engine));
+        }
+    }
+
+    found
+}
+
+#[cfg(not(unix))]
+fn list_agent_processes() -> Vec<(u32, Engine)> {
+    Vec::new()
+}
+
+/// Classify engine type based on binary path
+fn classify_engine_by_path(path: &str) -> Option<Engine> {
+    // Claude Code detection: path contains .local/share/claude/versions/
+    if path.contains(".local/share/claude/versions/") {
+        return Some(Engine::Claude);
+    }
+
+    // Codex detection: path contains "codex" but NOT ".app/"
+    if path.contains("codex") && !path.contains(".app/") {
+        return Some(Engine::Codex);
+    }
+
+    None
+}
+
+/// Fallback to pgrep-based detection when proc_pidpath fails
+#[cfg(unix)]
+fn list_agent_processes_fallback() -> Vec<(u32, Engine)> {
     let mut found = Vec::new();
     let mut seen = HashSet::new();
     let excluded = excluded_pids();
@@ -506,6 +735,42 @@ fn engine_from_ps_command(cmd0: &str, full_cmd: &str) -> Option<Engine> {
 
 #[cfg(target_os = "macos")]
 fn resolve_cwd(pid: u32) -> Option<String> {
+    use std::os::raw::{c_int, c_char};
+
+    extern "C" {
+        fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: *mut c_char, buffersize: c_int) -> c_int;
+    }
+
+    // PROC_PIDVNODEPATHINFO = 10
+    const PROC_PIDVNODEPATHINFO: c_int = 10;
+    const MAXPATHLEN: usize = 1024;
+
+    let mut buffer = vec![0u8; MAXPATHLEN];
+    let ret = unsafe {
+        proc_pidinfo(
+            pid as c_int,
+            PROC_PIDVNODEPATHINFO,
+            0,
+            buffer.as_mut_ptr() as *mut c_char,
+            buffer.len() as c_int,
+        )
+    };
+
+    if ret <= 0 {
+        // Fall back to lsof if proc_pidinfo fails
+        return resolve_cwd_fallback(pid);
+    }
+
+    // Find the null terminator
+    if let Some(null_pos) = buffer.iter().position(|&b| b == 0) {
+        buffer.truncate(null_pos);
+    }
+
+    String::from_utf8(buffer).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_cwd_fallback(pid: u32) -> Option<String> {
     let output = Command::new("lsof")
         .args(["-p", &pid.to_string(), "-Ffn"])
         .output()

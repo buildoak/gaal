@@ -74,6 +74,8 @@ pub(crate) struct RuntimeProbe {
     pub recent_actions: Vec<ActionEvent>,
     pub permission_blocked: bool,
     pub executing_command: bool,
+    /// True when the last action is an Agent/Task tool dispatch waiting for subagent completion.
+    pub executing_agent: bool,
     pub usage_samples: Vec<UsageSample>,
 }
 
@@ -221,6 +223,8 @@ fn build_active_row(
         permission_blocked,
         stuck_silence_secs,
         executing_command: runtime.executing_command,
+        executing_agent: runtime.executing_agent,
+        cpu_pct: session.process.cpu_pct,
     });
 
     let last_action_event = runtime.last_action.clone().or_else(|| {
@@ -425,6 +429,15 @@ pub(crate) fn probe_runtime(path: &Path, engine: Engine, max_lines: usize) -> Ru
         .unwrap_or(false)
         && !pending_calls.is_empty();
 
+    let executing_agent = last_action
+        .as_ref()
+        .map(|action| {
+            let kind_lower = action.kind.to_ascii_lowercase();
+            kind_lower == "agent" || kind_lower == "task" || kind_lower == "mcp"
+        })
+        .unwrap_or(false)
+        && !pending_calls.is_empty();
+
     RuntimeProbe {
         session_id,
         last_event_ts,
@@ -432,6 +445,7 @@ pub(crate) fn probe_runtime(path: &Path, engine: Engine, max_lines: usize) -> Ru
         recent_actions,
         permission_blocked,
         executing_command,
+        executing_agent,
         usage_samples,
     }
 }

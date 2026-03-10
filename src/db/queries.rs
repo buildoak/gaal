@@ -903,6 +903,8 @@ fn status_from_fields(
         permission_blocked: false,
         stuck_silence_secs,
         executing_command: false,
+        executing_agent: false,
+        cpu_pct: 0.0,
     })
 }
 
@@ -913,6 +915,7 @@ fn session_status_label(row: &SessionRow) -> &'static str {
         SessionStatus::Stuck => "stuck",
         SessionStatus::Completed => "completed",
         SessionStatus::Failed => "failed",
+        SessionStatus::Interrupted => "interrupted",
         SessionStatus::Unknown => "unknown",
     }
 }

@@ -12,11 +12,12 @@ use crate::commands::active::{
     action_loop_detected, context_limit_tokens, pct_used, probe_runtime,
 };
 use crate::config::{load_config, StuckConfig};
-use crate::db::open_db_readonly;
+use crate::db::{open_db, open_db_readonly};
 use crate::db::queries::{
     count_children, get_children, get_facts, get_handoff, get_session, get_tags, SessionRow,
 };
-use crate::discovery::active::{find_active_sessions, is_pid_alive};
+use crate::commands::index::{index_discovered_session, IndexOutcome};
+use crate::discovery::active::{find_active_sessions, is_pid_alive, probe_pid};
 use crate::error::GaalError;
 use crate::model::{
     compute_session_status, CommandEntry, ErrorEntry, Fact, FactType, FileOps, GitOp,
@@ -142,7 +143,18 @@ struct LivePidIndex {
 /// Execute the `gaal show` command.
 pub fn run(args: ShowArgs) -> Result<(), GaalError> {
     let conn = open_db_readonly()?;
-    let session_rows = resolve_sessions(&conn, &args)?;
+    let session_rows = match resolve_sessions(&conn, &args) {
+        Ok(rows) => rows,
+        Err(GaalError::NotFound(ref id)) => {
+            // Session not in DB — check if it's an active (un-indexed) session.
+            if let Some(rows) = try_index_active_session(id) {
+                rows
+            } else {
+                return Err(GaalError::NotFound(id.clone()));
+            }
+        }
+        Err(err) => return Err(err),
+    };
 
     // Handle --markdown: render JSONL to markdown directly.
     if args.markdown {
@@ -786,6 +798,7 @@ fn status_from_row(
         SessionStatus::Stuck => "stuck",
         SessionStatus::Completed => "completed",
         SessionStatus::Failed => "failed",
+        SessionStatus::Interrupted => "interrupted",
         SessionStatus::Unknown => "unknown",
     }
 }
@@ -808,10 +821,12 @@ fn status_params_for_row<'a>(
             permission_blocked: false,
             stuck_silence_secs,
             executing_command: false,
+            executing_agent: false,
+            cpu_pct: 0.0,
         };
     }
 
-    let (silence_secs, loop_detected, context_pct, permission_blocked, executing_command) =
+    let (silence_secs, loop_detected, context_pct, permission_blocked, executing_command, executing_agent) =
         if let Some(engine) = parse_engine(&row.engine) {
             let runtime = probe_runtime(Path::new(&row.jsonl_path), engine, STATUS_TAIL_LINES);
             let silence_secs = runtime
@@ -824,6 +839,7 @@ fn status_params_for_row<'a>(
             let loop_detected = action_loop_detected(&runtime.recent_actions);
             let permission_blocked = runtime.permission_blocked;
             let executing_command = runtime.executing_command;
+            let executing_agent = runtime.executing_agent;
 
             let tokens_used = (row.total_input_tokens + row.total_output_tokens).max(0);
             let tokens_limit = context_limit_tokens(engine, row.model.as_deref());
@@ -834,6 +850,7 @@ fn status_params_for_row<'a>(
                 context_pct,
                 permission_blocked,
                 executing_command,
+                executing_agent,
             )
         } else {
             let silence_secs = row
@@ -842,8 +859,10 @@ fn status_params_for_row<'a>(
                 .and_then(parse_ts)
                 .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
                 .unwrap_or(0);
-            (silence_secs, false, 0.0, false, false)
+            (silence_secs, false, 0.0, false, false, false)
         };
+
+    let cpu_pct = pid.and_then(probe_pid).map(|info| info.cpu_pct).unwrap_or(0.0);
 
     StatusParams {
         ended_at: row.ended_at.as_deref(),
@@ -855,6 +874,8 @@ fn status_params_for_row<'a>(
         permission_blocked,
         stuck_silence_secs,
         executing_command,
+        executing_agent,
+        cpu_pct,
     }
 }
 
@@ -1055,4 +1076,123 @@ fn truncate(value: &str, max: usize) -> String {
         return value.to_string();
     }
     value.chars().take(max).collect::<String>()
+}
+
+/// Attempt to find an active (un-indexed) session and index it on-the-fly.
+///
+/// When `gaal show <id>` returns NotFound from the DB, this checks if the session
+/// is currently running (discovered by `find_active_sessions`). If found, indexes
+/// the JSONL on-the-fly and returns the DB row.
+fn try_index_active_session(id: &str) -> Option<Vec<SessionRow>> {
+    use crate::discovery::{discover_sessions, DiscoveredSession};
+
+    // Check active sessions for a matching ID prefix.
+    let active_sessions = find_active_sessions().ok()?;
+    let matched = active_sessions
+        .iter()
+        .find(|s| {
+            s.id.as_ref()
+                .map(|sid| sid.starts_with(id) || id.starts_with(sid.as_str()))
+                .unwrap_or(false)
+        });
+
+    if let Some(active) = matched {
+        let jsonl_path = active.jsonl_path.as_ref()?;
+        let meta = std::fs::metadata(jsonl_path).ok()?;
+        let engine = active.engine.clone();
+        let session_id = active.id.as_ref()?;
+        let short_id = truncate_session_id(session_id, &engine);
+
+        let discovered = DiscoveredSession {
+            id: short_id.clone(),
+            engine,
+            path: jsonl_path.clone(),
+            model: None,
+            cwd: Some(active.cwd.clone()),
+            started_at: None,
+            file_size: meta.len(),
+        };
+
+        let mut conn = open_db().ok()?;
+        match index_discovered_session(&mut conn, &discovered, true) {
+            Ok(IndexOutcome::Indexed) => {
+                eprintln!("[live -- indexed on-the-fly] Session {short_id}");
+            }
+            Ok(IndexOutcome::Skipped) => {
+                eprintln!("[live -- already indexed] Session {short_id}");
+            }
+            Err(err) => {
+                eprintln!("On-the-fly indexing failed: {err}");
+                return None;
+            }
+        }
+
+        // Re-open read-only and resolve.
+        let conn = open_db_readonly().ok()?;
+        let rows = find_session_ids_by_prefix(&conn, &short_id).ok()?;
+        if rows.is_empty() {
+            return None;
+        }
+        let mut result = Vec::new();
+        for row_id in rows {
+            if let Ok(row) = load_session_by_exact_id(&conn, &row_id) {
+                result.push(row);
+            }
+        }
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    } else {
+        // Also check discovered (on-disk but not active) sessions.
+        let discovered = discover_sessions(None).ok()?;
+        let matched = discovered
+            .iter()
+            .find(|s| s.id.starts_with(id) || id.starts_with(&s.id));
+
+        let session = matched?;
+        let short_id = session.id.clone();
+
+        let mut conn = open_db().ok()?;
+        match index_discovered_session(&mut conn, session, true) {
+            Ok(IndexOutcome::Indexed) => {
+                eprintln!("[not yet indexed -- indexed on-the-fly] Session {short_id}");
+            }
+            Ok(IndexOutcome::Skipped) => {}
+            Err(err) => {
+                eprintln!("On-the-fly indexing failed: {err}");
+                return None;
+            }
+        }
+
+        let conn = open_db_readonly().ok()?;
+        let rows = find_session_ids_by_prefix(&conn, &short_id).ok()?;
+        let mut result = Vec::new();
+        for row_id in rows {
+            if let Ok(row) = load_session_by_exact_id(&conn, &row_id) {
+                result.push(row);
+            }
+        }
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+}
+
+/// Truncate a session ID to match the short-ID convention used by the indexer.
+fn truncate_session_id(raw: &str, engine: &Engine) -> String {
+    match engine {
+        Engine::Claude => raw.chars().take(8).collect(),
+        Engine::Codex => {
+            let hex: String = raw.chars().filter(|c| *c != '-').collect();
+            if hex.len() > 8 {
+                hex[hex.len() - 8..].to_string()
+            } else {
+                hex
+            }
+        }
+    }
 }

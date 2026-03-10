@@ -365,3 +365,180 @@ cannot start a transaction within a transaction
 3. Phase 2: run `link-parents` as a separate pass after all sessions are indexed
 4. Ensure Tantivy index writer is not held across transaction boundaries
 5. Add transaction-safety tests for sessions with 5+ subagent tool calls
+
+---
+
+## I18: `gaal ls` shows all sessions as "completed" [FIXED 2026-03-10]
+
+**Severity:** Medium (status field is meaningless)
+**Command:** `gaal ls -H`
+
+**Problem:** Every session in `gaal ls` output shows `status: completed` regardless of actual state. Running sessions, errored sessions, interrupted sessions — all show as completed. The status field provides zero signal.
+
+**Expected:** Status should reflect reality:
+- `running` — JSONL still being written (mtime recent, no `stop_reason`)
+- `completed` — has `stop_reason`, session ended cleanly
+- `errored` — ended with error
+- `interrupted` — killed mid-stream (truncated JSONL, `stop_reason: None`)
+
+**Investigation needed:** How is `status` determined during indexing? Is the parser extracting `stop_reason` from JSONL? Is the status field being set at all, or defaulting to "completed"?
+
+---
+
+## I19: `gaal active` false positive stuck detection [FIXED 2026-03-10]
+
+**Severity:** High (alerts on healthy sessions)
+**Command:** `gaal active -H`
+
+**Problem:** `gaal active` marks sessions as "stuck" when none are actually stuck. The stuck detection heuristics are too aggressive — legitimate long-running operations (LLM inference, large builds, agent-mux dispatch) trigger false positives.
+
+**Related:** I6 (fixed the config inconsistency but not the fundamental heuristic problem).
+
+**Expected:** Stuck detection should account for:
+- Engine-specific silence thresholds (Codex builds can legitimately run 10-20min)
+- Pending Bash tool_use without result (build/compilation in progress)
+- Agent tool_use dispatches (waiting for subagent completion)
+- Context percentage alone shouldn't mean "stuck" — high context is normal for long sessions
+
+---
+
+## I20: `gaal active` lacks session summary — unclear what each session is doing
+
+**Severity:** Medium (UX — table is just IDs and durations, no context)
+**Command:** `gaal active -H`
+
+**Problem:** The active sessions table shows ID, engine, status, duration, stuck reason, context% — but no indication of what each session is actually doing. A coordinator needs to know: "session X is working on ticket B3" or "session Y is running gaal backfill". Without a summary line, the active view requires `gaal show <id>` for each session to understand the fleet.
+
+**Expected:** Each active session should show a one-line summary derived from:
+- The session's headline (if indexed)
+- The last user prompt (most recent intent)
+- The last tool_use action (what it's currently doing)
+- CWD (which project directory)
+
+---
+
+## I21: `gaal active` needs first-principles rethink — mixed session types, subagent noise
+
+**Severity:** High (architectural — active view is unusable for fleet management)
+
+**Problem:** `gaal active` is a flat list mixing:
+- Main Claude Code coordinator sessions
+- Codex workers spawned by agent-mux
+- Claude subagents spawned by Agent tool
+- TG bot sessions
+- Background cron/daemon sessions
+
+This flat list is noise. A coordinator session spawning 5 Codex workers shows as 6 equal entries. The user wants to see: "1 coordinator with 5 workers" — a tree, not a list.
+
+**Sub-issue:** `gaal active` does NOT detect TG bot sessions. These run as persistent processes but use different session discovery patterns.
+
+**Rethink needed:**
+1. Group active sessions by hierarchy (coordinator → children)
+2. Collapse subagents under their parent by default
+3. Add TG bot session discovery (process name, JSONL path pattern)
+4. Add `--flat` flag to see the raw list when needed
+5. Default view should show only top-level sessions with child count
+
+---
+
+## I22: Active session detection logic — overfitted vs generalizable
+
+**Severity:** Medium (architecture)
+
+**Problem:** The current active session detection relies on:
+- `pgrep -x claude` / `pgrep -x codex` for process discovery
+- tmux pane scanning for session-to-terminal mapping
+- JSONL mtime for API-spawned sessions
+
+This works for our specific setup (tmux sessions with named panes) but:
+- TG bot sessions are invisible
+- Non-tmux users get no terminal mapping
+- Different process names (codex-cli, codex-rs) may be missed
+
+**Expected:** Detection should be layered:
+1. **Universal:** PID-based process discovery (works everywhere)
+2. **Universal:** JSONL mtime-based discovery (catches API sessions)
+3. **Optional:** tmux integration (enrichment, not requirement)
+4. **Extensible:** Plugin/config for custom session sources (TG bot, daemon processes)
+
+---
+
+## I23: `gaal show` with no parameters shows random session
+
+**Severity:** Low-Medium (confusing UX)
+**Command:** `gaal show` (no args)
+
+**Problem:** Running `gaal show` without specifying a session ID shows what appears to be a random session instead of returning an error or showing the most recent session.
+
+**Expected:** Either:
+1. Show the most recent session (like `gaal show latest`)
+2. Return an error: "session ID required" with usage hint
+3. Show the current session if running inside one (auto-detect via PID)
+
+Option 3 is ideal for the common case — a worker wanting to inspect its own session.
+
+---
+
+## I24: `gaal show <id>` not-found for sessions listed in `gaal active` [FIXED 2026-03-10]
+
+**Severity:** High (active sessions can't be inspected)
+**Command:** `gaal show -H f6000264` → `{"error":"not found: f6000264","exit_code":3,"ok":false}`
+
+**Problem:** A session appears in `gaal active` output but `gaal show` returns "not found". This happens because `active` discovers sessions via live process/JSONL detection, but `show` queries the SQLite index — and the session hasn't been indexed yet.
+
+**Related:** I16 (same not-found → fallback index problem, but I16 was about handoff, this is about show).
+
+**Expected:** `gaal show` should:
+1. Try the index first (fast path)
+2. If not found, check if the session's JSONL exists on disk
+3. If JSONL exists, either index on-the-fly or parse directly for a live view
+4. Only return "not found" if no JSONL file exists at all
+
+---
+
+## I25: Default gaal outputs are too token-heavy for agent consumption
+
+**Severity:** High (token waste — agents accidentally consuming thousands of tokens)
+
+**Problem:** gaal's default JSON output mode dumps everything — full fact lists, all files, all commands, all errors. When an agent runs `gaal ls` or `gaal show`, it gets a massive JSON blob that blows its context budget. A simple `gaal ls --limit 10` can return 5000+ tokens.
+
+**Expected:** Default outputs should be brief:
+- `gaal ls` default: ID, engine, status, duration, headline (one line per session)
+- `gaal show` default: summary view (headline, duration, engine, files written count, commands count) — NOT full lists
+- `gaal search` default: ID, score, matched snippet (one line per result)
+- Detailed output via `--verbose` or `--full` flag
+- Human mode (`-H`) should also be concise by default
+
+**Principle:** Every gaal command's default output should fit in ~500 tokens for typical results. Agents should never accidentally blow their context on a gaal call.
+
+---
+
+## I26: `gaal inspect -H` outputs JSON instead of human-readable format
+
+**Severity:** Medium (same pattern as I5)
+**Command:** `gaal inspect -H <id>`
+
+**Problem:** Same issue as I5 (which was about `gaal active -H`). The `-H` flag for `inspect` still outputs JSON instead of a formatted human-readable table/sections.
+
+**Expected:** `inspect -H` should show a readable health dashboard: context %, velocity, stuck signals, action summary — formatted as a table or sections, not JSON.
+
+---
+
+## I27: Automatic handoff generation — "magical" zero-friction handoffs
+
+**Severity:** Feature request (deferred — too many bugs to fix first)
+
+**Vision:** Handoffs should generate automatically without user intervention:
+- When a session ends (clean exit, `stop_reason` present), trigger handoff extraction
+- When a session has been idle > 30min and has substance (>5 turns, >10 tool calls), offer handoff
+- When context% > 90%, generate a checkpoint handoff before compaction
+- When resuming a session, auto-surface the previous handoff as reconnection context
+
+**Prerequisites:** I15 (tail coverage), I16/I17 (transaction safety), I18 (status accuracy), I24 (show for active sessions) must all be solid before this can work reliably.
+
+**Implementation ideas:**
+1. Post-exit hook: `gaal handoff --auto` triggered by session cleanup
+2. Cron-based: periodic scan of recently-ended sessions without handoffs
+3. In-session: gaal detects its own session ending and writes the handoff as a final action
+
+**Status:** Deferred until I18-I26 are resolved. Log now so the vision is captured.

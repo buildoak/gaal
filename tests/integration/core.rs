@@ -346,17 +346,17 @@ fn ls_filters_work() {
     assert!(completed_ids.contains(&codex_completed.id));
     assert!(!completed_ids.contains(&claude_active.id));
 
-    let unknown = list_sessions(
+    let interrupted = list_sessions(
         &conn,
         &ListFilter {
-            status: Some(vec!["unknown".to_string()]),
+            status: Some(vec!["interrupted".to_string()]),
             limit: Some(20),
             ..Default::default()
         },
     )
-    .expect("list unknown");
-    assert_eq!(unknown.len(), 1);
-    assert_eq!(unknown[0].id, claude_active.id);
+    .expect("list interrupted");
+    assert_eq!(interrupted.len(), 1);
+    assert_eq!(interrupted[0].id, claude_active.id);
 }
 
 #[test]
@@ -592,18 +592,19 @@ fn status_computation_for_completed_failed_and_active_sessions() {
     assert!(!failed_rows.iter().any(|s| s.id == completed.id));
     assert!(!failed_rows.iter().any(|s| s.id == active.id));
 
-    let unknown_rows = list_sessions(
+    // Sessions with no ended_at and no live PID are "interrupted" (killed/crashed).
+    let interrupted_rows = list_sessions(
         &conn,
         &ListFilter {
-            status: Some(vec!["unknown".to_string()]),
+            status: Some(vec!["interrupted".to_string()]),
             limit: Some(20),
             ..Default::default()
         },
     )
-    .expect("list unknown status");
-    assert!(unknown_rows.iter().any(|s| s.id == active.id));
-    assert!(!unknown_rows.iter().any(|s| s.id == completed.id));
-    assert!(!unknown_rows.iter().any(|s| s.id == failed.id));
+    .expect("list interrupted status");
+    assert!(interrupted_rows.iter().any(|s| s.id == active.id));
+    assert!(!interrupted_rows.iter().any(|s| s.id == completed.id));
+    assert!(!interrupted_rows.iter().any(|s| s.id == failed.id));
 }
 
 #[test]

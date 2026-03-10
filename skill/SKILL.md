@@ -198,6 +198,28 @@ gaal active -H
 
 All verbs accept `-H` for human-readable tables. Full flag reference: `references/verb-reference.md`
 
+## Session ID Resolution
+
+Gaal stores **shortened 8-character IDs**, not full UUIDs. The shortening logic differs by engine:
+
+| Engine | UUID type | Short ID derivation | Example |
+|--------|-----------|--------------------:|---------|
+| Claude | UUIDv4 (`2c47d1f0-6773-4587-b487-c205abca8f0a`) | **First 8 chars** | `2c47d1f0` |
+| Codex | UUIDv7 (`019cd256-c7f9-72f0-a2fe-924fe3e8c603`) | **Last 8 hex chars** (dashes stripped) | `e3e8c603` |
+
+**Why different?** UUIDv4 is random throughout — first 8 chars are unique. UUIDv7 has a shared timestamp prefix (sessions started in the same ms share it) — only the random suffix provides uniqueness, so last 8 hex chars are used.
+
+**What you can pass to gaal commands** (`show`, `handoff`, `inspect`, etc.):
+
+| Input | Behavior |
+|-------|----------|
+| Full UUID (`2c47d1f0-6773-4587-...`) | Gaal truncates internally to short ID |
+| Short 8-char ID (`2c47d1f0`) | Used directly for DB lookup |
+| Prefix of short ID (`2c47`) | Prefix match via SQL `LIKE` — resolves if unique, exit code 2 if ambiguous |
+| `latest` | Resolves to most recent session |
+
+**Exit codes for resolution:** 0=found, 2=ambiguous prefix (multiple matches), 3=not found.
+
 ## Output Contract
 
 - **Default:** JSON to stdout. Errors to stderr as JSON `{"error": "...", "exit_code": N}`.
