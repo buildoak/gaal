@@ -285,14 +285,14 @@ fn build_active_row(
         .and_then(|row| row.model.clone())
         .or_else(|| parsed.as_ref().and_then(|p| p.meta.model.clone()));
 
-    let peak_input = runtime
+    // I32: Use most recent usage sample instead of peak to get current context usage
+    let recent_input = runtime
         .usage_samples
-        .iter()
+        .last()
         .map(|sample| sample.input_tokens)
-        .max()
         .unwrap_or(0);
     let tokens_limit = context_limit_tokens(session.engine, model.as_deref());
-    let context_pct = pct_used(peak_input, tokens_limit);
+    let context_pct = pct_used(recent_input, tokens_limit);
 
     let last_event_ts = runtime
         .last_event_ts
@@ -593,15 +593,18 @@ fn extract_usage_sample(record: &Value, engine: Engine) -> Option<UsageSample> {
             (total_input, total_input + output)
         }
         Engine::Codex => {
+            // I32: Focus on token_count events for accurate current context usage
             let payload_type = record.pointer("/payload/type").and_then(Value::as_str);
             if payload_type == Some("token_count") {
+                // Use last_token_usage which represents the most recent turn's context usage
                 let input = as_i64(record.pointer("/payload/info/last_token_usage/input_tokens"));
+                let cached = as_i64(record.pointer("/payload/info/last_token_usage/cached_input_tokens"));
+                let total_input = input + cached;
                 let output = as_i64(record.pointer("/payload/info/last_token_usage/output_tokens"));
-                (input, input + output)
+                (total_input, total_input + output)
             } else {
-                let input = as_i64(record.pointer("/payload/usage/input_tokens"));
-                let output = as_i64(record.pointer("/payload/usage/output_tokens"));
-                (input, input + output)
+                // Skip non-token_count records to avoid cumulative values
+                return None;
             }
         }
     };
