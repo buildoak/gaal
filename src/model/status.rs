@@ -126,7 +126,11 @@ pub fn compute_session_status(params: &StatusParams<'_>) -> SessionStatus {
 
     // Extend silence tolerance when executing a command (build in progress)
     // or waiting for a subagent (Agent tool dispatch).
-    let effective_silence = if params.executing_command || params.executing_agent {
+    // I32: Agent/Task dispatches can run for hours — 10x tolerance.
+    // Regular command execution (builds) gets 3x.
+    let effective_silence = if params.executing_agent {
+        params.stuck_silence_secs.saturating_mul(10)
+    } else if params.executing_command {
         params.stuck_silence_secs.saturating_mul(3)
     } else {
         params.stuck_silence_secs

@@ -582,9 +582,15 @@ fn extract_usage_sample(record: &Value, engine: Engine) -> Option<UsageSample> {
     let ts = record_timestamp(record)?;
     let (input_tokens, tokens) = match engine {
         Engine::Claude => {
+            // I33: Claude API splits tokens into input_tokens (non-cached),
+            // cache_read_input_tokens, and cache_creation_input_tokens.
+            // Total context usage = sum of all three.
             let input = as_i64(record.pointer("/message/usage/input_tokens"));
+            let cache_read = as_i64(record.pointer("/message/usage/cache_read_input_tokens"));
+            let cache_creation = as_i64(record.pointer("/message/usage/cache_creation_input_tokens"));
+            let total_input = input + cache_read + cache_creation;
             let output = as_i64(record.pointer("/message/usage/output_tokens"));
-            (input, input + output)
+            (total_input, total_input + output)
         }
         Engine::Codex => {
             let payload_type = record.pointer("/payload/type").and_then(Value::as_str);
@@ -910,11 +916,12 @@ pub(crate) fn context_limit_tokens(engine: Engine, model: Option<&str>) -> i64 {
 }
 
 pub(crate) fn pct_used(used_tokens: i64, limit_tokens: i64) -> f64 {
-    if limit_tokens <= 0 {
-        return 0.0;
+    if limit_tokens <= 0 || used_tokens <= 0 {
+        return -1.0; // I33: Unknown — no usage data or invalid limit.
     }
-    let pct = (used_tokens.max(0) as f64 / limit_tokens as f64) * 100.0;
-    round1(pct)
+    let pct = (used_tokens as f64 / limit_tokens as f64) * 100.0;
+    // I33: Clamp to 0-100 range — values above 100% indicate a calculation error.
+    round1(pct.clamp(0.0, 100.0))
 }
 
 pub(crate) fn parse_ts(ts: &str) -> Option<DateTime<Utc>> {
@@ -1064,7 +1071,11 @@ fn format_session_line(s: &ActiveOutput, indent: &str) -> String {
     let engine = format!("{:6}", s.engine.to_string());
     let status = format!("{:8}", s.status.to_string());
     let duration = format!("{:>6}", format_duration(s.uptime_secs as i64));
-    let ctx = format!("{:>4.0}% ctx", s.context_pct);
+    let ctx = if s.context_pct < 0.0 {
+        format!("{:>4} ctx", "-")
+    } else {
+        format!("{:>4.0}% ctx", s.context_pct)
+    };
 
     let summary_part = s
         .summary
@@ -1104,7 +1115,11 @@ fn print_flat_table(sessions: &[ActiveOutput]) {
             let engine = format!("{}", s.engine);
             let status = s.status.to_string();
             let duration = format_duration(s.uptime_secs as i64);
-            let ctx = format!("{:.0}%", s.context_pct);
+            let ctx = if s.context_pct < 0.0 {
+                "-".to_string()
+            } else {
+                format!("{:.0}%", s.context_pct)
+            };
 
             let summary = s
                 .summary

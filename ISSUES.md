@@ -600,3 +600,50 @@ Option 3 is ideal for the common case — a worker wanting to inspect its own se
 3. If no PID and mtime > 2 min → dead/ghost, either filter out or mark as `dead`
 
 **Fix:** After API discovery, check each session against the PID-discovered set. If no PID match and mtime > 2 min, exclude or mark status as `dead`.
+
+---
+
+## I31: `gaal active` dedup still not working — same session appears multiple times [FIXED 2026-03-10]
+
+**Severity:** Critical (core UX broken)
+**Command:** `gaal active -H`
+
+**Problem:** Despite two fix attempts (commit `9e9ab10` and `f78726f`), session `68b37d6c` (claude) still appears 3 times in `gaal active -H` output. The `dedup_active_output()` function added in `f78726f` is either not being called, not matching IDs correctly, or running at the wrong stage of the pipeline.
+
+**Evidence:** Three entries for `68b37d6c` with identical engine, status, duration, ctx%, last action, stuck signal, and CWD.
+
+**Investigation needed:** Trace the exact pipeline: `find_active_sessions()` → `collect_active()` → `dedup_active_output()` → output. At which stage do 3 entries exist? Does `dedup_active_output()` see the same ID for all 3? Is it being called at all?
+
+---
+
+## I32: `gaal active` stuck detection still wrong — active sessions flagged as stuck [FIXED 2026-03-10]
+
+**Severity:** High (false alerts on healthy sessions)
+**Command:** `gaal active -H`
+
+**Problem:** Session `68b37d6c` is the user's active coordinator session (currently running, dispatching agents) but shows as `stuck` with `silence (1033s)`. The session IS producing output — it's literally generating the `gaal active` call. The 1033s silence means the JSONL's last event is ~17 minutes old, but the session has been working through subagents (Agent tool calls) which don't produce JSONL events in the parent session.
+
+Session `019cd71a` (codex) shows as `stuck` with `silence (1180s)` — may be genuinely idle, but the stuck label is too aggressive for a 31-minute session.
+
+**Root cause:** Stuck detection doesn't account for:
+1. Sessions currently executing Agent tool_use (subagent dispatch) — parent JSONL goes silent while child works
+2. The I19 fix added `executing_agent` detection but it's not working in practice
+
+**Expected:** When last action is `Agent` tool_use without a result, the session is WAITING for a subagent, not stuck. Silence tolerance should be 10x normal (3000s for Claude, 6000s for Codex).
+
+---
+
+## I33: `gaal active` context% wrong — 0% for Claude, 121% for Codex [FIXED 2026-03-10]
+
+**Severity:** Medium (misleading metrics)
+**Command:** `gaal active -H`
+
+**Problem:**
+- Claude session `68b37d6c` shows 0% context — this is a 22-hour session that has used substantial context. 0% is wrong.
+- Codex session `019cd71a` shows 121% context — values above 100% are mathematically impossible and indicate a calculation bug.
+
+**Root cause hypotheses:**
+- Claude 0%: Context percentage may not be extractable from Claude JSONL (different event format). The probe function may return 0 when it can't determine context.
+- Codex 121%: Token count may include both input and output tokens, or the context window size constant is wrong for the model being used.
+
+**Expected:** Context% should be 0-100%, with `?` or `-` shown when unknown.
