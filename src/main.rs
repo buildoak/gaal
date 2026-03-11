@@ -68,6 +68,9 @@ enum Commands {
         /// Git operations only.
         #[arg(long)]
         git: bool,
+        /// Include all arrays and fields (full output).
+        #[arg(short = 'F', long)]
+        full: bool,
         /// Token usage breakdown.
         #[arg(long)]
         tokens: bool,
@@ -176,7 +179,7 @@ enum Commands {
         #[arg(long, default_value_t = 3)]
         limit: usize,
         /// Output format.
-        #[arg(long, value_enum, default_value_t = RecallFormat::Summary)]
+        #[arg(long, value_enum, default_value_t = RecallFormat::Brief)]
         format: RecallFormat,
         /// Minimum substance score.
         #[arg(long, default_value_t = 1)]
@@ -403,6 +406,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             errors,
             commands,
             git,
+            full,
             tokens,
             tree,
             children,
@@ -418,6 +422,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 errors,
                 commands,
                 git,
+                full,
                 tokens,
                 tree,
                 children,

@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use clap::{Args, ValueEnum};
 use rusqlite::{named_params, Connection};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::commands::active::probe_runtime;
 use crate::db::{open_db, open_db_readonly};
@@ -57,6 +57,10 @@ pub struct ShowArgs {
     /// Include git operations.
     #[arg(long)]
     pub git: bool,
+
+    /// Include all arrays and fields (full output).
+    #[arg(short = 'F', long)]
+    pub full: bool,
 
     /// Include token usage breakdown.
     #[arg(long)]
@@ -122,6 +126,13 @@ struct TokenBreakdown {
     avg_output_per_turn: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct FileCount {
+    read: usize,
+    written: usize,
+    edited: usize,
+}
+
 #[derive(Debug, Clone)]
 struct ShowData {
     record: SessionRecord,
@@ -129,6 +140,10 @@ struct ShowData {
     tree: Option<TreeNode>,
     child_sessions: Option<Vec<ChildSummary>>,
     token_breakdown: Option<TokenBreakdown>,
+    file_count: Option<FileCount>,
+    command_count: Option<usize>,
+    error_count: Option<usize>,
+    git_op_count: Option<usize>,
 }
 
 #[derive(Default)]
@@ -323,10 +338,12 @@ fn build_show_data(
     now: DateTime<Utc>,
 ) -> Result<ShowData, GaalError> {
     let any_fact_filter = args.files.is_some() || args.commands || args.errors || args.git;
-    let include_files = args.files.is_some() || !any_fact_filter;
-    let include_commands = args.commands || !any_fact_filter;
-    let include_errors = args.errors || !any_fact_filter;
-    let include_git = args.git || !any_fact_filter;
+    let summary_mode = !args.full && !args.human && !any_fact_filter;
+    let include_all_facts = !any_fact_filter && (args.full || args.human);
+    let include_files = args.files.is_some() || include_all_facts;
+    let include_commands = args.commands || include_all_facts;
+    let include_errors = args.errors || include_all_facts;
+    let include_git = args.git || include_all_facts;
     let include_trace = args.trace;
 
     let facts = get_facts(conn, &row.id, None)?;
@@ -361,6 +378,32 @@ fn build_show_data(
         collect_git_ops(&facts)
     } else {
         Vec::new()
+    };
+
+    let file_count = if summary_mode {
+        let all_files = collect_files(&facts, FilesMode::All);
+        Some(FileCount {
+            read: all_files.read.len(),
+            written: all_files.written.len(),
+            edited: all_files.edited.len(),
+        })
+    } else {
+        None
+    };
+    let command_count = if summary_mode {
+        Some(collect_commands(&facts).len())
+    } else {
+        None
+    };
+    let error_count = if summary_mode {
+        Some(collect_errors(&facts).len())
+    } else {
+        None
+    };
+    let git_op_count = if summary_mode {
+        Some(collect_git_ops(&facts).len())
+    } else {
+        None
     };
 
     let child_count = count_children(conn, &row.id)?;
@@ -434,11 +477,27 @@ fn build_show_data(
         tree,
         child_sessions,
         token_breakdown,
+        file_count,
+        command_count,
+        error_count,
+        git_op_count,
     })
 }
 
 fn to_json_value(data: ShowData, args: &ShowArgs) -> Result<Value, GaalError> {
-    let mut map = match serde_json::to_value(data.record)
+    let ShowData {
+        record,
+        trace,
+        tree,
+        child_sessions,
+        token_breakdown,
+        file_count,
+        command_count,
+        error_count,
+        git_op_count,
+    } = data;
+
+    let mut map = match serde_json::to_value(record)
         .map_err(|e| GaalError::Internal(format!("failed to serialize session record: {e}")))?
     {
         Value::Object(map) => map,
@@ -450,7 +509,36 @@ fn to_json_value(data: ShowData, args: &ShowArgs) -> Result<Value, GaalError> {
     };
 
     let any_fact_filter = args.files.is_some() || args.errors || args.commands || args.git;
-    if any_fact_filter {
+    let summary_mode = !args.full && !any_fact_filter;
+    if summary_mode {
+        map.remove("files");
+        map.remove("commands");
+        map.remove("errors");
+        map.remove("git_ops");
+
+        map.insert(
+            "file_count".to_string(),
+            serde_json::to_value(file_count.unwrap_or(FileCount {
+                read: 0,
+                written: 0,
+                edited: 0,
+            }))
+            .map_err(|e| GaalError::Internal(format!("failed to serialize file count: {e}")))?,
+        );
+        map.insert(
+            "command_count".to_string(),
+            json!(command_count.unwrap_or(0)),
+        );
+        map.insert("error_count".to_string(), json!(error_count.unwrap_or(0)));
+        map.insert("git_op_count".to_string(), json!(git_op_count.unwrap_or(0)));
+
+        map.remove("children");
+        map.remove("parent_id");
+        map.remove("child_count");
+        map.remove("ended_at");
+        map.remove("last_event_at");
+        map.remove("exit_signal");
+    } else if any_fact_filter {
         if args.files.is_none() {
             map.remove("files");
         }
@@ -469,7 +557,7 @@ fn to_json_value(data: ShowData, args: &ShowArgs) -> Result<Value, GaalError> {
         map.remove("jsonl_path");
     }
 
-    if let Some(trace) = data.trace {
+    if let Some(trace) = trace {
         map.insert(
             "trace".to_string(),
             serde_json::to_value(trace)
@@ -477,7 +565,7 @@ fn to_json_value(data: ShowData, args: &ShowArgs) -> Result<Value, GaalError> {
         );
     }
 
-    if let Some(tree) = data.tree {
+    if let Some(tree) = tree {
         map.insert(
             "tree".to_string(),
             serde_json::to_value(tree)
@@ -485,7 +573,7 @@ fn to_json_value(data: ShowData, args: &ShowArgs) -> Result<Value, GaalError> {
         );
     }
 
-    if let Some(children) = data.child_sessions {
+    if let Some(children) = child_sessions {
         map.insert(
             "child_sessions".to_string(),
             serde_json::to_value(children).map_err(|e| {
@@ -494,7 +582,7 @@ fn to_json_value(data: ShowData, args: &ShowArgs) -> Result<Value, GaalError> {
         );
     }
 
-    if let Some(tokens) = data.token_breakdown {
+    if let Some(tokens) = token_breakdown {
         map.insert(
             "token_breakdown".to_string(),
             serde_json::to_value(tokens).map_err(|e| {
