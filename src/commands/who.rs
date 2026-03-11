@@ -100,10 +100,19 @@ struct WhoSummaryRow {
     headline: Option<String>,
 }
 
+/// Wrapper for JSON output that includes search metadata.
+#[derive(Debug, Clone, Serialize)]
+struct WhoOutput<T: Serialize> {
+    search_window: String,
+    note: &'static str,
+    sessions: T,
+}
+
 /// Execute `gaal who` and print matching facts as JSON or a compact table.
 pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     let verb = args.verb.to_ascii_lowercase();
     let spec = verb_spec(&verb)?;
+    let note = verb_note(&verb);
     let full = args.full;
     let limit = args.limit.max(1);
     let query_limit = limit.saturating_mul(8);
@@ -116,6 +125,24 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     let is_folder_target = target.as_deref().is_some_and(|value| value.ends_with('/'));
     let since = normalize_since(&args.since)?;
     let before = args.before.as_deref().map(normalize_before).transpose()?;
+
+    // Compute human-readable search window for display.
+    let since_date = since
+        .get(..10)
+        .unwrap_or(&since)
+        .to_string();
+    let before_date = before
+        .as_deref()
+        .and_then(|b| b.get(..10))
+        .map(str::to_string)
+        .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
+    let since_label = format_since_label(&args.since);
+    let search_window = format!(
+        "{since_label} ({since_date} to {before_date})"
+    );
+    let search_window_hint = format!(
+        "Searching {since_label} ({since_date} \u{2192} {before_date}) \u{00b7} Use --since 30d for wider range"
+    );
 
     let conn = open_db_readonly()?;
     let filter = WhoFilter {
@@ -144,9 +171,18 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     if full {
         // --full: per-fact output with full detail (old behavior)
         if args.human {
+            eprintln!("{search_window_hint}");
+            if !note.is_empty() {
+                eprintln!("({note})");
+            }
             print_human_full(&matches);
         } else {
-            print_json(&matches).map_err(GaalError::from)?;
+            let output = WhoOutput {
+                search_window,
+                note,
+                sessions: &matches,
+            };
+            print_json(&output).map_err(GaalError::from)?;
         }
         return Ok(());
     }
@@ -154,9 +190,18 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     // Default: brief output grouped by session
     let summaries = group_by_session(&matches);
     if args.human {
+        eprintln!("{search_window_hint}");
+        if !note.is_empty() {
+            eprintln!("({note})");
+        }
         print_human_brief(&summaries);
     } else {
-        print_json(&summaries).map_err(GaalError::from)?;
+        let output = WhoOutput {
+            search_window,
+            note,
+            sessions: &summaries,
+        };
+        print_json(&output).map_err(GaalError::from)?;
     }
     Ok(())
 }
@@ -216,6 +261,37 @@ fn verb_spec(verb: &str) -> Result<VerbSpec, GaalError> {
         }
     };
     Ok(spec)
+}
+
+/// Return a one-line disclaimer about what the verb covers (and what it misses).
+fn verb_note(verb: &str) -> &'static str {
+    match verb {
+        "wrote" => "Covers Write/Edit tool operations only. Files created via Bash commands may not appear.",
+        "read" => "Covers Read tool operations only. Files read via cat/head in Bash may not appear.",
+        "ran" => "Matches command program names, not arguments.",
+        _ => "",
+    }
+}
+
+/// Format the --since flag as a human-readable label like "last 7 days".
+fn format_since_label(since_raw: &str) -> String {
+    let value = since_raw.trim();
+    if value.len() < 2 {
+        return format!("since {value}");
+    }
+    let (number, unit) = value.split_at(value.len().saturating_sub(1));
+    if let Ok(amount) = number.parse::<i64>() {
+        let unit_word = match unit {
+            "s" => if amount == 1 { "second" } else { "seconds" },
+            "m" => if amount == 1 { "minute" } else { "minutes" },
+            "h" => if amount == 1 { "hour" } else { "hours" },
+            "d" => if amount == 1 { "day" } else { "days" },
+            "w" => if amount == 1 { "week" } else { "weeks" },
+            _ => return format!("since {value}"),
+        };
+        return format!("last {amount} {unit_word}");
+    }
+    format!("since {value}")
 }
 
 fn matches_verb(result: &WhoResult, mode: MatchMode, target: Option<&str>, folder: bool) -> bool {
