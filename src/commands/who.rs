@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::db::open_db_readonly;
 use crate::db::queries::{query_who, FactType, WhoFilter, WhoResult};
 use crate::error::GaalError;
-use crate::output::human::{format_timestamp, print_table};
+use crate::output::human::{format_timestamp, print_table_with_kinds, ColumnKind};
 use crate::output::json::print_json;
 
 /// CLI arguments for `gaal who`.
@@ -580,6 +580,15 @@ fn print_human_full(rows: &[WhoRow]) {
     let headers = [
         "Session", "Engine", "When", "Fact", "Subject", "Detail", "Headline",
     ];
+    let col_kinds = [
+        ColumnKind::Fixed,    // Session
+        ColumnKind::Fixed,    // Engine
+        ColumnKind::Fixed,    // When
+        ColumnKind::Fixed,    // Fact
+        ColumnKind::Variable, // Subject
+        ColumnKind::Variable, // Detail
+        ColumnKind::Variable, // Headline
+    ];
     let table_rows: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
@@ -588,13 +597,13 @@ fn print_human_full(rows: &[WhoRow]) {
                 row.engine.clone(),
                 format_timestamp(&row.ts),
                 row.fact_type.clone(),
-                compact(row.subject.as_deref(), 42),
-                compact(row.detail.as_deref(), 52),
-                compact(row.session_headline.as_deref(), 48),
+                row.subject.as_deref().unwrap_or("-").replace('\n', " "),
+                row.detail.as_deref().unwrap_or("-").replace('\n', " "),
+                row.session_headline.as_deref().unwrap_or("-").replace('\n', " "),
             ]
         })
         .collect();
-    print_table(&headers, &table_rows);
+    print_table_with_kinds(&headers, &table_rows, &col_kinds);
 }
 
 fn print_human_brief(rows: &[WhoSummaryRow]) {
@@ -604,19 +613,21 @@ fn print_human_brief(rows: &[WhoSummaryRow]) {
     }
 
     let headers = ["Session", "Engine", "When", "Facts", "Subjects", "Headline"];
+    let col_kinds = [
+        ColumnKind::Fixed,    // Session
+        ColumnKind::Fixed,    // Engine
+        ColumnKind::Fixed,    // When
+        ColumnKind::Fixed,    // Facts
+        ColumnKind::Variable, // Subjects
+        ColumnKind::Variable, // Headline
+    ];
     let table_rows: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
             let subjects_display = if row.subjects.is_empty() {
                 "-".to_string()
             } else {
-                let joined = row.subjects.join(", ");
-                if joined.chars().count() > 60 {
-                    let truncated: String = joined.chars().take(57).collect();
-                    format!("{truncated}...")
-                } else {
-                    joined
-                }
+                row.subjects.join(", ")
             };
             vec![
                 row.session_id.chars().take(8).collect(),
@@ -624,22 +635,13 @@ fn print_human_brief(rows: &[WhoSummaryRow]) {
                 format_timestamp(&row.latest_ts),
                 row.fact_count.to_string(),
                 subjects_display,
-                compact(row.headline.as_deref(), 48),
+                row.headline.as_deref().unwrap_or("-").replace('\n', " "),
             ]
         })
         .collect();
-    print_table(&headers, &table_rows);
+    print_table_with_kinds(&headers, &table_rows, &col_kinds);
 }
 
-fn compact(value: Option<&str>, max_len: usize) -> String {
-    let text = value.unwrap_or("-").replace('\n', " ");
-    if text.chars().count() <= max_len {
-        return text;
-    }
-    let keep = max_len.saturating_sub(3);
-    let head: String = text.chars().take(keep).collect();
-    format!("{head}...")
-}
 
 fn normalize_since(raw: &str) -> Result<String, GaalError> {
     normalize_bound(raw, BoundKind::Since)

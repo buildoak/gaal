@@ -3,26 +3,183 @@ use chrono::{DateTime, Duration, Local};
 use crate::model::SessionRecord;
 use crate::output::HumanReadable;
 
-/// Print a simple column-aligned table.
+/// Get the terminal width.
+///
+/// Priority: `terminal_size` crate (ioctl) > `COLUMNS` env var > 120 default.
+fn terminal_width() -> usize {
+    terminal_size::terminal_size()
+        .map(|(w, _)| w.0 as usize)
+        .or_else(|| {
+            std::env::var("COLUMNS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|&w| w > 0)
+        })
+        .unwrap_or(120)
+}
+
+/// Truncate a CWD path to fit within `max_width` by showing the last meaningful
+/// path components with a `...` prefix.
+///
+/// Strategy:
+/// 1. If the path fits, return as-is.
+/// 2. Try `.../<last-2-components>`. If that fits, use it.
+/// 3. Try `.../<last-component>`. If that fits, use it.
+/// 4. Otherwise, truncate the last component with `...` suffix.
+pub fn format_cwd(path: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if path.chars().count() <= max_width {
+        return path.to_string();
+    }
+
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return path.to_string();
+    }
+
+    // Try last 3 components
+    if parts.len() >= 3 {
+        let candidate = format!(".../{}", parts[parts.len() - 3..].join("/"));
+        if candidate.chars().count() <= max_width {
+            return candidate;
+        }
+    }
+
+    // Try last 2 components
+    if parts.len() >= 2 {
+        let candidate = format!(".../{}", parts[parts.len() - 2..].join("/"));
+        if candidate.chars().count() <= max_width {
+            return candidate;
+        }
+    }
+
+    // Try last 1 component
+    let candidate = format!(".../{}", parts[parts.len() - 1]);
+    if candidate.chars().count() <= max_width {
+        return candidate;
+    }
+
+    // Last resort: truncate the last component itself
+    let last = parts[parts.len() - 1];
+    let prefix = ".../";
+    let available = max_width.saturating_sub(prefix.len() + 3); // 3 for trailing "..."
+    if available == 0 {
+        return ".....".chars().take(max_width).collect();
+    }
+    let truncated: String = last.chars().take(available).collect();
+    format!("{prefix}{truncated}...")
+}
+
+/// Truncate a string to `max_width`, appending `...` if it exceeds.
+pub fn truncate_field(value: &str, max_width: usize) -> String {
+    if max_width <= 3 {
+        return value.chars().take(max_width).collect();
+    }
+    if value.chars().count() <= max_width {
+        return value.to_string();
+    }
+    let keep = max_width.saturating_sub(3);
+    let head: String = value.chars().take(keep).collect();
+    format!("{head}...")
+}
+
+/// Column sizing hint: fixed-width columns get their natural width,
+/// variable-width columns share remaining terminal space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnKind {
+    /// Column has a roughly fixed/bounded width (ID, engine, status, duration, etc.)
+    Fixed,
+    /// Column holds variable-length content (CWD, headline, subject, detail, etc.)
+    Variable,
+}
+
+/// Print a terminal-width-aware column-aligned table.
+///
+/// `col_kinds` maps each column index to Fixed or Variable. If not provided,
+/// all columns are treated as Fixed (original behavior with natural widths).
 pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
+    print_table_with_kinds(headers, rows, &[]);
+}
+
+/// Print a table with explicit column kind hints for terminal-aware layout.
+pub fn print_table_with_kinds(
+    headers: &[&str],
+    rows: &[Vec<String>],
+    col_kinds: &[ColumnKind],
+) {
     if headers.is_empty() {
         return;
     }
 
     let cols = headers.len();
-    let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+    let term_width = terminal_width();
 
+    // Compute natural (maximum content) width for each column.
+    let mut natural: Vec<usize> = headers.iter().map(|h| h.len()).collect();
     for row in rows {
         for (i, cell) in row.iter().enumerate().take(cols) {
-            widths[i] = widths[i].max(cell.chars().count());
+            natural[i] = natural[i].max(cell.chars().count());
         }
     }
 
+    // Determine effective kind per column.
+    let kinds: Vec<ColumnKind> = (0..cols)
+        .map(|i| {
+            col_kinds
+                .get(i)
+                .copied()
+                .unwrap_or(ColumnKind::Fixed)
+        })
+        .collect();
+
+    // Compute allocated widths.
+    let separator_space = 2 * (cols.saturating_sub(1)); // 2 spaces between columns
+    let fixed_total: usize = kinds
+        .iter()
+        .enumerate()
+        .filter(|(_, k)| **k == ColumnKind::Fixed)
+        .map(|(i, _)| natural[i])
+        .sum();
+
+    let variable_indices: Vec<usize> = kinds
+        .iter()
+        .enumerate()
+        .filter(|(_, k)| **k == ColumnKind::Variable)
+        .map(|(i, _)| i)
+        .collect();
+
+    let remaining = term_width
+        .saturating_sub(fixed_total)
+        .saturating_sub(separator_space);
+
+    let mut widths = natural.clone();
+
+    if !variable_indices.is_empty() && remaining > 0 {
+        // Distribute remaining space among variable columns.
+        let var_count = variable_indices.len();
+        let per_var = remaining / var_count;
+        let mut leftover = remaining % var_count;
+
+        for &idx in &variable_indices {
+            let alloc = per_var + if leftover > 0 { leftover = leftover.saturating_sub(1); 1 } else { 0 };
+            // Don't expand beyond natural width, only cap.
+            widths[idx] = natural[idx].min(alloc.max(6)); // minimum 6 chars per variable column
+        }
+    }
+
+    // Render helper: truncate cells to allocated widths.
     let render_row = |cells: Vec<String>| -> String {
         let mut parts = Vec::new();
         for (i, cell) in cells.into_iter().enumerate().take(cols) {
             let width = widths.get(i).copied().unwrap_or(0);
-            parts.push(format!("{cell:<width$}"));
+            let display = if cell.chars().count() > width {
+                truncate_field(&cell, width)
+            } else {
+                cell
+            };
+            parts.push(format!("{display:<width$}"));
         }
         parts.join("  ")
     };
@@ -99,6 +256,16 @@ impl HumanReadable for Vec<SessionRecord> {
         let headers = [
             "ID", "Engine", "Status", "Started", "Duration", "Tokens", "Model", "CWD",
         ];
+        let col_kinds = [
+            ColumnKind::Fixed,    // ID
+            ColumnKind::Fixed,    // Engine
+            ColumnKind::Fixed,    // Status
+            ColumnKind::Fixed,    // Started
+            ColumnKind::Fixed,    // Duration
+            ColumnKind::Fixed,    // Tokens
+            ColumnKind::Variable, // Model
+            ColumnKind::Variable, // CWD
+        ];
         let rows: Vec<Vec<String>> = self
             .iter()
             .map(|session| {
@@ -120,6 +287,6 @@ impl HumanReadable for Vec<SessionRecord> {
                 ]
             })
             .collect();
-        print_table(&headers, &rows);
+        print_table_with_kinds(&headers, &rows, &col_kinds);
     }
 }

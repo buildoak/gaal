@@ -16,7 +16,7 @@ use crate::db::queries::{get_facts, get_session, SessionRow};
 use crate::discovery::active::{find_active_sessions, ActiveSession};
 use crate::error::GaalError;
 use crate::model::{compute_session_status, Fact, FactType, SessionStatus, StatusParams};
-use crate::output::human::{format_duration, print_table};
+use crate::output::human::{format_cwd, format_duration, print_table_with_kinds, truncate_field, ColumnKind};
 use crate::parser::parse_session;
 use crate::parser::types::Engine;
 
@@ -732,7 +732,7 @@ fn format_session_line(s: &ActiveOutput, indent: &str) -> String {
     let summary_part = s
         .summary
         .as_deref()
-        .map(|sum| format!("  \"{}\"", truncate(sum, 50)))
+        .map(|sum| format!("  \"{}\"", truncate_field(sum, 50)))
         .unwrap_or_default();
 
     let pids_part = if s.process_count > 1 {
@@ -757,6 +757,15 @@ fn print_flat_table(sessions: &[ActiveOutput]) {
         "Last Action",
         "CWD",
     ];
+    let col_kinds = [
+        ColumnKind::Fixed,    // ID
+        ColumnKind::Fixed,    // Engine
+        ColumnKind::Fixed,    // Status
+        ColumnKind::Fixed,    // Duration
+        ColumnKind::Variable, // Summary
+        ColumnKind::Variable, // Last Action
+        ColumnKind::Variable, // CWD
+    ];
 
     let rows: Vec<Vec<String>> = sessions
         .iter()
@@ -769,29 +778,20 @@ fn print_flat_table(sessions: &[ActiveOutput]) {
             let summary = s
                 .summary
                 .as_deref()
-                .map(|sum| truncate(sum, 40))
-                .unwrap_or_else(|| "-".to_string());
+                .unwrap_or("-")
+                .to_string();
 
             let last_action = s
                 .last_action
                 .as_deref()
-                .map(|a| truncate(a, 40))
-                .unwrap_or_else(|| "-".to_string());
+                .unwrap_or("-")
+                .to_string();
 
-            let cwd = truncate_cwd(&s.cwd, 2);
+            let cwd = format_cwd(&s.cwd, 40);
 
             vec![id, engine, status, duration, summary, last_action, cwd]
         })
         .collect();
 
-    print_table(&headers, &rows);
-}
-
-/// Truncate a path to its last `n` components for readability.
-fn truncate_cwd(path: &str, components: usize) -> String {
-    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
-    if parts.len() <= components {
-        return path.to_string();
-    }
-    format!(".../{}", parts[parts.len() - components..].join("/"))
+    print_table_with_kinds(&headers, &rows, &col_kinds);
 }

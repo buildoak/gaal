@@ -20,6 +20,7 @@ use crate::model::{
     compute_session_status, CommandEntry, ErrorEntry, Fact, FactType, FileOps, GitOp,
     SessionRecord, SessionStatus, StatusParams, TokenUsage,
 };
+use crate::output::human::format_cwd;
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
 
@@ -966,7 +967,7 @@ fn print_human(records: &[ShowData], args: &ShowArgs) {
         println!("Status: {}", record.status);
         println!("Started: {}", record.started_at);
         println!("Duration: {}s", record.duration_secs);
-        println!("CWD: {}", record.cwd);
+        println!("CWD: {}", format_cwd(&record.cwd, 80));
 
         if let Some(headline) = &record.headline {
             println!("Headline: {}", headline);

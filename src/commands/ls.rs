@@ -13,7 +13,7 @@ use crate::db::queries::{self, count_sessions, ListFilter, SessionRow};
 use crate::discovery::active::{find_active_sessions, is_pid_alive, probe_pid};
 use crate::error::GaalError;
 use crate::model::{compute_session_status, SessionStatus, StatusParams, TokenUsage};
-use crate::output::human::{format_duration, format_timestamp, format_tokens, print_table};
+use crate::output::human::{format_cwd, format_duration, format_timestamp, format_tokens, print_table_with_kinds, ColumnKind};
 use crate::output::{self, HumanReadable, OutputFormat};
 use crate::parser::types::Engine;
 
@@ -635,6 +635,18 @@ impl HumanReadable for Vec<SessionSummary> {
             "ID", "Engine", "Status", "Started", "Duration", "Tokens", "Tools", "Children",
             "Model", "CWD",
         ];
+        let col_kinds = [
+            ColumnKind::Fixed,    // ID
+            ColumnKind::Fixed,    // Engine
+            ColumnKind::Fixed,    // Status
+            ColumnKind::Fixed,    // Started
+            ColumnKind::Fixed,    // Duration
+            ColumnKind::Fixed,    // Tokens
+            ColumnKind::Fixed,    // Tools
+            ColumnKind::Fixed,    // Children
+            ColumnKind::Variable, // Model
+            ColumnKind::Variable, // CWD
+        ];
         let rows: Vec<Vec<String>> = self
             .iter()
             .map(|session| {
@@ -654,10 +666,10 @@ impl HumanReadable for Vec<SessionSummary> {
                     session.tools_used.to_string(),
                     session.child_count.to_string(),
                     session.model.clone(),
-                    session.cwd.clone(),
+                    format_cwd(&session.cwd, 40),
                 ]
             })
             .collect();
-        print_table(&headers, &rows);
+        print_table_with_kinds(&headers, &rows, &col_kinds);
     }
 }
