@@ -1,6 +1,6 @@
 # Verb Reference — gaal
 
-Complete flag and output schema reference for all 9 verbs + 1 utility.
+Complete flag and output schema reference for all 12 commands.
 
 ---
 
@@ -12,10 +12,12 @@ Complete flag and output schema reference for all 9 verbs + 1 utility.
 4. [who](#4-who) — Inverted queries
 5. [search](#5-search) — Full-text search
 6. [recall](#6-recall) — Semantic session retrieval
-7. [handoff](#7-handoff) — LLM-powered handoff generation
+7. [create-handoff](#7-create-handoff) — LLM-powered handoff generation
 8. [index](#8-index) — Index management
 9. [active](#9-active) — Live process discovery
 10. [tag](#10-tag) — Session tagging
+11. [salt](#11-salt) — Salt token generation
+12. [find-salt](#12-find-salt) — JSONL discovery by salt
 
 ---
 
@@ -32,12 +34,11 @@ Fleet view. The entry point. Lists sessions from the SQLite index.
 | `--since <DURATION>` | string | none | Lower bound: `1h`, `3d`, `2w`, `2026-03-01`, `today` |
 | `--before <DATE>` | string | none | Upper bound: `2026-03-03T17:00`, `today`, `yesterday` |
 | `--cwd <PATH>` | string | none | Substring match on working directory |
-| `--stuck` | flag | off | Shorthand: stuck + long idle sessions needing attention |
 | `--tag <TAG>` | string (repeatable) | none | Filter by tag (AND logic when multiple) |
 | `--sort <FIELD>` | string | started | Options: started, ended, tokens, duration, status |
-| `--limit <N>` | int | 50 | Max results |
-| `--children` | flag | off | Include child/worker sessions |
+| `--limit <N>` | int | 10 | Max results. Output shows "showing N of M" footer |
 | `--aggregate` | flag | off | Return totals instead of session list |
+| `-F, --full` | flag | off | Verbose output (all fields) |
 | `-H` | flag | off | Human-readable table |
 
 ### Output Schema (JSON array)
@@ -52,8 +53,6 @@ Fleet view. The entry point. Lists sessions from the SQLite index.
   "started_at": "string",       // RFC3339
   "ended_at": "string|null",    // RFC3339 or null if active
   "duration_secs": "number",
-  "parent_id": "string|null",
-  "child_count": "number",
   "tokens": {
     "input": "number",
     "output": "number"
@@ -98,8 +97,6 @@ Full session record. Progressive disclosure workhorse.
 | `--commands` | flag | off | Bash/exec commands only |
 | `--git` | flag | off | Git operations only |
 | `--tokens` | flag | off | Token usage breakdown |
-| `--tree` | flag | off | Recursive spawn hierarchy |
-| `--children` | flag | off | Child session summaries inline |
 | `--trace` | flag | off | Full event timeline (progressive disclosure level 2) |
 | `--source` | flag | off | Raw JSONL dump path (level 3) |
 | `--ids <ID,ID,...>` | string | none | Batch mode: multiple sessions |
@@ -123,8 +120,6 @@ Full session record. Progressive disclosure workhorse.
   "tokens": { "input": "number", "output": "number" },
   "turns": "number",
   "tools_used": "number",
-  "parent_id": "string|null",
-  "children": ["string"],       // child session IDs
   "headline": "string|null",
   "tags": ["string"],
   "files": {
@@ -152,25 +147,7 @@ Full session record. Progressive disclosure workhorse.
 }
 ```
 
-### `--tree` Output Schema
-
-```json
-{
-  "id": "string",
-  "intent": "string",
-  "status": "string",
-  "duration_secs": "number",
-  "children": [
-    {
-      "id": "string",
-      "intent": "string",
-      "status": "string",
-      "duration_secs": "number",
-      "children": []
-    }
-  ]
-}
-```
+**`show -H` renders a summary card** (headline, duration, tokens, key stats) rather than the full JSON dump.
 
 ### Examples
 
@@ -216,10 +193,10 @@ Operational snapshot. What is a session doing RIGHT NOW? Degrades gracefully for
     "rss_mb": "number",
     "threads": "number"
   },
-  "context": {
-    "tokens_used": "number",
-    "tokens_limit": "number",
-    "pct_used": "number"
+  "tokens": {
+    "total": "number",
+    "ctx_window": "number",
+    "ctx_limit": "number"
   },
   "current_turn": {             // null/absent for completed sessions
     "number": "number",
@@ -234,12 +211,6 @@ Operational snapshot. What is a session doing RIGHT NOW? Degrades gracefully for
   "velocity": {
     "actions_per_minute_5m": "number",
     "tokens_per_minute_5m": "number"
-  },
-  "stuck_signals": {
-    "silence_secs": "number",
-    "loop_detected": "boolean",
-    "context_pct": "number",
-    "permission_blocked": "boolean"
   },
   "recent_errors": [{
     "tool": "string",
@@ -297,8 +268,11 @@ Inverted queries. "Which session did X to Y?"
 | `--engine <ENGINE>` | string | all | Filter by engine |
 | `--tag <TAG>` | string | none | Filter by tag |
 | `--failed` | flag | off | Only failed commands (for `ran` verb) |
-| `--limit <N>` | int | 10 | Max results |
+| `--limit <N>` | int | 10 | Max results. Output shows "showing N of M" indicator |
+| `-F, --full` | flag | off | Show full per-fact output including detail fields |
 | `-H` | flag | off | Human-readable |
+
+**v0.1.0 improvements:** Verb matching uses command names (not substring). Search window is displayed in output. Scope disclaimers are included when results may be incomplete.
 
 ### Output Schema (JSON array)
 
@@ -425,7 +399,7 @@ gaal recall "peekaboo" --format brief --limit 5
 
 ---
 
-## 7. handoff
+## 7. create-handoff
 
 LLM-powered handoff generation. Dispatches to agent-mux. **Costs money.**
 
@@ -433,12 +407,19 @@ LLM-powered handoff generation. Dispatches to agent-mux. **Costs money.**
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `<id\|today>` | positional | required | Session ID or `today` for all today's sessions |
+| `[id\|today]` | positional | optional | Session ID or `today`. Auto-detects if omitted |
+| `--jsonl <JSONL>` | string | none | Explicit JSONL file path (skip PID detection, used by salt protocol) |
 | `--engine <ENGINE>` | string | from config | agent-mux engine for LLM |
 | `--model <MODEL>` | string | from config | Model for extraction |
 | `--prompt <PATH>` | string | `~/.gaal/prompts/handoff.md` | Custom extraction prompt |
 | `--provider <PROVIDER>` | string | agent-mux | LLM provider: agent-mux, openrouter |
-| `--format <FMT>` | string | eywa | Output format |
+| `--format <FMT>` | string | eywa-compatible | Output format |
+| `--batch` | flag | off | Run batch mode for multiple sessions |
+| `--since <DURATION>` | string | 7d | Time window for batch mode |
+| `--parallel <N>` | int | 1 | Max concurrent batch workers |
+| `--min-turns <N>` | int | 3 | Minimum turns for batch candidates |
+| `--this` | flag | off | Extract nearest detected session (not parent) |
+| `--dry-run` | flag | off | Preview batch candidates without processing |
 
 ### Output Schema (JSON array)
 
@@ -551,16 +532,10 @@ Live process discovery. What's running RIGHT NOW? Queries live PIDs, not the arc
   "uptime_secs": "number",
   "cpu_pct": "number",
   "rss_mb": "number",
-  "context_pct": "number",
-  "status": "string",           // active|idle|stuck
+  "status": "string",           // active|idle
   "last_action": "string",      // e.g. "Bash: cargo test"
   "last_action_age_secs": "number",
-  "tmux_session": "string|null",
-  "stuck_signals": {
-    "silence_secs": "number",
-    "loop_detected": "boolean",
-    "permission_blocked": "boolean"
-  }
+  "tmux_session": "string|null"
 }]
 ```
 
@@ -590,3 +565,48 @@ gaal tag f15a045c --remove "research"
 ```
 
 Tags are filterable via `--tag` on: `ls`, `show`, `inspect`, `who`.
+
+---
+
+## 11. salt
+
+Generate a unique salt token for session self-identification. The token is printed to stdout and lands in the JSONL as part of the tool-result.
+
+### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-H` | flag | off | Human-readable output |
+
+### Output
+
+```json
+"gaal:salt:a7f3b2c1"
+```
+
+Plain string token. Use in the self-handoff protocol (step 1).
+
+---
+
+## 12. find-salt
+
+Find the JSONL file containing a previously generated salt token. Scans recent JSONL files for the token string.
+
+### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `<SALT>` | positional | required | Salt token to search for |
+| `-H` | flag | off | Human-readable output |
+
+### Output Schema (JSON object)
+
+```json
+{
+  "jsonl_path": "string",
+  "engine": "string",
+  "session_id": "string"
+}
+```
+
+Use `jsonl_path` with `gaal create-handoff --jsonl` for self-handoff.

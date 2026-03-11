@@ -76,9 +76,9 @@ Score  Session   Engine  Turn  Type     Snippet
 | `who <verb> <target>` | Inverted query: which session read/wrote/ran/deleted X? |
 | `search <query>` | Full-text search via Tantivy BM25. Filter by field, engine, time. |
 | `recall <topic>` | Ranked retrieval for session continuity. Best sessions first. |
-| `handoff <id>` | Generate handoff document via LLM extraction. |
+| `create-handoff [id]` | Generate handoff document via LLM extraction. |
 | `salt` | Generate a salt token for self-identification (see below). |
-| `find <salt>` | Find the JSONL file containing a salt token. |
+| `find-salt <salt>` | Find the JSONL file containing a salt token. |
 | `tag <id> <tags>` | Apply or remove tags on sessions. |
 | `index` | Index maintenance -- backfill, reindex, prune, status. |
 

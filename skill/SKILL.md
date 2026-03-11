@@ -9,7 +9,7 @@ description: |
   recall context from past sessions, session memory, continuity, past sessions, what was I working on,
   session start, session end, historical sessions, prior context, previous session,
   eywa, session continuity, reconnect with previous sessions, get session context,
-  cost tracking, stuck detection, child session visibility.
+  cost tracking, self-identification, salt token.
   Replaces eywa for session recall and handoff generation.
   Do NOT use for: cross-session prompt injection (use session-ctl), live JSONL tailing (not yet implemented).
 ---
@@ -41,7 +41,6 @@ Agent session observability CLI. 11 verbs + 1 utility. JSON default, `-H` for ta
 | `handoff.prompt` | `prompts/handoff.md` | Extraction prompt path (relative to ~/.gaal/) |
 | `handoff.format` | `eywa` | Default handoff output format |
 | `agent-mux.path` | `agent-mux` | agent-mux binary path |
-| `stuck.silence_secs` | `300` | Seconds before stuck detection triggers |
 
 ## Eywa Migration Map
 
@@ -166,7 +165,7 @@ gaal active -H
 | Fleet overview / recent sessions | `gaal ls` |
 | Drill into ONE session (files, commands, errors, tree) | `gaal show <id>` |
 | What's running RIGHT NOW (live PIDs) | `gaal active` |
-| Session health / stuck detection | `gaal inspect <id>` |
+| Session health / operational snapshot | `gaal inspect <id>` |
 | "Who wrote/read/ran X?" (inverted query) | `gaal who <verb> <target>` |
 | Free-text search across content | `gaal search <query>` |
 | Semantic recall ("what do I know about X?") | `gaal recall [query]` |
@@ -179,20 +178,18 @@ gaal active -H
 ### Fleet View
 | Command | What |
 |---------|------|
-| `gaal ls` | List sessions (filters: `--engine`, `--since`, `--status`, `--tag`, `--stuck`) |
+| `gaal ls` | List sessions (filters: `--engine`, `--since`, `--status`, `--tag`). Default limit 10, shows "N of M" footer |
 | `gaal ls --aggregate` | Token/cost totals instead of session list |
-| `gaal ls --children` | Include child/worker sessions (excluded by default) |
-| `gaal active` | Live process discovery (PIDs, CPU, memory, stuck signals) |
+| `gaal active` | Live process discovery (PIDs, CPU, memory) |
 
 ### Drill-Down
 | Command | What |
 |---------|------|
-| `gaal show <id>` | Full session record |
+| `gaal show <id>` | Full session record. `-H` shows summary card (not full dump) |
 | `gaal show <id> --files write` | Files modified by session |
 | `gaal show <id> --errors` | Errors and non-zero exits |
-| `gaal show <id> --tree` | Spawn hierarchy (parent/children) |
 | `gaal show <id> --trace` | Full event timeline (level 2) |
-| `gaal inspect <id>` | Operational snapshot (context %, velocity, stuck signals) |
+| `gaal inspect <id>` | Operational snapshot (velocity, health signals). `-H` renders human-readable card |
 
 ### Inverted Queries
 | Command | What |
@@ -202,6 +199,8 @@ gaal active -H
 | `gaal who ran "<cmd>"` | Sessions that ran a command |
 | `gaal who touched <term>` | Broadest — files OR commands mentioning term |
 | `gaal who installed <pkg>` | Package install detection (pip/npm/brew/cargo) |
+
+All `who` verbs: default limit 10 with "showing N of M" indicator. Add `-F`/`--full` for verbose per-fact output. Verb matching is by command name (not substring). Search window displayed in output.
 
 ### Search & Recall
 | Command | What |
@@ -229,7 +228,7 @@ gaal active -H
 | `gaal index import-eywa` | Import legacy eywa handoff-index.json |
 | `gaal tag <id> "label"` | Add/remove session tags |
 
-All verbs accept `-H` for human-readable tables. Full flag reference: `references/verb-reference.md`
+All commands default to brief/summary output (agent-optimized). Use `--full` / `-F` for verbose output. All accept `-H` for human-readable tables. Full flag reference: `references/verb-reference.md`
 
 ## Session ID Resolution
 
@@ -242,7 +241,7 @@ Gaal stores **shortened 8-character IDs**, not full UUIDs. The shortening logic 
 
 **Why different?** UUIDv4 is random throughout — first 8 chars are unique. UUIDv7 has a shared timestamp prefix (sessions started in the same ms share it) — only the random suffix provides uniqueness, so last 8 hex chars are used.
 
-**What you can pass to gaal commands** (`show`, `handoff`, `inspect`, etc.):
+**What you can pass to gaal commands** (`show`, `create-handoff`, `inspect`, etc.):
 
 | Input | Behavior |
 |-------|----------|
@@ -291,8 +290,8 @@ gaal ls --since today | jq -r '.[].id' | xargs -I{} gaal show {} --files write
 
 ## Security / Approval
 
-- **Read-only by default.** All verbs except `handoff` and `tag` are pure reads.
-- **`handoff` dispatches to LLM** via agent-mux. Costs money. Confirm before batch runs.
+- **Read-only by default.** All verbs except `create-handoff` and `tag` are pure reads.
+- **`create-handoff` dispatches to LLM** via agent-mux. Costs money. Confirm before batch runs.
 - **`index backfill` is safe.** Reads JSONL, writes to `~/.gaal/`. No external calls.
 - **`index import-eywa` is safe.** Copies data from eywa to gaal's own directory.
 
@@ -300,6 +299,6 @@ gaal ls --since today | jq -r '.[].id' | xargs -I{} gaal show {} --files write
 
 | Path | What | When to load |
 |------|------|-------------|
-| `references/verb-reference.md` | Full flag + schema reference for all 10 verbs | Need exact flags, output shapes, or edge cases |
+| `references/verb-reference.md` | Full flag + schema reference for all 12 commands | Need exact flags, output shapes, or edge cases |
 | `references/exit-codes.md` | Exit code table with agent response guidance | Handling errors in scripts or pipelines |
 | `references/troubleshooting.md` | Known bugs and workarounds | Something unexpected happens |
