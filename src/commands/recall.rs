@@ -25,7 +25,7 @@ pub struct RecallArgs {
     #[arg(long, default_value_t = 3)]
     pub limit: usize,
     /// Output format.
-    #[arg(long, value_enum, default_value_t = RecallFormat::Summary)]
+    #[arg(long, value_enum, default_value_t = RecallFormat::Brief)]
     pub format: RecallFormat,
     /// Minimum substance score.
     #[arg(long, default_value_t = 1)]
@@ -39,9 +39,9 @@ pub struct RecallArgs {
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq, ValueEnum)]
 pub enum RecallFormat {
     /// Structured summary fields.
-    #[default]
     Summary,
     /// Condensed 3-5 line block per session.
+    #[default]
     Brief,
     /// Raw handoff markdown content.
     Handoff,
