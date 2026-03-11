@@ -182,11 +182,23 @@ enum Commands {
         substance: u8,
     },
 
+    /// Generate a random salt token for session identification.
+    Salt,
+
+    /// Find the first JSONL file containing the provided salt.
+    Find {
+        /// Salt token to search for.
+        salt: String,
+    },
+
     /// Generate/update session handoff markdown via LLM.
     Handoff {
         /// Session ID (or "today").
         #[arg(required = false)]
         id: Option<String>,
+        /// Explicit JSONL file path to use.
+        #[arg(long)]
+        jsonl: Option<PathBuf>,
         /// LLM engine for extraction.
         #[arg(long)]
         engine: Option<Engine>,
@@ -497,8 +509,14 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             };
             gaal::commands::recall::run(args)
         }
+        Commands::Salt => gaal::commands::salt::run(),
+        Commands::Find { salt } => {
+            let args = gaal::commands::find::FindArgs { salt };
+            gaal::commands::find::run(args)
+        }
         Commands::Handoff {
             id,
+            jsonl,
             engine,
             model,
             prompt,
@@ -513,6 +531,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
         } => {
             let args = gaal::commands::handoff::HandoffArgs {
                 id,
+                jsonl,
                 engine: engine.map(convert_engine_string),
                 model,
                 prompt: prompt.map(PathBuf::from),

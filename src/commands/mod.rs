@@ -1,9 +1,11 @@
 pub mod active;
+pub mod find;
 pub mod handoff;
 pub mod index;
 pub mod inspect;
 pub mod ls;
 pub mod recall;
+pub mod salt;
 pub mod search;
 pub mod show;
 pub mod tag;

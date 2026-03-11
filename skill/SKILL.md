@@ -16,7 +16,7 @@ description: |
 
 # gaal
 
-Agent session observability CLI. 9 verbs + 1 utility. JSON default, `-H` for tables.
+Agent session observability CLI. 11 verbs + 1 utility. JSON default, `-H` for tables.
 
 ## Paths
 
@@ -100,6 +100,32 @@ Handoff generation uses LLM via agent-mux. Default engine: codex spark (cheapest
 
 **Cost awareness:** Each handoff costs ~$0.01-0.03 (spark) or ~$0.05-0.15 (claude). Batch runs multiply. Always `--dry-run` first.
 
+### Self-Handoff Protocol (from inside a running session)
+
+When a session needs to generate its own handoff — without knowing its session ID or relying on process detection — use the salt-based self-identification flow.
+
+**Why this exists:** `gaal handoff` normally takes a session ID. But a session doesn't know its own ID. The salt protocol solves this: embed a unique token into the JSONL transcript, then search for it to find the file path.
+
+```bash
+# Step 1: Generate + embed salt (MUST be its own Bash tool call)
+SALT=$(gaal salt)
+echo "$SALT"
+
+# Step 2: Find own JSONL (MUST be a SEPARATE Bash tool call — flush must happen first)
+JSONL=$(gaal find "$SALT" | jq -r .jsonl_path)
+
+# Step 3: Generate handoff from the discovered JSONL
+gaal handoff --jsonl "$JSONL"
+```
+
+**Critical: Steps 1 and 2 MUST be separate Bash tool invocations.** The salt appears in the tool-result of step 1, and Claude Code flushes it to the JSONL between tool calls. `gaal find` in step 2 scans JSONL files for that salt. If you chain them with `&&` in a single call, the salt won't be flushed yet and `gaal find` will return nothing.
+
+**How it works under the hood:**
+1. `gaal salt` generates a unique token (e.g., `gaal:salt:a7f3b2c1`) and prints it to stdout
+2. The token lands in the JSONL as part of the tool-result when Claude Code records this Bash call
+3. `gaal find <SALT>` greps all recent JSONL files for the token and returns the matching file path
+4. `gaal handoff --jsonl <path>` generates a handoff directly from the JSONL file, bypassing ID resolution
+
 ### Index Freshness
 Recall quality depends on indexed handoffs. Check and maintain:
 
@@ -145,6 +171,7 @@ gaal active -H
 | Free-text search across content | `gaal search <query>` |
 | Semantic recall ("what do I know about X?") | `gaal recall [query]` |
 | Generate handoff document (replaces eywa extract) | `gaal handoff <id\|today>` |
+| Self-identify current session (from inside) | `gaal salt` → `gaal find <SALT>` → `gaal handoff --jsonl` |
 | Cross-session prompt injection | session-ctl (different tool) |
 
 ## Commands by Tier
@@ -187,6 +214,12 @@ gaal active -H
 | Command | What |
 |---------|------|
 | `gaal handoff <id\|today>` | Generate handoff doc via agent-mux LLM dispatch |
+
+### Self-Identification
+| Command | What |
+|---------|------|
+| `gaal salt` | Generate unique salt token for self-identification (embed in JSONL via tool-result) |
+| `gaal find <SALT>` | Find JSONL file containing a salt token (returns `jsonl_path`, `engine`, `session_id`) |
 
 ### Index Management
 | Command | What |

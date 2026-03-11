@@ -45,6 +45,8 @@ static FENCED_JSON_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub struct HandoffArgs {
     /// Session id/prefix, or the keyword `today`.
     pub id: Option<String>,
+    /// Direct JSONL path override.
+    pub jsonl: Option<PathBuf>,
     /// Override extraction engine (defaults to config).
     pub engine: Option<String>,
     /// Override extraction model (defaults to config).
@@ -116,7 +118,26 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
         return run_batch(&conn, &config, &args);
     }
 
-    let (id_or_today, detected) = if let Some(id) = args.id.clone() {
+    let (id_or_today, detected) = if let Some(ref jsonl_path) = args.jsonl {
+        let session_id = jsonl_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| GaalError::ParseError("invalid --jsonl path".into()))?
+            .to_string();
+        let engine_name = if jsonl_path.to_string_lossy().contains(".codex") {
+            "codex"
+        } else {
+            "claude"
+        };
+        let detected = DetectedSession {
+            engine: engine_name.to_string(),
+            session_id: session_id.clone(),
+            jsonl_path: jsonl_path.clone(),
+            pid: 0,
+        };
+        eprintln!("Using provided JSONL: {}", jsonl_path.display());
+        (session_id, Some(detected))
+    } else if let Some(id) = args.id.clone() {
         (id, None)
     } else {
         let detected = if args.force_this {
