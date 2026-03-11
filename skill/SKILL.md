@@ -50,8 +50,8 @@ Agent session observability CLI. 11 verbs + 1 utility. JSON default, `-H` for ta
 | `eywa get` | `gaal recall --format eywa` |
 | `eywa get "query"` | `gaal recall "query" --format eywa` |
 | `eywa get "topic" --days-back 30 --max 5` | `gaal recall "topic" --days-back 30 --limit 5 --format eywa` |
-| `eywa extract` | `gaal handoff` (auto-detects current session) |
-| `eywa extract <id>` | `gaal handoff <id>` |
+| `eywa extract` | `gaal create-handoff` (auto-detects current session) |
+| `eywa extract <id>` | `gaal create-handoff <id>` |
 | `eywa rebuild-index` | `gaal index backfill` |
 
 The `--format eywa` flag produces coordinator-compatible output matching eywa's format.
@@ -77,7 +77,7 @@ The `--format eywa` flag produces output compatible with the coordinator's sessi
 ### Session End (coordinator calls this)
 Persist this session's context for future recall. Two steps — summary first, then extract.
 
-**Step 1: Write a session summary message.** Before calling `gaal handoff`, output a plain-text summary of what was accomplished in this session. This message becomes part of the JSONL transcript and gives the handoff extractor rich content to work with. Include:
+**Step 1: Write a session summary message.** Before calling `gaal create-handoff`, output a plain-text summary of what was accomplished in this session. This message becomes part of the JSONL transcript and gives the handoff extractor rich content to work with. Include:
 - What was done (key actions, decisions, artifacts)
 - What changed (files modified, configs updated, bugs fixed)
 - What's still open (blockers, next steps, unfinished threads)
@@ -86,14 +86,14 @@ Persist this session's context for future recall. Two steps — summary first, t
 
 ```bash
 # Auto-detect current session and generate handoff
-gaal handoff
+gaal create-handoff
 
 # Explicit session ID
-gaal handoff <session-id>
+gaal create-handoff <session-id>
 
 # Generate handoffs for all recent sessions missing them
-gaal handoff --batch --since 1d --dry-run   # preview first
-gaal handoff --batch --since 1d             # then run
+gaal create-handoff --batch --since 1d --dry-run   # preview first
+gaal create-handoff --batch --since 1d             # then run
 ```
 
 Handoff generation uses LLM via agent-mux. Default engine: codex spark (cheapest). Override with `--engine claude --model claude-sonnet-4-20250514` for higher quality.
@@ -104,7 +104,7 @@ Handoff generation uses LLM via agent-mux. Default engine: codex spark (cheapest
 
 When a session needs to generate its own handoff — without knowing its session ID or relying on process detection — use the salt-based self-identification flow.
 
-**Why this exists:** `gaal handoff` normally takes a session ID. But a session doesn't know its own ID. The salt protocol solves this: embed a unique token into the JSONL transcript, then search for it to find the file path.
+**Why this exists:** `gaal create-handoff` normally takes a session ID. But a session doesn't know its own ID. The salt protocol solves this: embed a unique token into the JSONL transcript, then search for it to find the file path.
 
 ```bash
 # Step 1: Generate + embed salt (MUST be its own Bash tool call)
@@ -112,19 +112,19 @@ SALT=$(gaal salt)
 echo "$SALT"
 
 # Step 2: Find own JSONL (MUST be a SEPARATE Bash tool call — flush must happen first)
-JSONL=$(gaal find "$SALT" | jq -r .jsonl_path)
+JSONL=$(gaal find-salt "$SALT" | jq -r .jsonl_path)
 
 # Step 3: Generate handoff from the discovered JSONL
-gaal handoff --jsonl "$JSONL"
+gaal create-handoff --jsonl "$JSONL"
 ```
 
-**Critical: Steps 1 and 2 MUST be separate Bash tool invocations.** The salt appears in the tool-result of step 1, and Claude Code flushes it to the JSONL between tool calls. `gaal find` in step 2 scans JSONL files for that salt. If you chain them with `&&` in a single call, the salt won't be flushed yet and `gaal find` will return nothing.
+**Critical: Steps 1 and 2 MUST be separate Bash tool invocations.** The salt appears in the tool-result of step 1, and Claude Code flushes it to the JSONL between tool calls. `gaal find-salt` in step 2 scans JSONL files for that salt. If you chain them with `&&` in a single call, the salt won't be flushed yet and `gaal find-salt` will return nothing.
 
 **How it works under the hood:**
 1. `gaal salt` generates a unique token (e.g., `gaal:salt:a7f3b2c1`) and prints it to stdout
 2. The token lands in the JSONL as part of the tool-result when Claude Code records this Bash call
-3. `gaal find <SALT>` greps all recent JSONL files for the token and returns the matching file path
-4. `gaal handoff --jsonl <path>` generates a handoff directly from the JSONL file, bypassing ID resolution
+3. `gaal find-salt <SALT>` greps all recent JSONL files for the token and returns the matching file path
+4. `gaal create-handoff --jsonl <path>` generates a handoff directly from the JSONL file, bypassing ID resolution
 
 ### Index Freshness
 Recall quality depends on indexed handoffs. Check and maintain:
@@ -170,8 +170,8 @@ gaal active -H
 | "Who wrote/read/ran X?" (inverted query) | `gaal who <verb> <target>` |
 | Free-text search across content | `gaal search <query>` |
 | Semantic recall ("what do I know about X?") | `gaal recall [query]` |
-| Generate handoff document (replaces eywa extract) | `gaal handoff <id\|today>` |
-| Self-identify current session (from inside) | `gaal salt` → `gaal find <SALT>` → `gaal handoff --jsonl` |
+| Generate handoff document (replaces eywa extract) | `gaal create-handoff <id\|today>` |
+| Self-identify current session (from inside) | `gaal salt` → `gaal find-salt <SALT>` → `gaal create-handoff --jsonl` |
 | Cross-session prompt injection | session-ctl (different tool) |
 
 ## Commands by Tier
@@ -213,13 +213,13 @@ gaal active -H
 ### LLM-Powered
 | Command | What |
 |---------|------|
-| `gaal handoff <id\|today>` | Generate handoff doc via agent-mux LLM dispatch |
+| `gaal create-handoff <id\|today>` | Generate handoff doc via agent-mux LLM dispatch |
 
 ### Self-Identification
 | Command | What |
 |---------|------|
 | `gaal salt` | Generate unique salt token for self-identification (embed in JSONL via tool-result) |
-| `gaal find <SALT>` | Find JSONL file containing a salt token (returns `jsonl_path`, `engine`, `session_id`) |
+| `gaal find-salt <SALT>` | Find JSONL file containing a salt token (returns `jsonl_path`, `engine`, `session_id`) |
 
 ### Index Management
 | Command | What |
@@ -287,7 +287,7 @@ gaal ls --since today | jq -r '.[].id' | xargs -I{} gaal show {} --files write
 | Read entire session JSONL manually | Use `gaal show <id> --trace` or `--source` |
 | Call `gaal show` in a loop for multiple IDs | Use `gaal show --ids a1b2,c3d4` (batch mode) |
 | Assume `gaal recall` works without handoffs | Check `gaal index status` handoffs_total first |
-| Run `gaal handoff` without agent-mux installed | Verify agent-mux availability; handoff needs LLM |
+| Run `gaal create-handoff` without agent-mux installed | Verify agent-mux availability; handoff needs LLM |
 
 ## Security / Approval
 

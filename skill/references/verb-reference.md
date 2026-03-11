@@ -465,10 +465,10 @@ LLM-powered handoff generation. Dispatches to agent-mux. **Costs money.**
 
 ```bash
 # Generate handoff for a specific session
-gaal handoff f15a045c
+gaal create-handoff f15a045c
 
 # Generate handoffs for all today's sessions
-gaal handoff today
+gaal create-handoff today
 ```
 
 ---

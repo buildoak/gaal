@@ -12,12 +12,12 @@ Five commands. Nothing else until these are solid.
 | `gaal show <id>` | Inspect a session. Headline, duration, engine, files touched, commands run. |
 | `gaal search <query>` | Find sessions by content. BM25 ranked via Tantivy. |
 | `gaal recall <topic>` | Ranked retrieval for session continuity. Handoff files + JSONL fallback. |
-| `gaal handoff <id>` | Generate handoff document via LLM extraction. |
+| `gaal create-handoff <id>` | Generate handoff document via LLM extraction. |
 
 ### Session Detection: Dual Strategy
 
 1. **From outside** (`gaal active`): `proc_pidpath` — resolves Claude/Codex processes via macOS APIs. Fast, zero false positives.
-2. **From inside** (self-identification): `gaal salt` + `gaal find SALT` — content-addressed detection. A unique salt token is printed into the session JSONL (via tool-result), then grepped to find the file. No PIDs, no process trees. Works through subagent indirection, broken process ancestry, and concurrent sessions.
+2. **From inside** (self-identification): `gaal salt` + `gaal find-salt SALT` — content-addressed detection. A unique salt token is printed into the session JSONL (via tool-result), then grepped to find the file. No PIDs, no process trees. Works through subagent indirection, broken process ancestry, and concurrent sessions.
 
 Both strategies ship in v0.1.0. They complement — proc_pidpath for fleet view, salt for self-identification.
 
@@ -29,13 +29,13 @@ SALT=$(gaal salt)
 echo "$SALT"
 
 # Step 2: Find own JSONL
-JSONL=$(gaal find "$SALT" | jq -r .jsonl_path)
+JSONL=$(gaal find-salt "$SALT" | jq -r .jsonl_path)
 
 # Step 3: Generate handoff
-gaal handoff --jsonl "$JSONL"
+gaal create-handoff --jsonl "$JSONL"
 ```
 
-Steps 1 and 2 MUST be separate tool invocations — the JSONL flush happens between calls. The salt appears in the tool-result of step 1, and `gaal find` scans for it in step 2.
+Steps 1 and 2 MUST be separate tool invocations — the JSONL flush happens between calls. The salt appears in the tool-result of step 1, and `gaal find-salt` scans for it in step 2.
 
 ## Feature Kill List (permanent)
 
@@ -97,8 +97,8 @@ read Rust source → reason about what "should" work → write fix → cargo bui
 | `src/discovery/active.rs` | proc_pidpath detection, dedup, ghost filtering |
 | `src/commands/active.rs` | Active sessions command |
 | `src/commands/salt.rs` | Salt token generation for self-identification |
-| `src/commands/find.rs` | JSONL file discovery by salt token |
-| `src/commands/handoff.rs` | LLM-powered handoff generation (supports `--jsonl` direct path) |
+| `src/commands/find.rs` | JSONL file discovery by salt token (`find-salt` command) |
+| `src/commands/handoff.rs` | LLM-powered handoff generation (`create-handoff`, supports `--jsonl` direct path) |
 | `src/commands/index.rs` | Indexing pipeline |
 | `src/db/schema.rs` | SQLite schema + autocommit guard |
 | `src/parser/` | Claude + Codex JSONL parsers |

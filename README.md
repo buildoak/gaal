@@ -163,13 +163,13 @@ SALT=$(gaal salt)
 echo "$SALT"
 
 # Step 2: Find own JSONL file (MUST be a separate tool call -- JSONL flushes between calls)
-JSONL=$(gaal find "$SALT" | jq -r .jsonl_path)
+JSONL=$(gaal find-salt "$SALT" | jq -r .jsonl_path)
 
 # Step 3: Generate handoff
-gaal handoff --jsonl "$JSONL"
+gaal create-handoff --jsonl "$JSONL"
 ```
 
-Steps 1 and 2 **must** be separate tool invocations. The salt appears in the tool-result of step 1, and `gaal find` scans for it in step 2. The JSONL flush happens between calls.
+Steps 1 and 2 **must** be separate tool invocations. The salt appears in the tool-result of step 1, and `gaal find-salt` scans for it in step 2. The JSONL flush happens between calls.
 
 Why this matters: when an agent runs inside a subagent tree (Task -> agent-mux -> Codex worker), PID-based detection breaks. The salt is content-addressed -- it doesn't care about process ancestry.
 
