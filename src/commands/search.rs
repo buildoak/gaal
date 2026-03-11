@@ -242,7 +242,7 @@ fn search_facts_with_context(
         let detail = doc_text(&retrieved, fields.detail);
         let snippet = detail
             .as_deref()
-            .map(|value| snippet_generator.snippet(value).to_html())
+            .map(|value| strip_html(&snippet_generator.snippet(value).to_html()))
             .filter(|value| !value.is_empty())
             .or_else(|| detail.map(|value| truncate_chars(&value, snippet_chars(context))))
             .or_else(|| subject.clone())
@@ -496,4 +496,28 @@ fn truncate_chars(input: &str, limit: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+/// Strip HTML tags and decode common HTML entities from a snippet.
+fn strip_html(input: &str) -> String {
+    // Remove HTML tags (e.g., <b>, </b>)
+    let mut result = String::with_capacity(input.len());
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => result.push(ch),
+            _ => {}
+        }
+    }
+    // Decode common HTML entities
+    result
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&nbsp;", " ")
 }
