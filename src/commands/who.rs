@@ -47,9 +47,12 @@ pub struct WhoArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum MatchMode {
     Subject,
     Detail,
+    /// Match against extracted command names from shell pipelines, not the full detail.
+    CommandName,
     SubjectOrDetail,
     Installed,
     Deleted,
@@ -188,7 +191,7 @@ fn verb_spec(verb: &str) -> Result<VerbSpec, GaalError> {
         },
         "ran" => VerbSpec {
             fact_types: vec![FactType::Command],
-            mode: MatchMode::Detail,
+            mode: MatchMode::CommandName,
         },
         "touched" => VerbSpec {
             fact_types: vec![FactType::FileRead, FactType::FileWrite, FactType::Command],
@@ -223,6 +226,9 @@ fn matches_verb(result: &WhoResult, mode: MatchMode, target: Option<&str>, folde
         MatchMode::Detail => target
             .map(|value| contains_ci(result.detail.as_deref(), value))
             .unwrap_or(true),
+        MatchMode::CommandName => target
+            .map(|value| command_name_matches(result.detail.as_deref(), value))
+            .unwrap_or(true),
         MatchMode::SubjectOrDetail => target
             .map(|value| {
                 subject_matches(result.subject.as_deref(), value, folder)
@@ -239,6 +245,123 @@ fn matches_verb(result: &WhoResult, mode: MatchMode, target: Option<&str>, folde
             semantic_deleted || file_write_subject_match
         }
     }
+}
+
+/// Match the target against command names extracted from a shell command string.
+///
+/// Splits the command on shell separators (`&&`, `||`, `|`, `;`) and matches
+/// the target against the first token (program name) of each segment. This
+/// avoids false positives from the target appearing as a file path argument
+/// in a long command.
+fn command_name_matches(detail: Option<&str>, target: &str) -> bool {
+    let Some(detail) = detail else {
+        return false;
+    };
+    let target_lower = target.to_ascii_lowercase();
+    for name in extract_command_names(detail) {
+        let name_lower = name.to_ascii_lowercase();
+        if name_lower.contains(&target_lower) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Extract program names from a shell command string.
+///
+/// Splits on `&&`, `||`, `|`, `;` then takes the first non-variable-assignment
+/// token from each segment. Handles common patterns like:
+/// - `cd /path && cargo build --release`  → ["cd", "cargo"]
+/// - `FOO=bar baz --flag`                 → ["baz"]
+/// - `rg -n pattern | head -5`            → ["rg", "head"]
+fn extract_command_names(cmd: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    // Split on shell operators. Use a simple char-scanning approach.
+    for segment in split_shell_segments(cmd) {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Skip leading variable assignments (VAR=value) and env prefixes
+        let mut tokens = trimmed.split_whitespace();
+        loop {
+            let Some(tok) = tokens.next() else {
+                break;
+            };
+            // Skip variable assignments like FOO=bar
+            if tok.contains('=') && !tok.starts_with('-') && !tok.starts_with('/') {
+                continue;
+            }
+            // Skip common shell builtins that wrap another command
+            if tok == "env" || tok == "sudo" || tok == "nohup" || tok == "time" || tok == "exec" {
+                continue;
+            }
+            // This is the program name — strip any path prefix
+            let program = tok.rsplit('/').next().unwrap_or(tok);
+            names.push(program);
+            break;
+        }
+    }
+    names
+}
+
+/// Split a command string on shell separators: `&&`, `||`, `|`, `;`.
+fn split_shell_segments(cmd: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let bytes = cmd.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    // Track quote state to avoid splitting inside strings
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    while i < len {
+        let b = bytes[i];
+        if b == b'\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            i += 1;
+            continue;
+        }
+        if in_single_quote || in_double_quote {
+            i += 1;
+            continue;
+        }
+
+        if b == b';' {
+            segments.push(&cmd[start..i]);
+            start = i + 1;
+            i += 1;
+        } else if b == b'|' {
+            if i + 1 < len && bytes[i + 1] == b'|' {
+                // ||
+                segments.push(&cmd[start..i]);
+                start = i + 2;
+                i += 2;
+            } else {
+                // |
+                segments.push(&cmd[start..i]);
+                start = i + 1;
+                i += 1;
+            }
+        } else if b == b'&' && i + 1 < len && bytes[i + 1] == b'&' {
+            // &&
+            segments.push(&cmd[start..i]);
+            start = i + 2;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    if start < len {
+        segments.push(&cmd[start..]);
+    }
+    segments
 }
 
 fn semantic_match(detail: Option<&str>, target: Option<&str>, verb: &str) -> bool {
