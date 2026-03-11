@@ -338,8 +338,9 @@ fn build_show_data(
     now: DateTime<Utc>,
 ) -> Result<ShowData, GaalError> {
     let any_fact_filter = args.files.is_some() || args.commands || args.errors || args.git;
-    let summary_mode = !args.full && !args.human && !any_fact_filter;
-    let include_all_facts = !any_fact_filter && (args.full || args.human);
+    // I36: human mode respects summary-by-default. Only --full overrides.
+    let summary_mode = !args.full && !any_fact_filter;
+    let include_all_facts = !any_fact_filter && args.full;
     let include_files = args.files.is_some() || include_all_facts;
     let include_commands = args.commands || include_all_facts;
     let include_errors = args.errors || include_all_facts;
@@ -948,6 +949,8 @@ fn avg_tokens(total: u64, turns: u32) -> u64 {
 
 fn print_human(records: &[ShowData], args: &ShowArgs) {
     let any_fact_filter = args.files.is_some() || args.commands || args.errors || args.git;
+    // I36: summary mode by default — full detail only with --full
+    let summary_mode = !args.full && !any_fact_filter;
 
     for (idx, data) in records.iter().enumerate() {
         if idx > 0 {
@@ -962,77 +965,103 @@ fn print_human(records: &[ShowData], args: &ShowArgs) {
         println!("Model: {}", record.model);
         println!("Status: {}", record.status);
         println!("Started: {}", record.started_at);
-        if let Some(ended_at) = &record.ended_at {
-            println!("Ended: {}", ended_at);
-        }
         println!("Duration: {}s", record.duration_secs);
         println!("CWD: {}", record.cwd);
-        println!(
-            "Tokens: in={} out={}",
-            record.tokens.input, record.tokens.output
-        );
-        println!("Turns: {}", record.turns);
-        println!("Tools: {}", record.tools_used);
-        println!("Children: {}", record.child_count);
 
         if let Some(headline) = &record.headline {
             println!("Headline: {}", headline);
         }
 
-        if !record.tags.is_empty() {
-            println!("Tags: {}", record.tags.join(", "));
-        }
+        if summary_mode {
+            // Brief summary card: counts only, no full lists.
+            let fc = data.file_count.as_ref();
+            let files_read = fc.map(|f| f.read).unwrap_or(0);
+            let files_written = fc.map(|f| f.written).unwrap_or(0);
+            let files_edited = fc.map(|f| f.edited).unwrap_or(0);
+            let cmds = data.command_count.unwrap_or(0);
+            let errs = data.error_count.unwrap_or(0);
+            let git_ops = data.git_op_count.unwrap_or(0);
+            println!(
+                "Files: read={} written={} edited={}",
+                files_read, files_written, files_edited
+            );
+            println!(
+                "Ops: commands={} errors={} git={}",
+                cmds, errs, git_ops
+            );
+            println!(
+                "Tokens: in={} out={}  Turns: {}  Tools: {}",
+                record.tokens.input, record.tokens.output, record.turns, record.tools_used
+            );
+        } else {
+            // Full detail mode (--full or explicit fact filter).
+            println!(
+                "Tokens: in={} out={}",
+                record.tokens.input, record.tokens.output
+            );
+            println!("Turns: {}", record.turns);
+            println!("Tools: {}", record.tools_used);
+            println!("Children: {}", record.child_count);
 
-        if let Some(exit_signal) = &record.exit_signal {
-            println!("Exit: {}", exit_signal);
-        }
+            if !record.tags.is_empty() {
+                println!("Tags: {}", record.tags.join(", "));
+            }
 
-        println!("Last Event: {}", record.last_event_at);
+            if let Some(exit_signal) = &record.exit_signal {
+                println!("Exit: {}", exit_signal);
+            }
 
-        if !record.children.is_empty() {
-            println!("Child IDs: {}", record.children.join(", "));
+            if let Some(ended_at) = &record.ended_at {
+                println!("Ended: {}", ended_at);
+            }
+
+            println!("Last Event: {}", record.last_event_at);
+
+            if !record.children.is_empty() {
+                println!("Child IDs: {}", record.children.join(", "));
+            }
+
+            // Show files: when explicitly requested OR --full
+            let show_files = args.files.is_some() || args.full;
+            if show_files {
+                print_path_group("Files read", &record.files.read);
+                print_path_group("Files written", &record.files.written);
+                print_path_group("Files edited", &record.files.edited);
+            }
+
+            // Show commands: when explicitly requested OR --full
+            let show_commands = args.commands || args.full;
+            if show_commands && !record.commands.is_empty() {
+                println!("Commands:");
+                for cmd in &record.commands {
+                    println!("  $ {} (exit {})", cmd.cmd, cmd.exit_code);
+                }
+            }
+
+            // Show errors: when explicitly requested OR --full
+            let show_errors = args.errors || args.full;
+            if show_errors && !record.errors.is_empty() {
+                println!("Errors:");
+                for err in &record.errors {
+                    println!(
+                        "  - [{}] {} exit={} {}",
+                        err.ts, err.tool, err.exit_code, err.snippet
+                    );
+                }
+            }
+
+            // Show git ops: when explicitly requested OR --full
+            let show_git = args.git || args.full;
+            if show_git && !record.git_ops.is_empty() {
+                println!("Git ops:");
+                for op in &record.git_ops {
+                    println!("  - {} {}", op.op, op.message);
+                }
+            }
         }
 
         if args.source {
             println!("Source: {}", record.jsonl_path);
-        }
-
-        // Show files: when explicitly requested OR when no fact filter is set (show all)
-        let show_files = args.files.is_some() || !any_fact_filter;
-        if show_files {
-            print_path_group("Files read", &record.files.read);
-            print_path_group("Files written", &record.files.written);
-            print_path_group("Files edited", &record.files.edited);
-        }
-
-        // Show commands: when explicitly requested OR when no fact filter is set
-        let show_commands = args.commands || !any_fact_filter;
-        if show_commands && !record.commands.is_empty() {
-            println!("Commands:");
-            for cmd in &record.commands {
-                println!("  $ {} (exit {})", cmd.cmd, cmd.exit_code);
-            }
-        }
-
-        // Show errors: when explicitly requested OR when no fact filter is set
-        let show_errors = args.errors || !any_fact_filter;
-        if show_errors && !record.errors.is_empty() {
-            println!("Errors:");
-            for err in &record.errors {
-                println!(
-                    "  - [{}] {} exit={} {}",
-                    err.ts, err.tool, err.exit_code, err.snippet
-                );
-            }
-        }
-
-        // Show git ops: when explicitly requested OR when no fact filter is set
-        let show_git = args.git || !any_fact_filter;
-        if show_git && !record.git_ops.is_empty() {
-            println!("Git ops:");
-            for op in &record.git_ops {
-                println!("  - {} {}", op.op, op.message);
-            }
         }
 
         if args.tokens {
