@@ -431,6 +431,49 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
     Ok(out)
 }
 
+/// Count sessions matching the filter (ignoring LIMIT) for "Showing N of M" messages.
+pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, GaalError> {
+    let cwd_like = filter.cwd.as_ref().map(|value| format!("%{value}%"));
+    let include_children = if filter.include_children {
+        1_i64
+    } else {
+        0_i64
+    };
+
+    let sql = r#"
+        SELECT COUNT(*)
+        FROM sessions s
+        WHERE (:engine IS NULL OR s.engine = :engine)
+          AND (:since IS NULL OR s.started_at >= :since)
+          AND (:before IS NULL OR s.started_at <= :before)
+          AND (:cwd_like IS NULL OR s.cwd LIKE :cwd_like)
+          AND (:include_children = 1 OR s.parent_id IS NULL)
+          AND (
+              :tag IS NULL OR EXISTS (
+                  SELECT 1 FROM session_tags t
+                  WHERE t.session_id = s.id AND t.tag = :tag
+              )
+          )
+    "#;
+
+    let count: i64 = conn
+        .query_row(
+            sql,
+            named_params! {
+                ":engine": filter.engine.as_deref(),
+                ":since": filter.since.as_deref(),
+                ":before": filter.before.as_deref(),
+                ":cwd_like": cwd_like.as_deref(),
+                ":include_children": include_children,
+                ":tag": filter.tag.as_deref(),
+            },
+            |row| row.get(0),
+        )
+        .map_err(db_err)?;
+
+    Ok(count)
+}
+
 /// Get facts for a session, optionally filtered by fact type.
 pub fn get_facts(
     conn: &Connection,

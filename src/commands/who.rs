@@ -105,6 +105,8 @@ struct WhoSummaryRow {
 struct WhoOutput<T: Serialize> {
     search_window: String,
     note: &'static str,
+    shown: usize,
+    total: usize,
     sessions: T,
 }
 
@@ -158,15 +160,20 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     };
 
     let rows = query_who(&conn, &filter)?;
-    let matches: Vec<WhoRow> = rows
+    let filtered: Vec<WhoResult> = rows
         .into_iter()
         .filter(|row| matches_verb(row, spec.mode, target.as_deref(), is_folder_target))
+        .collect();
+    let total_matches = filtered.len();
+    let matches: Vec<WhoRow> = filtered
+        .into_iter()
         .take(limit as usize)
         .map(WhoRow::from)
         .collect();
     if matches.is_empty() {
         return Err(GaalError::NoResults);
     }
+    let was_truncated = matches.len() < total_matches;
 
     if full {
         // --full: per-fact output with full detail (old behavior)
@@ -176,10 +183,19 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
                 eprintln!("({note})");
             }
             print_human_full(&matches);
+            if was_truncated {
+                eprintln!(
+                    "Showing {} of {} results \u{2014} use --limit N for more",
+                    matches.len(),
+                    total_matches
+                );
+            }
         } else {
             let output = WhoOutput {
                 search_window,
                 note,
+                shown: matches.len(),
+                total: total_matches,
                 sessions: &matches,
             };
             print_json(&output).map_err(GaalError::from)?;
@@ -195,10 +211,19 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
             eprintln!("({note})");
         }
         print_human_brief(&summaries);
+        if was_truncated {
+            eprintln!(
+                "Showing {} of {} results \u{2014} use --limit N for more",
+                matches.len(),
+                total_matches
+            );
+        }
     } else {
         let output = WhoOutput {
             search_window,
             note,
+            shown: matches.len(),
+            total: total_matches,
             sessions: &summaries,
         };
         print_json(&output).map_err(GaalError::from)?;

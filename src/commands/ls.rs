@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::commands::active::probe_runtime;
 use crate::db::open_db_readonly;
-use crate::db::queries::{self, ListFilter, SessionRow};
+use crate::db::queries::{self, count_sessions, ListFilter, SessionRow};
 use crate::discovery::active::{find_active_sessions, is_pid_alive, probe_pid};
 use crate::error::GaalError;
 use crate::model::{compute_session_status, SessionStatus, StatusParams, TokenUsage};
@@ -160,12 +160,31 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
         return Err(GaalError::NoResults);
     }
 
+    let shown = summaries.len();
+    let total = count_sessions(&conn, &filter)? as usize;
+
     let format = if args.human_readable {
         OutputFormat::Human
     } else {
         OutputFormat::Json
     };
     output::print_output(&summaries, format).map_err(GaalError::from)?;
+
+    if shown < total {
+        if args.human_readable {
+            eprintln!(
+                "Showing {} of {} sessions \u{2014} use --limit N for more",
+                shown, total
+            );
+        } else {
+            let footer = serde_json::json!({
+                "shown": shown,
+                "total": total,
+                "note": format!("Showing {} of {} sessions — use --limit N for more", shown, total)
+            });
+            eprintln!("{}", footer);
+        }
+    }
 
     Ok(())
 }

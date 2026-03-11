@@ -41,7 +41,7 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = LsSort::Started)]
         sort: LsSort,
         /// Max number of results.
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = 10)]
         limit: usize,
         /// Include child/worker sessions.
         #[arg(long)]
@@ -116,6 +116,10 @@ enum Commands {
     },
 
     /// Inverted query: which session did X to Y.
+    #[command(
+        arg_required_else_help = true,
+        after_long_help = "Verbs:\n  read       Files opened with the Read tool\n  wrote      Files created/modified with Write or Edit tool\n  ran        Commands executed via Bash tool (matches program names)\n  touched    Any file interaction (read + wrote combined)\n  changed    Files modified (wrote + edited, excludes read-only)\n  installed  Package/dependency installations detected in commands\n  deleted    File deletions (rm commands and file removals)"
+    )]
     Who {
         /// Action verb (read|wrote|ran|touched|installed|changed|deleted).
         verb: String,
@@ -192,14 +196,16 @@ enum Commands {
     /// Generate a random salt token for session identification.
     Salt,
 
-    /// Find the first JSONL file containing the provided salt.
-    Find {
+    /// Find the first JSONL file containing the provided salt token.
+    #[command(name = "find-salt")]
+    FindSalt {
         /// Salt token to search for.
         salt: String,
     },
 
-    /// Generate/update session handoff markdown via LLM.
-    Handoff {
+    /// Generate/create a session handoff markdown via LLM extraction.
+    #[command(name = "create-handoff")]
+    CreateHandoff {
         /// Session ID (or "today").
         #[arg(required = false)]
         id: Option<String>,
@@ -521,11 +527,11 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             gaal::commands::recall::run(args)
         }
         Commands::Salt => gaal::commands::salt::run(),
-        Commands::Find { salt } => {
+        Commands::FindSalt { salt } => {
             let args = gaal::commands::find::FindArgs { salt };
             gaal::commands::find::run(args)
         }
-        Commands::Handoff {
+        Commands::CreateHandoff {
             id,
             jsonl,
             engine,
