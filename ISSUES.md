@@ -647,3 +647,261 @@ Session `019cd71a` (codex) shows as `stuck` with `silence (1180s)` — may be ge
 - Codex 121%: Token count may include both input and output tokens, or the context window size constant is wrong for the model being used.
 
 **Expected:** Context% should be 0-100%, with `?` or `-` shown when unknown.
+
+---
+
+## I34: `gaal ls` default limit too high — floods output
+
+**Severity:** Medium (UX)
+**Command:** `gaal ls` (no flags)
+
+**Problem:** Default `--limit 50` shows too many sessions. For both agents and humans, 50 results is overwhelming. No indication of total count — user doesn't know if they're seeing everything or a subset.
+
+**Expected:** Default limit of 10 with a message: "showing 10 of N sessions — use --limit to see more." JSON mode should include a `total` field.
+
+**Fix:** Change `default_value_t = 50` to `default_value_t = 10` in `src/main.rs`. Add total session count query. In `-H` mode, print footer with count message. In JSON, add `"total": N` alongside `"sessions"`.
+
+---
+
+## I35: `gaal ls -H` and `gaal who -H` — broken table layout with long CWD strings
+
+**Severity:** Medium (UX — tables become unreadable)
+**Command:** `gaal ls -H`, `gaal who read ISSUES.md -H`
+
+**Problem:** Deep nested CWD paths like `/Users/otonashi/thinking/building/gaussian-moat-cloud/runs/loops/sqrt36-upper-bound-autoresearch-20260310/agent-mux/candidate-mutation-jlqj2pkf/solver` break table column alignment. The table doesn't survive terminal resize. Same issue affects both `ls -H` and `who -H` output.
+
+**Note:** `gaal active -H` already handles this correctly — it truncates CWD to last 2-3 components with `...` prefix. That truncation logic exists but isn't applied to `ls` and `who` renderers.
+
+**Fix:** Extract the CWD truncation function from `active` and apply it to `ls -H` and `who -H` table renderers. Truncate to last 2-3 path components with `...` prefix. Consider respecting terminal width via `$COLUMNS` or `term_size` crate.
+
+---
+
+## I36: `gaal show -H` still too token-heavy — bypasses summary card
+
+**Severity:** High (UX + token waste)
+**Command:** `gaal show be1c2826 -H`
+
+**Problem:** JSON mode (`gaal show <id>`) returns a reasonable summary card. Human mode (`-H`) bypasses the card and dumps everything — full fact lists, all files, all commands. The user describes it as "madness token-wise." Related to I25 (token-heavy defaults) but specific to the `-H` code path in `show`.
+
+**Expected:** Human mode should be *more* concise than JSON by default, not less. Default `show -H` should render: headline, engine, duration, status, file count, command count, and the path to the full markdown transcript. Full detail only with `--full` / `-F`.
+
+**Fix:** In `src/commands/show.rs`, change the human renderer's default to mirror the JSON summary card. Gate full fact/file/command dumps behind `--full`. Always include the markdown file path so users know where the full transcript lives.
+
+---
+
+## I37: `gaal active` — 3 PIDs dedup bug collapses distinct sessions
+
+**Severity:** High (bug — active view is misleading)
+**Command:** `gaal active -H`
+
+**Problem:** Entry `d142e3cc claude idle 7h 27m "boot Jenkins" [3 PIDs]` — the 3 PIDs are actually different sessions that happen to start with the same prompt. They're being collapsed because dedup is matching on prompt similarity rather than session ID. This is the inverse of I28/I31 (duplicate entries) — now sessions are being over-merged.
+
+**Root cause:** The dedup logic introduced to fix I28/I31 likely keys on headline/prompt text rather than session UUID. Sessions with similar initial prompts (e.g., multiple "boot Jenkins" sessions) get merged into one entry.
+
+**Expected:** Dedup must key strictly on session ID. Three different session IDs → three entries, regardless of prompt similarity.
+
+**Fix:** In `dedup_active_output()`, verify the dedup key is the session `id` field, not headline/prompt/CWD. If merging is happening on a compound key that includes prompt, remove the prompt component.
+
+---
+
+## I38: `gaal who wrote ISSUES.md` — JSON mode massively too many tokens
+
+**Severity:** High (token waste — blows agent context)
+**Command:** `gaal who wrote ISSUES.md`
+
+**Problem:** JSON mode dumps all facts for all matching sessions — massive token output. In contrast, `gaal who wrote ISSUES.md -H` is focused and readable. JSON default should be equally concise.
+
+**Sub-issue:** `-H` mode is missing date range information — shows which sessions wrote the file but not *when* the writes happened.
+
+**Fix:**
+1. JSON default for `who` should return summary records: `{session_id, engine, date, headline, fact_count}` — not the raw fact arrays.
+2. Add `--verbose` / `--full` flag to include raw facts when needed.
+3. Add `first_seen` / `last_seen` timestamps to both JSON and `-H` output for when the matching operations occurred.
+
+---
+
+## I39: `gaal who` returns no results for files that were definitely worked on
+
+**Severity:** High (bug — trust issue)
+**Command:** `gaal who read CLAUDE-QMS.md` (at sorbent-demo), `gaal who wrote AUDIT_PHASE3.md`
+
+**Problem:** Both queries return zero results despite these files being actively worked on by sessions. Also, `gaal who wrote CLAUDE.md` at gaal/ may be returning inaccurate results — user recalls only one session writing that file.
+
+**Root cause hypotheses:**
+1. **Indexing gap:** Sessions that worked on these files were never indexed (possible I17 backfill crash for subagent-heavy sessions).
+2. **Parser gap:** Certain file operation event types not captured as facts during indexing.
+3. **CWD filtering:** If `--cwd` is implicitly set to current directory, sessions working from a different CWD would be filtered out even if they touched the same files.
+
+**Investigation needed:**
+- Pick a session known to have read CLAUDE-QMS.md. Check if it exists in the DB (`gaal show <id>`).
+- If it exists, check if its file_read facts are in the facts table.
+- If facts are missing, trace the parser path for file_read events.
+- Check whether `--cwd` auto-filtering is happening.
+
+---
+
+## I40: `gaal who ran` — false positive matches via substring in long command strings
+
+**Severity:** High (bug — search results are misleading)
+**Command:** `gaal who ran tortuise -H`, `gaal who ran tortui -H`
+
+**Problem:** Both queries return the same codex sessions from yesterday. "tortuise" hasn't been run in 7+ days, and "tortui" doesn't exist as a tool at all. The matching is happening via substring within long command strings (e.g., a `bash` command that mentions "tortoise" somewhere in its arguments), not on the actual tool/command name.
+
+**Expected:** `gaal who ran X` should match on the tool/command name (first token or primary executable), not on arbitrary substrings within full command arguments. A query for "tortuise" should not match a session that ran `bash -c "... tortoise ..."`.
+
+**Fix:**
+1. For `ran` verb, extract and match against the command name (first token of the command string), not the full argument string.
+2. Add `--fuzzy` flag to enable substring matching when the user explicitly wants it.
+3. Consider: if exact match returns 0 results, suggest `--fuzzy` in the error message.
+
+---
+
+## I41: `gaal who -H` needs limit indicator message
+
+**Severity:** Medium (UX)
+**Command:** `gaal who ran python3 -H`
+
+**Problem:** Shows 10 results (the default limit) but no indication there are more. User can't tell if there are exactly 10 matching sessions or 100 with only 10 shown.
+
+**Fix:** Same pattern as I34 — add "showing N of M results — use --limit N for more" footer to `-H` output. In JSON, add `"total"` field.
+
+---
+
+## I42: `gaal who` verb help text — `touched` and `changed` are unclear
+
+**Severity:** Medium (UX — discoverability)
+**Command:** `gaal who touched`, `gaal who changed`
+
+**Problem:** The `touched` and `changed` verbs have no documentation. User doesn't understand what they match. The `--help` text just says "Action verb" without listing or explaining the available verbs.
+
+**Fix:** Add a verb reference to `gaal who --help` and to the error message when an invalid verb is used:
+```
+Verbs:
+  read       sessions that read a file (file_read)
+  wrote      sessions that wrote/created a file (file_write)
+  ran        sessions that executed a command (command_run)
+  touched    sessions that read OR wrote a file
+  changed    sessions that wrote OR deleted a file
+  installed  sessions that ran install commands
+  deleted    sessions that deleted a file
+```
+
+---
+
+## I43: `gaal who` with no args should show help, not error
+
+**Severity:** Low (UX)
+**Command:** `gaal who` (no args)
+
+**Problem:** Running `gaal who` with no arguments produces an error. Should show the help menu with verb reference instead.
+
+**Fix:** Make `verb` optional in the CLI definition. If verb is None, print the verb reference table (I42) and exit 0. Alternatively, use clap's built-in behavior to show subcommand help.
+
+---
+
+## I44: Rename `gaal find` — name too generic for salt-specific function
+
+**Severity:** Low (UX — naming confusion)
+**Command:** `gaal find`
+
+**Problem:** `gaal find` only finds JSONL files by salt token, but the name implies general-purpose file finding. Users encountering `gaal find` in help text will expect `find . -name "*.md"` behavior.
+
+**Fix:** Rename to `find-salt` (preferred — matches the salt/find-salt workflow). Keep `find` as a hidden alias for backward compatibility (`#[command(alias = "find")]`). Update help text: "Find the JSONL file containing a salt token generated by `gaal salt`."
+
+---
+
+## I45: Rename `gaal handoff` — bare noun is ambiguous
+
+**Severity:** Low (UX — naming)
+**Command:** `gaal handoff`
+
+**Problem:** `gaal handoff` could mean show, create, list, or delete a handoff. The command generates a new handoff via LLM extraction, which is a specific action that should be named as a verb.
+
+**Options:**
+1. `gaal gen-handoff` — clearest for the generation action
+2. `gaal create-handoff` — more standard
+3. Make `handoff` a subcommand group: `gaal handoff generate`, `gaal handoff show`, `gaal handoff list`
+
+**Fix:** Option 3 is future-proof if we want `gaal handoff show <id>` and `gaal handoff list --since 7d` later. For now, rename to `gen-handoff` with `handoff` as hidden alias.
+
+---
+
+## I46: Rethink `show` vs `inspect` — what does an agent actually need?
+
+**Severity:** Medium (architecture — design needed)
+
+**Problem:** User insight: "I would be very much against dumping whole session summary in CLI tool response. Much better logic — point to the file PATH for the full session transcript and notify that it's token heavy."
+
+**Current state:**
+- `show` = full session record (facts, files, commands, errors, git ops)
+- `inspect` = operational health snapshot (context%, velocity, stuck signals)
+
+**Gap:** Neither command gives what an agent actually wants: a brief card with just enough to decide whether to dig deeper, plus a path to the full transcript for delegation.
+
+**Design questions:**
+1. What signal does `show` give beyond `ls`? → files read/written, commands, errors, duration breakdown
+2. Should `show` default to a "session card" (headline + metadata + transcript path)?
+3. Should full dump be behind `--full` only?
+4. Does `inspect` need to exist separately or can it fold into `show --health`?
+
+**Status:** Post-release design work. I36 is the immediate fix (make show -H brief by default).
+
+---
+
+## I47: `gaal who -H` results missing date ranges
+
+**Severity:** Low (enhancement)
+**Command:** `gaal who wrote ISSUES.md -H`
+
+**Problem:** Output shows which sessions wrote the file but not when. Date/time of the actual file operations would make results much more actionable — user can see "session X wrote ISSUES.md 3 days ago" vs "session Y wrote it 2 hours ago."
+
+**Fix:** Include `first_seen` and `last_seen` timestamps for the matching facts in both JSON and `-H` output. Source from the fact's `created_at` or the session event timestamp.
+
+---
+
+## I38: `gaal who` default output token-heavy JSON [FIXED 2026-03-11]
+
+**Severity:** High (token waste)
+**Command:** `gaal who wrote ISSUES.md`
+
+**Problem:** Default JSON output dumped full `detail` field per fact (containing entire file contents or edit JSON). A simple `who wrote ISSUES.md` returned 41KB of JSON.
+
+**Fix:** Default output now groups facts by session, showing session_id, engine, latest_ts, fact_count, and truncated subjects list (~400 bytes). `--full/-F` restores per-fact output with full detail fields. Human mode (`-H`) also defaults to grouped brief view.
+
+---
+
+## I39: `gaal who` missing results for sorbent-demo files — RESEARCH COMPLETE
+
+**Severity:** High (trust-critical)
+**Command:** `gaal who read CLAUDE-QMS.md`, `gaal who wrote AUDIT_PHASE3.md` at sorbent-demo
+
+**Root causes (three independent issues):**
+
+1. **Time window too narrow:** Default `--since 7d` excludes files worked on weeks ago. The sorbent-demo sessions with these files date from early February (35+ days ago). Using `--since 60d` finds AUDIT_PHASE3.md results.
+
+2. **Fact type gap:** `who read` only matches `file_read` facts (Read tool), `who wrote` only matches `file_write` facts (Write tool). Files read/written via bash commands (`cat`, `sed`, `echo >`) are stored as `command` facts, not file_read/file_write. CLAUDE-QMS.md was edited via bash (`git add CLAUDE-QMS.md`) and never via the Write tool — so `who wrote` can never find it.
+
+3. **Subagent JSONL not indexed:** Many file operations happened in Claude Code subagent sessions stored under `~/.claude/projects/<hash>/<session>/subagents/agent-*.jsonl`. The discovery function `collect_project_jsonl_files()` in `src/discovery/claude.rs` only scans one level deep (`<hash>/*.jsonl`), missing all subagent files two levels deeper.
+
+**Evidence:**
+- `sqlite3 ~/.gaal/index.db "SELECT ... WHERE subject LIKE '%CLAUDE-QMS%'"` → only `command` and `error` facts, zero `file_write` facts
+- `grep -rl "CLAUDE-QMS" ~/.claude/projects/` → found in subagent JSONLs under `subagents/` dirs
+- `gaal who read AUDIT_PHASE3.md --since 60d` → found session `6f8db90f` from 2026-02-05
+
+**Proposed fixes:**
+- Issue 1: No code change needed — users should adjust `--since` for older files
+- Issue 2: Consider adding a `who created` or `who modified` verb that also searches `command` facts for file-manipulating bash commands
+- Issue 3: Extend `collect_project_jsonl_files()` to recurse into `subagents/` directories. This would significantly increase index coverage.
+
+---
+
+## I40: `gaal who ran` false positives from substring matching [FIXED 2026-03-11]
+
+**Severity:** High (trust — incorrect results)
+**Command:** `gaal who ran tortuise -H`, `gaal who ran tortui -H`
+
+**Problem:** Both returned codex sessions from yesterday. "tortuise" hadn't been run for 7+ days. "tortui" doesn't exist as a tool. The matches were against long bash commands that enumerated project files — e.g., `for f in ... projects/tortuise.md ...` where "tortuise" appeared as a file path argument, not as a command being executed.
+
+**Root cause:** `who ran` used `contains_ci()` to match the search term against the entire `detail` field (full bash command string). Any substring match anywhere in arguments, file paths, or piped commands would trigger a hit.
+
+**Fix:** Introduced `MatchMode::CommandName` which extracts program names from shell command strings by splitting on `&&`, `||`, `|`, `;` and taking the first token of each segment (skipping variable assignments and env prefixes like `sudo`, `env`, etc.). The search term now matches only against extracted command names, not the full argument string.
