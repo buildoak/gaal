@@ -54,6 +54,7 @@ enum Commands {
     /// Full session record with optional focused views.
     Show {
         /// Session ID (or "latest").
+        #[arg(required = true)]
         id: Option<String>,
         /// File ops view; when passed without a value, defaults to "all".
         #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "all")]
