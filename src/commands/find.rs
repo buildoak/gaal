@@ -6,14 +6,14 @@ use serde_json::json;
 
 use crate::error::GaalError;
 
-/// Arguments for `gaal find`.
+/// Arguments for `gaal find-salt`.
 #[derive(Debug, Clone)]
 pub struct FindArgs {
     /// Salt token to search for.
     pub salt: String,
 }
 
-/// Find the first JSONL session file containing the provided salt token.
+/// Find the first JSONL session file containing the provided salt token (`find-salt` command).
 pub fn run(args: FindArgs) -> Result<(), GaalError> {
     let Some(home) = dirs::home_dir() else {
         eprintln!("{}", json!({ "error": "salt not found" }));

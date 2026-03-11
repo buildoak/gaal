@@ -40,7 +40,7 @@ static FENCED_JSON_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("fenced JSON regex for handoff metadata should compile")
 });
 
-/// Arguments for `gaal handoff`.
+/// Arguments for `gaal create-handoff`.
 #[derive(Debug, Clone)]
 pub struct HandoffArgs {
     /// Session id/prefix, or the keyword `today`.
@@ -106,7 +106,7 @@ struct DetectedSession {
     pid: u32,
 }
 
-/// Runs the `gaal handoff` workflow.
+/// Runs the `gaal create-handoff` workflow.
 pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
     let mut config = load_config();
     if config.handoff.prompt.is_relative() {
