@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use clap::Args;
 use serde::Serialize;
@@ -39,6 +41,9 @@ pub struct WhoArgs {
     /// Print human-readable table output instead of JSON.
     #[arg(short = 'H')]
     pub human: bool,
+    /// Show full per-fact output including detail fields (default: brief grouped by session).
+    #[arg(short = 'F', long)]
+    pub full: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,10 +86,22 @@ impl From<WhoResult> for WhoRow {
     }
 }
 
+/// Compact summary row grouped by session (default output).
+#[derive(Debug, Clone, Serialize)]
+struct WhoSummaryRow {
+    session_id: String,
+    engine: String,
+    latest_ts: String,
+    fact_count: usize,
+    subjects: Vec<String>,
+    headline: Option<String>,
+}
+
 /// Execute `gaal who` and print matching facts as JSON or a compact table.
 pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     let verb = args.verb.to_ascii_lowercase();
     let spec = verb_spec(&verb)?;
+    let full = args.full;
     let limit = args.limit.max(1);
     let query_limit = limit.saturating_mul(8);
     let target = args
@@ -121,12 +138,24 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
         return Err(GaalError::NoResults);
     }
 
-    if args.human {
-        print_human(&matches);
+    if full {
+        // --full: per-fact output with full detail (old behavior)
+        if args.human {
+            print_human_full(&matches);
+        } else {
+            print_json(&matches).map_err(GaalError::from)?;
+        }
         return Ok(());
     }
 
-    print_json(&matches).map_err(GaalError::from)
+    // Default: brief output grouped by session
+    let summaries = group_by_session(&matches);
+    if args.human {
+        print_human_brief(&summaries);
+    } else {
+        print_json(&summaries).map_err(GaalError::from)?;
+    }
+    Ok(())
 }
 
 /// Return detail-pattern expansions for semantic verbs.
@@ -250,7 +279,75 @@ fn starts_with_ci(value: &str, prefix: &str) -> bool {
         .starts_with(&prefix.to_ascii_lowercase())
 }
 
-fn print_human(rows: &[WhoRow]) {
+/// Group flat fact rows into per-session summaries for brief output.
+fn group_by_session(rows: &[WhoRow]) -> Vec<WhoSummaryRow> {
+    let mut map: HashMap<String, WhoSummaryRow> = HashMap::new();
+    // Track insertion order since HashMap doesn't preserve it.
+    let mut order: Vec<String> = Vec::new();
+
+    for row in rows {
+        let is_new = !map.contains_key(&row.session_id);
+        let entry = map
+            .entry(row.session_id.clone())
+            .or_insert_with(|| WhoSummaryRow {
+                session_id: row.session_id.clone(),
+                engine: row.engine.clone(),
+                latest_ts: row.ts.clone(),
+                fact_count: 0,
+                subjects: Vec::new(),
+                headline: row.session_headline.clone(),
+            });
+        if is_new {
+            order.push(row.session_id.clone());
+        }
+        entry.fact_count += 1;
+        // Update latest_ts if this fact is newer
+        if row.ts > entry.latest_ts {
+            entry.latest_ts = row.ts.clone();
+        }
+        // Collect unique subjects, truncated to filename
+        if let Some(ref subj) = row.subject {
+            let short = truncate_to_filename(subj);
+            if !entry.subjects.contains(&short) {
+                entry.subjects.push(short);
+            }
+        } else if let Some(ref detail) = row.detail {
+            // For commands, extract first line / first 80 chars
+            let short = detail
+                .lines()
+                .next()
+                .unwrap_or(detail)
+                .chars()
+                .take(80)
+                .collect::<String>();
+            if !entry.subjects.contains(&short) {
+                entry.subjects.push(short);
+            }
+        }
+        // Cap subjects list to avoid unbounded growth
+        if entry.subjects.len() > 5 {
+            entry.subjects.truncate(5);
+        }
+        // Prefer non-None headline
+        if entry.headline.is_none() && row.session_headline.is_some() {
+            entry.headline = row.session_headline.clone();
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|id| map.remove(&id))
+        .collect()
+}
+
+/// Extract just the filename from a full path.
+fn truncate_to_filename(path: &str) -> String {
+    path.rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_string()
+}
+
+fn print_human_full(rows: &[WhoRow]) {
     if rows.is_empty() {
         println!("No matches.");
         return;
@@ -270,6 +367,40 @@ fn print_human(rows: &[WhoRow]) {
                 compact(row.subject.as_deref(), 42),
                 compact(row.detail.as_deref(), 52),
                 compact(row.session_headline.as_deref(), 48),
+            ]
+        })
+        .collect();
+    print_table(&headers, &table_rows);
+}
+
+fn print_human_brief(rows: &[WhoSummaryRow]) {
+    if rows.is_empty() {
+        println!("No matches.");
+        return;
+    }
+
+    let headers = ["Session", "Engine", "When", "Facts", "Subjects", "Headline"];
+    let table_rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            let subjects_display = if row.subjects.is_empty() {
+                "-".to_string()
+            } else {
+                let joined = row.subjects.join(", ");
+                if joined.chars().count() > 60 {
+                    let truncated: String = joined.chars().take(57).collect();
+                    format!("{truncated}...")
+                } else {
+                    joined
+                }
+            };
+            vec![
+                row.session_id.chars().take(8).collect(),
+                row.engine.clone(),
+                format_timestamp(&row.latest_ts),
+                row.fact_count.to_string(),
+                subjects_display,
+                compact(row.headline.as_deref(), 48),
             ]
         })
         .collect();

@@ -142,6 +142,9 @@ enum Commands {
         /// Max number of results.
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        /// Show full per-fact output including detail fields.
+        #[arg(short = 'F', long)]
+        full: bool,
     },
 
     /// Full-text search over indexed facts.
@@ -462,6 +465,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             tag,
             failed,
             limit,
+            full,
         } => {
             let args = gaal::commands::who::WhoArgs {
                 verb,
@@ -474,6 +478,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 failed,
                 limit: usize_to_i64("limit", limit)?,
                 human,
+                full,
             };
             gaal::commands::who::run(args)
         }
