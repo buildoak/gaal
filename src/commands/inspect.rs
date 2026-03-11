@@ -17,6 +17,7 @@ use crate::db::queries::{get_facts, get_session, list_sessions, ListFilter, Sess
 use crate::discovery::active::{find_active_sessions, ActiveSession};
 use crate::error::GaalError;
 use crate::model::{compute_session_status, Fact, FactType, SessionStatus, StatusParams};
+use crate::output::human::{format_duration, format_tokens};
 use crate::parser::parse_session;
 use crate::parser::types::Engine;
 
@@ -122,7 +123,11 @@ pub fn run(args: InspectArgs) -> Result<(), GaalError> {
         if args.watch {
             print!("\x1B[2J\x1B[H");
         }
-        print_json(&payload, args.human)?;
+        if args.human {
+            print_human_inspect(&payload);
+        } else {
+            print_json(&payload, false)?;
+        }
 
         if !args.watch {
             break;
@@ -799,4 +804,80 @@ fn print_json<T: Serialize>(value: &T, pretty: bool) -> Result<(), GaalError> {
     .map_err(|e| GaalError::Internal(format!("failed to serialize output: {e}")))?;
     println!("{rendered}");
     Ok(())
+}
+
+fn print_human_inspect(payload: &InspectPayload) {
+    match payload {
+        InspectPayload::One(item) => print_human_one(item),
+        InspectPayload::Many(items) => {
+            for (idx, item) in items.iter().enumerate() {
+                if idx > 0 {
+                    println!();
+                    println!("---");
+                    println!();
+                }
+                print_human_one(item);
+            }
+        }
+    }
+}
+
+fn print_human_one(item: &InspectOutput) {
+    println!("ID:      {}", item.id);
+    println!("Engine:  {}", item.engine);
+    if let Some(model) = &item.model {
+        println!("Model:   {}", model);
+    }
+    println!("Status:  {}", item.status);
+    if let Some(pid) = item.pid {
+        println!("PID:     {}", pid);
+    }
+    println!("Uptime:  {}", format_duration(item.uptime_secs as i64));
+
+    if let Some(proc) = &item.process {
+        println!("CPU:     {:.1}%", proc.cpu_pct);
+        println!("RSS:     {:.1} MB", proc.rss_mb);
+    }
+
+    println!(
+        "Tokens:  total={} ctx_window={} ctx_limit={}",
+        format_tokens(item.context.total_tokens),
+        format_tokens(item.context.context_window),
+        format_tokens(item.context.context_limit)
+    );
+
+    let print_turn = |label: &str, turn: &TurnSnapshot| {
+        println!(
+            "{}:  turn #{} | elapsed={} | actions={}",
+            label,
+            turn.number,
+            format_duration(turn.elapsed_secs as i64),
+            turn.actions_this_turn
+        );
+        if let Some(action) = &turn.last_action {
+            println!("  Last action: [{}] {}", action.kind, action.summary);
+        }
+    };
+
+    if let Some(turn) = &item.current_turn {
+        print_turn("Current turn", turn);
+    }
+    if let Some(turn) = &item.last_turn {
+        print_turn("Last turn   ", turn);
+    }
+
+    println!(
+        "Velocity: {:.1} actions/min | {:.1} tokens/min (5m window)",
+        item.velocity.actions_per_minute_5m, item.velocity.tokens_per_minute_5m
+    );
+
+    if !item.recent_errors.is_empty() {
+        println!("Recent errors:");
+        for err in &item.recent_errors {
+            println!(
+                "  - [{}] {} exit={} {}s ago",
+                err.tool, err.cmd, err.exit_code, err.age_secs
+            );
+        }
+    }
 }
