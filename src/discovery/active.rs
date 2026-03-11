@@ -266,7 +266,7 @@ pub fn find_active_sessions() -> Result<Vec<ActiveSession>> {
                 continue;
             };
 
-            let jsonl_path = map_cwd_to_jsonl(&engine, &cwd);
+            let jsonl_path = map_cwd_to_jsonl(&engine, &cwd, pid);
             let id = jsonl_path
                 .as_ref()
                 .and_then(|path| extract_session_id(path, &engine));
@@ -1184,27 +1184,69 @@ fn linux_cpu_ticks(stat: &str) -> Option<(u64, u64)> {
     Some((utime, stime))
 }
 
-fn map_cwd_to_jsonl(engine: &Engine, cwd: &str) -> Option<PathBuf> {
+fn map_cwd_to_jsonl(engine: &Engine, cwd: &str, pid: u32) -> Option<PathBuf> {
     match engine {
-        Engine::Claude => map_claude_cwd_to_jsonl(cwd),
+        Engine::Claude => map_claude_cwd_to_jsonl(cwd, pid),
         Engine::Codex => map_codex_cwd_to_jsonl(cwd),
     }
 }
 
-fn map_claude_cwd_to_jsonl(cwd: &str) -> Option<PathBuf> {
+/// I37: Get the process start time as SystemTime, used to match each PID to its JSONL.
+/// On macOS, parses `ps -p PID -o lstart=` output.
+#[cfg(unix)]
+fn get_pid_start_time(pid: u32) -> Option<std::time::SystemTime> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Parse "Tue Mar 10 15:10:02 2026" — %e handles single/double-digit day with padding.
+    let naive = chrono::NaiveDateTime::parse_from_str(trimmed, "%a %b %e %H:%M:%S %Y").ok()?;
+    let dt = naive.and_local_timezone(chrono::Local).single()?;
+    let unix_secs = dt.timestamp();
+    if unix_secs <= 0 {
+        return None;
+    }
+    Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(unix_secs as u64))
+}
+
+#[cfg(not(unix))]
+fn get_pid_start_time(_pid: u32) -> Option<std::time::SystemTime> {
+    None
+}
+
+fn map_claude_cwd_to_jsonl(cwd: &str, pid: u32) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let projects_root = home.join(".claude").join("projects");
 
+    // I37: Prefer the JSONL file whose mtime matches the process start time,
+    // rather than always picking the newest. This prevents multiple Claude
+    // processes in the same CWD from all resolving to the same session.
+    let pid_start = if pid > 0 { get_pid_start_time(pid) } else { None };
+
     let encoded = encode_claude_project_dir(cwd);
-    if let Some(path) = latest_jsonl_in_dir(&projects_root.join(&encoded)) {
-        return Some(path);
+    let dir = projects_root.join(&encoded);
+    if dir.is_dir() {
+        if let Some(path) = jsonl_matching_pid_start(&dir, pid_start) {
+            return Some(path);
+        }
     }
 
     if let Ok(real) = fs::canonicalize(cwd) {
         if let Some(real_cwd) = real.to_str() {
             let encoded_real = encode_claude_project_dir(real_cwd);
-            if let Some(path) = latest_jsonl_in_dir(&projects_root.join(encoded_real)) {
-                return Some(path);
+            let real_dir = projects_root.join(encoded_real);
+            if real_dir != dir && real_dir.is_dir() {
+                if let Some(path) = jsonl_matching_pid_start(&real_dir, pid_start) {
+                    return Some(path);
+                }
             }
         }
     }
@@ -1212,11 +1254,93 @@ fn map_claude_cwd_to_jsonl(cwd: &str) -> Option<PathBuf> {
     let Ok(discovered) = super::claude::discover_claude_sessions() else {
         return None;
     };
-    discovered
+    let mut candidates: Vec<_> = discovered
         .into_iter()
         .filter(|s| same_cwd(s.cwd.as_deref(), cwd))
+        .collect();
+
+    if let Some(start) = pid_start {
+        let start_unix = start
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Sort ascending and pick the newest that's within the start window.
+        candidates.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+        let best = candidates.iter().rev().find(|s| {
+            let mtime = fs::metadata(&s.path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(u64::MAX);
+            mtime <= start_unix + 120
+        });
+        if let Some(s) = best {
+            return Some(s.path.clone());
+        }
+    }
+
+    candidates
+        .into_iter()
         .max_by(|a, b| a.started_at.cmp(&b.started_at))
         .map(|s| s.path)
+}
+
+/// I37: Find the JSONL in `dir` whose mtime falls within 120 seconds after `pid_start`.
+/// Returns the most-recent such file. Falls back to the newest file overall.
+fn jsonl_matching_pid_start(dir: &Path, pid_start: Option<std::time::SystemTime>) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else { continue };
+        if !ft.is_file() {
+            continue;
+        }
+        let is_jsonl = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("jsonl"))
+            .unwrap_or(false);
+        if !is_jsonl {
+            continue;
+        }
+        let modified = fs::metadata(&path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        candidates.push((modified, path));
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    if let Some(start) = pid_start {
+        let start_unix = start
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Sort ascending, then find the most-recent file within the window.
+        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        let best = candidates.iter().rev().find(|(mtime, _)| {
+            let file_unix = mtime
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs())
+                .unwrap_or(u64::MAX);
+            file_unix <= start_unix + 120
+        });
+        if let Some((_, path)) = best {
+            return Some(path.clone());
+        }
+    }
+
+    // Fallback: newest file.
+    candidates.into_iter().max_by(|a, b| a.0.cmp(&b.0)).map(|(_, p)| p)
 }
 
 fn map_codex_cwd_to_jsonl(cwd: &str) -> Option<PathBuf> {
@@ -1243,41 +1367,6 @@ fn normalize_path(path: &str) -> String {
 
 fn encode_claude_project_dir(cwd: &str) -> String {
     cwd.replace('/', "-")
-}
-
-fn latest_jsonl_in_dir(dir: &Path) -> Option<PathBuf> {
-    let entries = fs::read_dir(dir).ok()?;
-    let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(ft) = entry.file_type() else {
-            continue;
-        };
-        if !ft.is_file() {
-            continue;
-        }
-        let is_jsonl = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("jsonl"))
-            .unwrap_or(false);
-        if !is_jsonl {
-            continue;
-        }
-
-        let modified = fs::metadata(&path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-
-        match &newest {
-            Some((best, _)) if modified <= *best => {}
-            _ => newest = Some((modified, path)),
-        }
-    }
-
-    newest.map(|(_, path)| path)
 }
 
 fn extract_session_id(path: &Path, engine: &Engine) -> Option<String> {
