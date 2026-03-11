@@ -80,7 +80,6 @@ pub(crate) struct UsageSample {
 pub(crate) struct ActionEvent {
     pub ts: Option<String>,
     pub kind: String,
-    pub subject: String,
     pub summary: String,
 }
 
@@ -408,7 +407,6 @@ fn extract_claude_actions(record: &Value, ts: Option<String>) -> Vec<ActionEvent
         out.push(ActionEvent {
             ts: ts.clone(),
             kind,
-            subject: subject.unwrap_or_default(),
             summary,
         });
     }
@@ -447,7 +445,6 @@ fn extract_codex_actions(record: &Value, ts: Option<String>) -> Vec<ActionEvent>
     vec![ActionEvent {
         ts,
         kind,
-        subject: subject.unwrap_or_default(),
         summary,
     }]
 }
@@ -591,11 +588,6 @@ fn fact_to_action(fact: &Fact) -> Option<ActionEvent> {
     }
     .to_string();
 
-    let subject = fact
-        .subject
-        .clone()
-        .or_else(|| fact.detail.clone())
-        .unwrap_or_default();
     let summary = fact
         .detail
         .clone()
@@ -605,7 +597,6 @@ fn fact_to_action(fact: &Fact) -> Option<ActionEvent> {
     Some(ActionEvent {
         ts: Some(fact.ts.clone()),
         kind,
-        subject: truncate(subject.as_str(), 120),
         summary: truncate(summary.as_str(), 120),
     })
 }
