@@ -135,18 +135,6 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     let total = sessions.len();
 
     for (idx, session) in sessions.into_iter().enumerate() {
-        // When writing to output-dir, skip active sessions (mtime < 60s).
-        if output_dir.is_some() && is_session_active(&session.path) {
-            summary.skipped += 1;
-            eprintln!(
-                "[{}/{}] skipped {} (active — mtime < 60s)",
-                idx + 1,
-                total,
-                session.id
-            );
-            continue;
-        }
-
         match index_discovered_session(&mut conn, &session, args.force) {
             Ok(IndexOutcome::Indexed) => {
                 summary.indexed += 1;
@@ -159,7 +147,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                 );
                 if with_markdown {
                     if let Some(output_dir) = &output_dir {
-                        match write_session_markdown_to_dir(&session, output_dir) {
+                        match write_session_markdown_to_dir(&session, output_dir, true) {
                             Ok(WriteOutcome::Written(md_path)) => {
                                 *summary.markdown_written.as_mut().unwrap() += 1;
                                 eprintln!("  -> markdown: {}", md_path.display());
@@ -189,7 +177,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                 // Even for index-skipped sessions, write markdown if output-dir
                 // is set and the file doesn't exist yet.
                 if let Some(output_dir) = &output_dir {
-                    match write_session_markdown_to_dir(&session, output_dir) {
+                    match write_session_markdown_to_dir(&session, output_dir, false) {
                         Ok(WriteOutcome::Written(md_path)) => {
                             *summary.markdown_written.as_mut().unwrap() += 1;
                             eprintln!("  -> markdown: {}", md_path.display());
@@ -596,11 +584,14 @@ enum WriteOutcome {
 
 /// Write a session's markdown to `<output_dir>/YYYY/MM/DD/<short-id>.md`.
 ///
-/// Skips if the target file already exists (idempotent).
+/// When `overwrite` is false, skips if the target file already exists (idempotent).
+/// When `overwrite` is true, always re-renders (used when the session was re-indexed
+/// because new data arrived, e.g. an active session).
 /// Uses atomic writes to avoid partial files.
 fn write_session_markdown_to_dir(
     discovered: &DiscoveredSession,
     output_dir: &Path,
+    overwrite: bool,
 ) -> Result<WriteOutcome, GaalError> {
     let started_at = discovered.started_at.as_deref().unwrap_or(EPOCH_RFC3339);
 
@@ -620,8 +611,8 @@ fn write_session_markdown_to_dir(
         .join(&day)
         .join(format!("{short_id}.md"));
 
-    // Idempotent: skip if already written.
-    if md_path.exists() {
+    // Idempotent: skip if already written (unless overwrite requested).
+    if !overwrite && md_path.exists() {
         return Ok(WriteOutcome::Skipped);
     }
 
@@ -633,20 +624,6 @@ fn write_session_markdown_to_dir(
     }
     crate::util::atomic_write(&md_path, &markdown).map_err(GaalError::from)?;
     Ok(WriteOutcome::Written(md_path))
-}
-
-/// Check if a session's JSONL file was modified less than 60 seconds ago.
-fn is_session_active(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path) else {
-        return false;
-    };
-    let Ok(modified) = metadata.modified() else {
-        return false;
-    };
-    let Ok(elapsed) = modified.elapsed() else {
-        return false;
-    };
-    elapsed.as_secs() < 60
 }
 
 /// Extract (year, month, day) from an RFC3339 timestamp prefix.

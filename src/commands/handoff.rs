@@ -1019,22 +1019,7 @@ fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Opti
     let short_id: String = session.id.chars().take(8).collect();
     let (year, month, day) = date_parts(&session.started_at);
 
-    // 1. External output directory (config.markdown_output_dir)
-    if let Some(ref output_dir) = config.markdown_output_dir {
-        let external_path = output_dir
-            .join(&year)
-            .join(&month)
-            .join(&day)
-            .join(format!("{short_id}.md"));
-        if let Ok(content) = fs::read_to_string(&external_path) {
-            if !content.trim().is_empty() {
-                eprintln!("  -> transcript source: {}", external_path.display());
-                return Some(content);
-            }
-        }
-    }
-
-    // 2. Gaal's own session markdown directory
+    // 1. Gaal's own session markdown directory (kept fresh by cron backfill)
     let gaal_md_path = gaal_home()
         .join("data")
         .join(&session.engine)
@@ -1047,6 +1032,21 @@ fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Opti
         if !content.trim().is_empty() {
             eprintln!("  -> transcript source: {}", gaal_md_path.display());
             return Some(content);
+        }
+    }
+
+    // 2. External output directory (config.markdown_output_dir) — fallback
+    if let Some(ref output_dir) = config.markdown_output_dir {
+        let external_path = output_dir
+            .join(&year)
+            .join(&month)
+            .join(&day)
+            .join(format!("{short_id}.md"));
+        if let Ok(content) = fs::read_to_string(&external_path) {
+            if !content.trim().is_empty() {
+                eprintln!("  -> transcript source: {}", external_path.display());
+                return Some(content);
+            }
         }
     }
 
