@@ -112,11 +112,10 @@ struct InspectData {
 
 /// Execute the `gaal inspect` command.
 pub fn run(args: InspectArgs) -> Result<(), GaalError> {
-    // AF2: No-args behavior - error with usage hint
+    // No-args behavior: show help menu
     if args.id.is_none() && args.ids.is_none() && args.tag.is_none() {
-        return Err(GaalError::ParseError(
-            "inspect requires a session ID, --ids, or --tag. Use 'gaal inspect <id>' or 'gaal inspect latest'".to_string()
-        ));
+        print_inspect_help();
+        return Ok(());
     }
 
     let conn = open_db_readonly()?;
@@ -870,5 +869,33 @@ fn truncate(value: &str, max: usize) -> String {
 /// Format peak context for human display.
 fn format_peak_context(peak: u64) -> String {
     format!("{} peak", format_tokens(peak as i64))
+}
+
+fn print_inspect_help() {
+    eprintln!("gaal inspect — Session detail view with files, commands, timeline, and git ops");
+    eprintln!();
+    eprintln!("Usage: gaal inspect <session-id> [flags]");
+    eprintln!();
+    eprintln!("Arguments:");
+    eprintln!("  <session-id>    Session ID, ID prefix, or `latest`");
+    eprintln!();
+    eprintln!("Flags:");
+    eprintln!("  --files [mode]  Include file operations (read, write, or all; default: all)");
+    eprintln!("  --errors        Include errors and non-zero exits");
+    eprintln!("  --commands      Include command execution entries");
+    eprintln!("  --git           Include git operations");
+    eprintln!("  --tokens        Include token usage breakdown");
+    eprintln!("  --trace         Include full fact timeline");
+    eprintln!("  --source        Include source JSONL path");
+    eprintln!("  --markdown      Render as session markdown (full conversation flow)");
+    eprintln!("  -F, --full      Include all arrays and fields (full output)");
+    eprintln!("  -H, --human     Render human-readable output");
+    eprintln!("  --ids <list>    Batch mode: comma-separated session ID prefixes");
+    eprintln!("  --tag <tag>     Batch mode: filter by tag");
+    eprintln!();
+    eprintln!("Examples:");
+    eprintln!("  gaal inspect abc123 -H");
+    eprintln!("  gaal inspect latest --files --errors");
+    eprintln!("  gaal inspect abc123 -F --tokens");
 }
 

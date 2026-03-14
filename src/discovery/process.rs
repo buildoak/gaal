@@ -165,6 +165,7 @@ mod libc {
 
 /// A node in the process tree, built from one pass over the process table.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ProcessNode {
     pid: u32,
     ppid: u32,

@@ -147,20 +147,6 @@ pub(crate) fn parse_exit_line(line: &str) -> Option<i32> {
     None
 }
 
-pub(crate) fn contains_error(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    [
-        "error",
-        "failed",
-        "exception",
-        "panic",
-        "traceback",
-        "permission denied",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
 pub(crate) fn is_git_command(command: &str) -> bool {
     let trimmed = command.trim_start();
     [

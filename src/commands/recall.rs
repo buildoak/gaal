@@ -110,6 +110,11 @@ struct ErrorOutput {
 
 /// Execute `gaal recall`.
 pub fn run(args: RecallArgs) -> Result<(), GaalError> {
+    if args.query.is_none() {
+        print_recall_help();
+        return Ok(());
+    }
+
     let conn = open_db_readonly()?;
     let sessions = load_all_handoffs(&conn)?;
     if sessions.is_empty() {
@@ -316,19 +321,14 @@ fn fallback_recent_substantive(
 fn render_summary(results: &[ScoredSession], human: bool) -> Result<(), GaalError> {
     let summaries: Vec<RecallSummary> = results.iter().map(to_summary).collect();
     if human {
-        for summary in &summaries {
+        for (idx, summary) in summaries.iter().enumerate() {
+            if idx > 0 {
+                println!();
+            }
+            print_human_session_header(summary);
             println!(
-                "{} | {} | {:.3} | {}",
-                summary.session_id,
-                summary.date,
-                summary.score,
-                summary.headline.as_deref().unwrap_or("(no headline)")
-            );
-            println!("  projects: {}", comma_list(&summary.projects));
-            println!("  keywords: {}", comma_list(&summary.keywords));
-            println!(
-                "  substance: {} | duration_minutes: {}",
-                summary.substance, summary.duration_minutes
+                "Substance: {} | Duration: {}m | Score: {:.1}",
+                summary.substance, summary.duration_minutes, summary.score
             );
         }
         Ok(())
@@ -339,14 +339,21 @@ fn render_summary(results: &[ScoredSession], human: bool) -> Result<(), GaalErro
 }
 
 fn render_brief(results: &[ScoredSession], human: bool) -> Result<(), GaalError> {
-    let briefs: Vec<String> = results.iter().map(to_brief_block).collect();
     if human {
-        for block in briefs {
-            println!("{block}");
-            println!();
+        for (idx, row) in results.iter().enumerate() {
+            if idx > 0 {
+                println!();
+            }
+            let summary = to_summary(row);
+            print_human_session_header(&summary);
+            println!(
+                "Substance: {} | Duration: {}m | Score: {:.1}",
+                summary.substance, summary.duration_minutes, summary.score
+            );
         }
         Ok(())
     } else {
+        let briefs: Vec<String> = results.iter().map(to_brief_block).collect();
         print_json(&briefs)?;
         Ok(())
     }
@@ -362,21 +369,21 @@ fn render_handoff(results: &[ScoredSession], human: bool) -> Result<(), GaalErro
         .collect();
 
     if human {
-        for item in payload {
+        for (idx, item) in payload.iter().enumerate() {
+            if idx > 0 {
+                println!();
+            }
+            print_human_session_header(&item.summary);
             println!(
-                "{} | {} | {:.3}",
-                item.summary.session_id, item.summary.date, item.summary.score
+                "Substance: {} | Duration: {}m | Score: {:.1}",
+                item.summary.substance, item.summary.duration_minutes, item.summary.score
             );
-            println!(
-                "{}",
-                item.summary.headline.as_deref().unwrap_or("(no headline)")
-            );
-            if let Some(content) = item.handoff {
+            if let Some(ref content) = item.handoff {
+                println!();
                 println!("{content}");
             } else {
                 println!("(handoff markdown unavailable)");
             }
-            println!();
         }
         Ok(())
     } else {
@@ -399,34 +406,36 @@ fn render_full(conn: &Connection, results: &[ScoredSession], human: bool) -> Res
     }
 
     if human {
-        for item in out {
+        for (idx, item) in out.iter().enumerate() {
+            if idx > 0 {
+                println!();
+            }
+            print_human_session_header(&item.summary);
             println!(
-                "{} | {} | {:.3}",
-                item.summary.session_id, item.summary.date, item.summary.score
+                "Substance: {} | Duration: {}m | Score: {:.1}",
+                item.summary.substance, item.summary.duration_minutes, item.summary.score
             );
-            println!(
-                "{}",
-                item.summary.headline.as_deref().unwrap_or("(no headline)")
-            );
-            if let Some(content) = item.handoff {
+            if let Some(ref content) = item.handoff {
+                println!();
                 println!("{content}");
             } else {
                 println!("(handoff markdown unavailable)");
             }
-            println!("files.read: {}", comma_list(&item.files.read));
-            println!("files.written: {}", comma_list(&item.files.written));
+            println!("Files read: {}", comma_list(&item.files.read));
+            println!("Files written: {}", comma_list(&item.files.written));
             if item.errors.is_empty() {
-                println!("errors: none");
+                println!("Errors: none");
             } else {
-                println!("errors:");
-                for err in item.errors {
+                println!("Errors:");
+                for err in &item.errors {
                     println!(
-                        "- {} | {:?} | {:?} | {:?}",
-                        err.ts, err.subject, err.detail, err.exit_code
+                        "  - [{}] {} | exit={:?}",
+                        err.ts,
+                        err.subject.as_deref().unwrap_or("unknown"),
+                        err.exit_code
                     );
                 }
             }
-            println!();
         }
         Ok(())
     } else {
@@ -480,6 +489,21 @@ fn strip_yaml_frontmatter(content: &str) -> &str {
     } else {
         content
     }
+}
+
+/// Print a structured session header for human-readable output.
+fn print_human_session_header(summary: &RecallSummary) {
+    let short_id = summary.session_id.chars().take(8).collect::<String>();
+    println!(
+        "\u{2501}\u{2501}\u{2501} Session {} ({}) \u{2501}\u{2501}\u{2501}",
+        short_id, summary.date
+    );
+    println!(
+        "Headline: {}",
+        summary.headline.as_deref().unwrap_or("(no headline)")
+    );
+    println!("Projects: {}", comma_list(&summary.projects));
+    println!("Keywords: {}", comma_list(&summary.keywords));
 }
 
 fn to_summary(row: &ScoredSession) -> RecallSummary {
@@ -648,6 +672,24 @@ fn comma_list(values: &[String]) -> String {
     } else {
         values.join(", ")
     }
+}
+
+fn print_recall_help() {
+    eprintln!("gaal recall — Ranked session retrieval for continuity and context");
+    eprintln!();
+    eprintln!("Usage: gaal recall <query> [flags]");
+    eprintln!();
+    eprintln!("Flags:");
+    eprintln!("  --days-back <n>    Recency window in days (default: 14)");
+    eprintln!("  --limit <n>        Max number of sessions to return (default: 3)");
+    eprintln!("  --format <fmt>     Output format: summary, brief, handoff, full, eywa (default: brief)");
+    eprintln!("  --substance <n>    Minimum substance score (default: 1)");
+    eprintln!("  -H                 Human-readable output");
+    eprintln!();
+    eprintln!("Examples:");
+    eprintln!("  gaal recall \"gaussian moat\" -H");
+    eprintln!("  gaal recall \"auth migration\" --days-back 30 --limit 5");
+    eprintln!("  gaal recall \"deploy\" --format handoff");
 }
 
 const STOPWORDS: &[&str] = &[

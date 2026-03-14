@@ -46,6 +46,9 @@ pub struct LsArgs {
     /// Render human-readable output.
     #[arg(short = 'H', action = ArgAction::SetTrue)]
     pub human_readable: bool,
+    /// Show all sessions including noise (0 tool calls and <30s duration).
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub all: bool,
 }
 
 /// Supported `gaal ls --engine` values.
@@ -96,8 +99,12 @@ struct AggregateJson {
 #[derive(Debug, Clone, Serialize)]
 struct LsEnvelope {
     query_window: QueryWindow,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filter: Option<String>,
     shown: usize,
     total: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_unfiltered: Option<usize>,
     sessions: Vec<SessionSummary>,
 }
 
@@ -143,15 +150,38 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
         return Err(GaalError::NoResults);
     }
 
+    // Apply noise filter: hide sessions with 0 tool calls and <30s duration
+    let total_unfiltered = count_sessions(&conn, &filter)? as usize;
+    let (summaries, is_filtered) = if args.all {
+        (summaries, false)
+    } else {
+        let before_len = summaries.len();
+        let filtered: Vec<SessionSummary> = summaries
+            .into_iter()
+            .filter(|s| !(s.tools_used == 0 && s.duration_secs < 30))
+            .collect();
+        let did_filter = filtered.len() != before_len || total_unfiltered != filtered.len();
+        (filtered, did_filter)
+    };
+
+    if summaries.is_empty() {
+        return Err(GaalError::NoResults);
+    }
+
     let shown = summaries.len();
-    let total = count_sessions(&conn, &filter)? as usize;
+    let total = shown; // total reflects filtered count
 
     if args.human_readable {
         output::print_output(&summaries, OutputFormat::Human).map_err(GaalError::from)?;
-        if shown < total {
+        if is_filtered {
+            eprintln!(
+                "(filtered: hiding sessions with 0 tool calls and <30s duration. Use --all to show everything)"
+            );
+        }
+        if shown < total_unfiltered {
             eprintln!(
                 "Showing {} of {} sessions \u{2014} use --limit N for more",
-                shown, total
+                shown, total_unfiltered
             );
         }
     } else {
@@ -159,15 +189,25 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
         let query_window = build_query_window(&conn, &filter)?;
         let envelope = LsEnvelope {
             query_window,
+            filter: if is_filtered {
+                Some("hiding sessions with 0 tool calls and <30s duration".to_string())
+            } else {
+                None
+            },
             shown,
             total,
+            total_unfiltered: if is_filtered {
+                Some(total_unfiltered)
+            } else {
+                None
+            },
             sessions: summaries,
         };
         output::json::print_json(&envelope).map_err(GaalError::from)?;
 
         // Note goes to stderr, not stdout
-        if shown < total {
-            eprintln!("Showing {} of {} sessions — use --limit N for more", shown, total);
+        if shown < total_unfiltered {
+            eprintln!("Showing {} of {} sessions — use --limit N for more", shown, total_unfiltered);
         }
     }
 

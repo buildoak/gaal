@@ -119,6 +119,7 @@ pub fn extract_parsed_session(
                 input_tokens,
                 output_tokens,
                 dedup_key,
+                ..
             } => {
                 let should_count = dedup_key
                     .as_ref()
@@ -422,6 +423,8 @@ mod tests {
             kind: EventKind::Usage {
                 input_tokens: input,
                 output_tokens: output,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
                 dedup_key: Some(key.to_string()),
             },
         }
@@ -765,6 +768,8 @@ mod tests {
                 kind: EventKind::Usage {
                     input_tokens: 100,
                     output_tokens: 200,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                     dedup_key: None,
                 },
             },
@@ -773,6 +778,8 @@ mod tests {
                 kind: EventKind::Usage {
                     input_tokens: 50,
                     output_tokens: 100,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
                     dedup_key: None,
                 },
             },

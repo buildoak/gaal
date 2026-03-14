@@ -186,6 +186,8 @@ fn extract_claude_usage_event(record: &Value) -> Option<EventKind> {
     Some(EventKind::Usage {
         input_tokens: input_tokens + cache_creation_input_tokens + cache_read_input_tokens,
         output_tokens: as_i64(record.pointer("/message/usage/output_tokens")),
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
         dedup_key: record
             .pointer("/message/id")
             .and_then(Value::as_str)

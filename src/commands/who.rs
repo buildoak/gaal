@@ -304,8 +304,35 @@ fn verb_spec(verb: &str) -> Result<VerbSpec, GaalError> {
 }
 
 fn print_no_args_help() {
-    println!("Usage: gaal who <verb> [target] [--since <time>] [--before <time>] [--cwd <path>] [--engine <engine>] [--tag <tag>] [--failed] [--limit <n>] [-F] [-H]");
-    println!("Available verbs: read, wrote, ran, touched, changed, deleted");
+    eprintln!("gaal who — Attribution queries: find which sessions touched a file, ran a command, or produced errors");
+    eprintln!();
+    eprintln!("Usage: gaal who <verb> [target] [flags]");
+    eprintln!();
+    eprintln!("Verbs:");
+    eprintln!("  read       Files opened with the Read tool");
+    eprintln!("  wrote      Files created/modified with Write or Edit tool");
+    eprintln!("  ran        Commands executed via Bash tool (matches program names)");
+    eprintln!("  touched    Any file interaction (read + wrote combined)");
+    eprintln!("  changed    Files modified (wrote + edited, excludes read-only)");
+    eprintln!("  deleted    File deletions (rm commands and file removals)");
+    eprintln!();
+    eprintln!("Flags:");
+    eprintln!("  --since <time>    Lower time bound (default: 7d). Duration like 1h/3d/2w, date, or RFC3339");
+    eprintln!("  --before <time>   Upper time bound (date or RFC3339)");
+    eprintln!("  --cwd <path>      Restrict to sessions where cwd contains this value");
+    eprintln!("  --engine <engine> Restrict to one engine (claude or codex)");
+    eprintln!("  --tag <tag>       Restrict to one session tag");
+    eprintln!("  --failed          Only show failed facts (exit_code != 0)");
+    eprintln!("  --limit <n>       Maximum number of results (default: 10)");
+    eprintln!("  -F, --full        Show full per-fact output including detail fields");
+    eprintln!("  -H                Print human-readable table output");
+    eprintln!();
+    eprintln!("Examples:");
+    eprintln!("  gaal who read src/main.rs");
+    eprintln!("  gaal who ran cargo --since 3d -H");
+    eprintln!("  gaal who wrote /Users/me/project/ --engine claude");
+    eprintln!();
+    eprintln!("Note: --since defaults to 7d. Use --since 30d or --since 2026-01-01 for wider searches.");
 }
 
 /// Return a one-line disclaimer about what the verb covers (and what it misses).

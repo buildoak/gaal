@@ -197,6 +197,8 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                                 output_tokens: as_i64(
                                     record.pointer("/payload/info/last_token_usage/output_tokens"),
                                 ),
+                                cache_read_input_tokens: 0,
+                                cache_creation_input_tokens: 0,
                                 dedup_key,
                             },
                         });
@@ -320,6 +322,8 @@ fn extract_response_item_usage_event(record: &Value) -> Option<EventKind> {
     Some(EventKind::Usage {
         input_tokens: as_i64(record.pointer("/payload/usage/input_tokens")),
         output_tokens: as_i64(record.pointer("/payload/usage/output_tokens")),
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
         dedup_key: record
             .pointer("/payload/id")
             .or_else(|| record.pointer("/payload/call_id"))
