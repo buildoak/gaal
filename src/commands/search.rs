@@ -43,7 +43,7 @@ pub struct SearchArgs {
     #[arg(long, default_value_t = 2)]
     pub context: usize,
     /// Maximum number of rows returned.
-    #[arg(long, default_value_t = 20)]
+    #[arg(long, default_value_t = 10)]
     pub limit: usize,
     /// Human-readable output (otherwise JSON).
     #[arg(short = 'H', long = "human")]
@@ -88,6 +88,20 @@ pub struct SearchResult {
     pub session_headline: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct QueryWindow {
+    from: String,
+    to: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SearchOutput {
+    query_window: QueryWindow,
+    shown: usize,
+    total: usize,
+    results: Vec<SearchResult>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct SearchIndexFields {
     session_id: Field,
@@ -118,6 +132,7 @@ pub fn run(args: SearchArgs) -> Result<(), GaalError> {
     }
 
     results.retain(|row| fact_is_after(&row.ts, &since_bound));
+    let total_matches = results.len();
     results.truncate(args.limit.max(1));
     if results.is_empty() {
         return Err(GaalError::NoResults);
@@ -128,7 +143,16 @@ pub fn run(args: SearchArgs) -> Result<(), GaalError> {
         return Ok(());
     }
 
-    print_json(&results).map_err(GaalError::from)
+    let payload = SearchOutput {
+        query_window: QueryWindow {
+            from: since_bound.format("%Y-%m-%d").to_string(),
+            to: Utc::now().format("%Y-%m-%d").to_string(),
+        },
+        shown: results.len(),
+        total: total_matches,
+        results,
+    };
+    print_json(&payload).map_err(GaalError::from)
 }
 
 /// Rebuild the Tantivy search index from all indexed facts.

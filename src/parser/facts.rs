@@ -10,9 +10,7 @@ use std::path::Path;
 use crate::model::fact::FactType;
 use crate::model::Fact;
 
-use super::common::{
-    contains_error, is_git_command, parse_exit_code, resolve_started_at, tool_call_fact, truncate,
-};
+use super::common::{is_git_command, parse_exit_code, resolve_started_at, tool_call_fact, truncate};
 use super::event::{ContentBlock, EventKind, SessionEvent};
 use super::types::{Engine, ParsedSession, SessionMeta};
 
@@ -24,6 +22,25 @@ struct ToolCallState {
     #[allow(dead_code)]
     subject: Option<String>,
     detail: Option<String>,
+}
+
+fn is_shell_tool(tool_name: &str) -> bool {
+    tool_name.eq_ignore_ascii_case("bash") || tool_name.eq_ignore_ascii_case("exec_command")
+}
+
+fn is_non_error_tool(tool_name: &str) -> bool {
+    [
+        "read",
+        "glob",
+        "grep",
+        "webfetch",
+        "websearch",
+        "write",
+        "edit",
+        "notebookedit",
+    ]
+    .iter()
+    .any(|name| tool_name.eq_ignore_ascii_case(name))
 }
 
 /// Convert a canonical event stream into a `ParsedSession`.
@@ -55,6 +72,7 @@ pub fn extract_parsed_session(
     // -- Counters --
     let mut total_input_tokens = 0i64;
     let mut total_output_tokens = 0i64;
+    let mut peak_context = 0i64;
     let mut total_tools = 0i32;
     let mut total_turns = 0i32;
     let mut usage_keys_seen: HashSet<String> = HashSet::new();
@@ -109,6 +127,10 @@ pub fn extract_parsed_session(
                 if should_count {
                     total_input_tokens += input_tokens;
                     total_output_tokens += output_tokens;
+                    // Track peak context: the maximum input_tokens in any single turn.
+                    if *input_tokens > peak_context {
+                        peak_context = *input_tokens;
+                    }
                 }
             }
 
@@ -242,14 +264,17 @@ pub fn extract_parsed_session(
                     None
                 };
                 let exit_code = parse_exit_code(output_text.as_deref().unwrap_or_default());
+                let state = tool_state_by_id.get(tool_use_id).cloned();
+                let tool_name = state.as_ref().map(|s| s.tool_name.as_str()).unwrap_or("");
+                let is_shell = is_shell_tool(tool_name);
+                let is_blocked_tool = is_non_error_tool(tool_name);
+                let shell_non_zero_exit = is_shell && exit_code.map(|code| code != 0).unwrap_or(false);
 
                 // Backfill exit_code on the matching tool-call fact.
-                if let Some(state) = tool_state_by_id.get(tool_use_id) {
+                if let Some(state) = state.as_ref() {
                     if let Some(fact_idx) = state.fact_index {
                         if let Some(fact) = facts.get_mut(fact_idx) {
                             // Both Claude (Bash) and Codex (Bash, exec_command).
-                            let is_shell = state.tool_name.eq_ignore_ascii_case("bash")
-                                || state.tool_name.eq_ignore_ascii_case("exec_command");
                             if is_shell {
                                 fact.exit_code = exit_code;
                                 fact.success = Some(exit_code.unwrap_or(0) == 0);
@@ -258,13 +283,10 @@ pub fn extract_parsed_session(
                     }
                 }
 
-                // Create Error fact if flagged or output contains error patterns.
-                let output_has_error = output_text
-                    .as_ref()
-                    .map(|text| contains_error(text))
-                    .unwrap_or(false);
-                if *is_error || output_has_error {
-                    let state = tool_state_by_id.get(tool_use_id).cloned();
+                // AF4: Error facts come only from explicit `is_error` or shell non-zero exits.
+                // Certain non-shell tools are explicitly excluded from error classification.
+                let should_create_error_fact = !is_blocked_tool && (*is_error || shell_non_zero_exit);
+                if should_create_error_fact {
                     facts.push(Fact {
                         id: None,
                         session_id: String::new(),
@@ -319,6 +341,7 @@ pub fn extract_parsed_session(
         facts,
         total_input_tokens,
         total_output_tokens,
+        peak_context,
         total_tools,
         total_turns,
         ended_at: last_event_at.clone(),
@@ -659,7 +682,7 @@ mod tests {
             tool_result_event(
                 "2026-03-07T10:01:00Z",
                 "call_1",
-                "compilation failed with error",
+                "compilation failed with error\nProcess exited with code 1",
                 false,
             ),
         ];
@@ -670,6 +693,56 @@ mod tests {
             .filter(|f| f.fact_type.as_str() == "error")
             .collect();
         assert_eq!(error_facts.len(), 1);
+    }
+
+    #[test]
+    fn non_shell_error_text_does_not_create_error_fact() {
+        let events = vec![
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "Read",
+                json!({"file_path": "/tmp/data.txt"}),
+            ),
+            tool_result_event(
+                "2026-03-07T10:01:00Z",
+                "call_1",
+                "The file contains the phrase: failed to compile",
+                false,
+            ),
+        ];
+        let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
+        let error_facts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "error")
+            .collect();
+        assert_eq!(error_facts.len(), 0);
+    }
+
+    #[test]
+    fn excluded_tool_never_creates_error_fact_even_with_is_error_true() {
+        let events = vec![
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "WebSearch",
+                json!({"query": "rust error handling"}),
+            ),
+            tool_result_event(
+                "2026-03-07T10:01:00Z",
+                "call_1",
+                "request failed",
+                true,
+            ),
+        ];
+        let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
+        let error_facts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "error")
+            .collect();
+        assert_eq!(error_facts.len(), 0);
     }
 
     #[test]

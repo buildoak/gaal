@@ -155,7 +155,7 @@ OUTPUT=$(gaal who wrote CLAUDE.md --since 7d); echo "$OUTPUT" | jq '.'
 gaal search "gaussian moat" --limit 5
 
 # What's running right now?
-gaal active -H
+gaal ls --status active -H
 ```
 
 ## Decision Tree
@@ -164,7 +164,7 @@ gaal active -H
 |------|------|
 | Fleet overview / recent sessions | `gaal ls` |
 | Drill into ONE session (files, commands, errors, tree) | `gaal show <id>` |
-| What's running RIGHT NOW (live PIDs) | `gaal active` |
+| What's running RIGHT NOW (live PIDs) | `gaal ls --status active` |
 | Session health / operational snapshot | `gaal inspect <id>` |
 | "Who wrote/read/ran X?" (inverted query) | `gaal who <verb> <target>` |
 | Free-text search across content | `gaal search <query>` |
@@ -180,7 +180,7 @@ gaal active -H
 |---------|------|
 | `gaal ls` | List sessions (filters: `--engine`, `--since`, `--status`, `--tag`). Default limit 10, shows "N of M" footer |
 | `gaal ls --aggregate` | Token/cost totals instead of session list |
-| `gaal active` | Live process discovery (PIDs, CPU, memory) |
+| `gaal ls --status active` | Live/active sessions (filters by computed status) |
 
 ### Drill-Down
 | Command | What |
@@ -282,7 +282,7 @@ gaal ls --since today | jq -r '.[].id' | xargs -I{} gaal show {} --files write
 | Do NOT | Do instead |
 |--------|------------|
 | Pipe `gaal who` directly with `\|` | Capture to variable first, then pipe |
-| Use `gaal active` for "recent active sessions" | Use `gaal ls --status active` (queries archive) |
+| Use process-based detection for "recent active sessions" | Use `gaal ls --status active` (queries archive, computes status from PID liveness) |
 | Read entire session JSONL manually | Use `gaal show <id> --trace` or `--source` |
 | Call `gaal show` in a loop for multiple IDs | Use `gaal show --ids a1b2,c3d4` (batch mode) |
 | Assume `gaal recall` works without handoffs | Check `gaal index status` handoffs_total first |

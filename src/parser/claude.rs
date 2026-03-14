@@ -180,8 +180,11 @@ fn extract_claude_usage_event(record: &Value) -> Option<EventKind> {
     if usage.is_null() {
         return None;
     }
+    let input_tokens = as_i64(usage.get("input_tokens"));
+    let cache_creation_input_tokens = as_i64(usage.get("cache_creation_input_tokens"));
+    let cache_read_input_tokens = as_i64(usage.get("cache_read_input_tokens"));
     Some(EventKind::Usage {
-        input_tokens: as_i64(record.pointer("/message/usage/input_tokens")),
+        input_tokens: input_tokens + cache_creation_input_tokens + cache_read_input_tokens,
         output_tokens: as_i64(record.pointer("/message/usage/output_tokens")),
         dedup_key: record
             .pointer("/message/id")

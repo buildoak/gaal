@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     total_output_tokens INTEGER DEFAULT 0,
     total_tools INTEGER DEFAULT 0,
     total_turns INTEGER DEFAULT 0,
+    peak_context INTEGER DEFAULT 0,
     last_indexed_offset INTEGER DEFAULT 0
 );
 

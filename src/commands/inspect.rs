@@ -1,883 +1,874 @@
 use std::collections::HashSet;
-use std::path::Path;
-use std::thread;
-use std::time::Duration;
 
-use chrono::Utc;
-use clap::Args;
+use chrono::{DateTime, Utc};
+use clap::{Args, ValueEnum};
 use rusqlite::{named_params, Connection};
 use serde::Serialize;
+use serde_json::{json, Value};
 
-use crate::commands::active::{
-    age_from_ts, count_actions_in_window, latest_action_from_facts, parse_ts, probe_runtime,
-    tokens_per_minute_from_samples,
-};
 use crate::db::open_db_readonly;
-use crate::db::queries::{get_facts, get_session, list_sessions, ListFilter, SessionRow};
-use crate::discovery::active::{find_active_sessions, ActiveSession};
+use crate::db::queries::{
+    get_facts, get_handoff, get_session, get_tags, SessionRow,
+};
 use crate::error::GaalError;
-use crate::model::{compute_session_status, Fact, FactType, SessionStatus, StatusParams};
-use crate::output::human::{format_duration, format_tokens};
-use crate::parser::parse_session;
-use crate::parser::types::Engine;
+use crate::model::{
+    CommandEntry, ErrorEntry, Fact, FactType, FileOps, GitOp, SessionRecord, TokenUsage,
+};
+use crate::output::human::{format_cwd, format_tokens};
+use crate::output::json::print_json;
 
-const INSPECT_TAIL_LINES: usize = 900;
+/// File-operation output mode for `gaal inspect --files`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FilesMode {
+    /// Include file reads only.
+    Read,
+    /// Include file writes/edits only.
+    Write,
+    /// Include both reads and writes/edits.
+    All,
+}
 
-/// Arguments for `gaal inspect`.
+/// CLI arguments for `gaal inspect`.
 #[derive(Debug, Clone, Args)]
 pub struct InspectArgs {
-    /// Session ID (or `latest`).
+    /// Session ID or ID prefix. Use `latest` to resolve the newest session.
     pub id: Option<String>,
-    /// Re-poll every 2s and refresh output.
+
+    /// Include file operations (`read`, `write`, or `all`).
+    #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "all")]
+    pub files: Option<FilesMode>,
+
+    /// Include errors and non-zero exits.
     #[arg(long)]
-    pub watch: bool,
-    /// Inspect all currently running sessions.
+    pub errors: bool,
+
+    /// Include command execution entries.
     #[arg(long)]
-    pub active: bool,
-    /// Inspect multiple comma-delimited IDs.
-    #[arg(long, value_delimiter = ',')]
-    pub ids: Vec<String>,
-    /// Restrict to one session tag.
+    pub commands: bool,
+
+    /// Include git operations.
     #[arg(long)]
+    pub git: bool,
+
+    /// Include all arrays and fields (full output).
+    #[arg(short = 'F', long)]
+    pub full: bool,
+
+    /// Include token usage breakdown.
+    #[arg(long)]
+    pub tokens: bool,
+
+    /// Include full fact timeline.
+    #[arg(long)]
+    pub trace: bool,
+
+    /// Include source JSONL path.
+    #[arg(long)]
+    pub source: bool,
+
+    /// Render as session markdown (full conversation flow).
+    #[arg(long)]
+    pub markdown: bool,
+
+    /// Batch mode session IDs (comma-separated prefixes).
+    #[arg(long, conflicts_with = "tag", conflicts_with = "id")]
+    pub ids: Option<String>,
+
+    /// Batch mode tag filter.
+    #[arg(long, conflicts_with = "ids", conflicts_with = "id")]
     pub tag: Option<String>,
-    /// Human-readable mode (pretty JSON for now).
+
+    /// Render human-readable output.
     #[arg(short = 'H', long = "human")]
     pub human: bool,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum InspectPayload {
-    One(Box<InspectOutput>),
-    Many(Vec<InspectOutput>),
+#[derive(Debug, Clone, Serialize)]
+struct TokenBreakdown {
+    input_total: u64,
+    output_total: u64,
+    turns: u32,
+    avg_input_per_turn: u64,
+    avg_output_per_turn: u64,
 }
 
-#[derive(Debug, Serialize)]
-struct InspectOutput {
-    id: String,
-    status: SessionStatus,
-    pid: Option<u32>,
-    engine: Engine,
-    model: Option<String>,
-    uptime_secs: u64,
-    process: Option<InspectProcess>,
-    context: InspectContext,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    current_turn: Option<TurnSnapshot>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_turn: Option<TurnSnapshot>,
-    velocity: Velocity,
-    recent_errors: Vec<RecentError>,
+#[derive(Debug, Clone, Serialize)]
+struct FileCount {
+    read: usize,
+    written: usize,
+    edited: usize,
 }
 
-#[derive(Debug, Serialize)]
-struct InspectProcess {
-    cpu_pct: f64,
-    rss_mb: f64,
+#[derive(Debug, Clone)]
+struct InspectData {
+    record: SessionRecord,
+    trace: Option<Vec<Fact>>,
+    token_breakdown: Option<TokenBreakdown>,
+    file_count: Option<FileCount>,
+    command_count: Option<usize>,
+    error_count: Option<usize>,
+    git_op_count: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
-struct InspectContext {
-    /// Cumulative input + output tokens across all turns (for cost tracking).
-    total_tokens: i64,
-    /// Peak input tokens seen in any single API turn (approximates context window usage).
-    context_window: i64,
-    /// Context window limit for this engine/model.
-    context_limit: i64,
-}
-
-#[derive(Debug, Serialize)]
-struct TurnSnapshot {
-    number: i32,
-    started_at: String,
-    elapsed_secs: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_action: Option<InspectAction>,
-    actions_this_turn: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct InspectAction {
-    kind: String,
-    summary: String,
-}
-
-#[derive(Debug, Serialize)]
-struct Velocity {
-    actions_per_minute_5m: f64,
-    tokens_per_minute_5m: f64,
-}
-
-#[derive(Debug, Serialize)]
-struct RecentError {
-    tool: String,
-    cmd: String,
-    exit_code: i32,
-    age_secs: u64,
-}
-
-/// Run `gaal inspect`.
+/// Execute the `gaal inspect` command.
 pub fn run(args: InspectArgs) -> Result<(), GaalError> {
-    loop {
-        let payload = collect_payload(&args)?;
-        if args.watch {
-            print!("\x1B[2J\x1B[H");
-        }
-        if args.human {
-            print_human_inspect(&payload);
-        } else {
-            print_json(&payload, false)?;
-        }
-
-        if !args.watch {
-            break;
-        }
-        thread::sleep(Duration::from_secs(2));
+    // AF2: No-args behavior - error with usage hint
+    if args.id.is_none() && args.ids.is_none() && args.tag.is_none() {
+        return Err(GaalError::ParseError(
+            "inspect requires a session ID, --ids, or --tag. Use 'gaal inspect <id>' or 'gaal inspect latest'".to_string()
+        ));
     }
 
+    let conn = open_db_readonly()?;
+    let session_rows = resolve_sessions(&conn, &args)?;
+
+    // Handle --markdown: render JSONL to markdown directly.
+    if args.markdown {
+        let row = session_rows
+            .into_iter()
+            .next()
+            .ok_or(GaalError::NoResults)?;
+        let jsonl_path = std::path::Path::new(&row.jsonl_path);
+        if !jsonl_path.exists() {
+            return Err(GaalError::NotFound(format!(
+                "JSONL source file not found: {}",
+                row.jsonl_path
+            )));
+        }
+        let markdown = crate::render::session_md::render_session_markdown(jsonl_path)
+            .map_err(|e| GaalError::Internal(format!("failed to render session markdown: {e}")))?;
+        print!("{markdown}");
+        return Ok(());
+    }
+
+    let mut out = Vec::with_capacity(session_rows.len());
+    for row in session_rows {
+        out.push(build_inspect_data(&conn, &row, &args)?);
+    }
+
+    if args.human {
+        print_human(&out, &args);
+        return Ok(());
+    }
+
+    if args.ids.is_some() || args.tag.is_some() {
+        let payload = out
+            .into_iter()
+            .map(|data| to_json_value(data, &args))
+            .collect::<Result<Vec<_>, _>>()?;
+        print_json(&payload).map_err(GaalError::from)?;
+        return Ok(());
+    }
+
+    let data = out.into_iter().next().ok_or(GaalError::NoResults)?;
+
+    let payload = to_json_value(data, &args)?;
+    print_json(&payload).map_err(GaalError::from)?;
     Ok(())
 }
 
-fn collect_payload(args: &InspectArgs) -> Result<InspectPayload, GaalError> {
-    let conn = open_db_readonly().ok();
-    let active_sessions = find_active_sessions().map_err(GaalError::from)?;
-    let tagged_ids = tagged_session_ids(conn.as_ref(), args.tag.as_deref())?;
-
-    if args.active {
-        let mut items = Vec::new();
-        for active in &active_sessions {
-            let item = inspect_live(active, conn.as_ref())?;
-            if matches_tag_filter(item.id.as_str(), tagged_ids.as_ref()) {
-                items.push(item);
-            }
+fn resolve_sessions(conn: &Connection, args: &InspectArgs) -> Result<Vec<SessionRow>, GaalError> {
+    if let Some(raw_ids) = &args.ids {
+        let ids = split_csv(raw_ids);
+        if ids.is_empty() {
+            return Err(GaalError::ParseError("--ids must not be empty".to_string()));
         }
-        if items.is_empty() {
+        let mut rows = Vec::with_capacity(ids.len());
+        for id in ids {
+            rows.push(resolve_one(conn, &id)?);
+        }
+        return Ok(rows);
+    }
+
+    if let Some(tag) = &args.tag {
+        let ids = find_session_ids_by_tag(conn, tag)?;
+        if ids.is_empty() {
             return Err(GaalError::NoResults);
         }
-        return Ok(InspectPayload::Many(items));
-    }
-
-    if !args.ids.is_empty() {
-        let mut items = Vec::new();
-        for requested in &args.ids {
-            let id = resolve_requested_id(requested, &active_sessions, conn.as_ref())?;
-            let item = inspect_one(id.as_str(), &active_sessions, conn.as_ref())?;
-            if matches_tag_filter(item.id.as_str(), tagged_ids.as_ref()) {
-                items.push(item);
-            }
+        let mut rows = Vec::with_capacity(ids.len());
+        for id in ids {
+            rows.push(load_session_by_exact_id(conn, &id)?);
         }
-        if items.is_empty() {
-            return Err(GaalError::NoResults);
-        }
-        return Ok(InspectPayload::Many(items));
+        return Ok(rows);
     }
 
-    let Some(requested) = args.id.as_deref() else {
-        return Err(GaalError::ParseError(
-            "inspect requires an id unless --active or --ids is provided".to_string(),
-        ));
-    };
-
-    let resolved = resolve_requested_id(requested, &active_sessions, conn.as_ref())?;
-    let item = inspect_one(resolved.as_str(), &active_sessions, conn.as_ref())?;
-    if !matches_tag_filter(item.id.as_str(), tagged_ids.as_ref()) {
-        return Err(GaalError::NoResults);
-    }
-    Ok(InspectPayload::One(Box::new(item)))
+    let requested = args.id.clone().unwrap_or_else(|| "latest".to_string());
+    Ok(vec![resolve_one(conn, &requested)?])
 }
 
-fn matches_tag_filter(id: &str, tagged_ids: Option<&HashSet<String>>) -> bool {
-    tagged_ids.map(|ids| ids.contains(id)).unwrap_or(true)
+fn resolve_one(conn: &Connection, raw_id: &str) -> Result<SessionRow, GaalError> {
+    if raw_id == "latest" {
+        let latest_id = find_latest_session_id(conn)?;
+        return load_session_by_exact_id(conn, &latest_id);
+    }
+
+    let matches = find_session_ids_by_prefix(conn, raw_id)?;
+    match matches.len() {
+        0 => Err(GaalError::NotFound(raw_id.to_string())),
+        1 => load_session_by_exact_id(conn, &matches[0]),
+        _ => Err(GaalError::AmbiguousId(raw_id.to_string())),
+    }
 }
 
-fn tagged_session_ids(
-    conn: Option<&Connection>,
-    tag: Option<&str>,
-) -> Result<Option<HashSet<String>>, GaalError> {
-    let Some(tag) = tag else {
-        return Ok(None);
-    };
-    let Some(conn) = conn else {
-        return Ok(Some(HashSet::new()));
-    };
+fn find_latest_session_id(conn: &Connection) -> Result<String, GaalError> {
+    conn.query_row(
+        "SELECT id FROM sessions ORDER BY started_at DESC LIMIT 1",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .map_err(|err| match err {
+        rusqlite::Error::QueryReturnedNoRows => GaalError::NotFound("latest".to_string()),
+        other => GaalError::Db(other),
+    })
+}
 
+fn find_session_ids_by_prefix(conn: &Connection, prefix: &str) -> Result<Vec<String>, GaalError> {
+    let like = format!("{prefix}%");
     let mut stmt = conn
-        .prepare("SELECT session_id FROM session_tags WHERE tag = :tag")
+        .prepare("SELECT id FROM sessions WHERE id LIKE :prefix ORDER BY started_at DESC")
         .map_err(GaalError::from)?;
+    let mut rows = stmt
+        .query(named_params! {":prefix": like})
+        .map_err(GaalError::from)?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(GaalError::from)? {
+        out.push(row.get::<_, String>(0).map_err(GaalError::from)?);
+    }
+    Ok(out)
+}
+
+fn find_session_ids_by_tag(conn: &Connection, tag: &str) -> Result<Vec<String>, GaalError> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT s.id
+            FROM sessions s
+            INNER JOIN session_tags t ON t.session_id = s.id
+            WHERE t.tag = :tag
+            ORDER BY s.started_at DESC
+            "#,
+        )
+        .map_err(GaalError::from)?;
+
     let mut rows = stmt
         .query(named_params! { ":tag": tag })
         .map_err(GaalError::from)?;
 
-    let mut ids = HashSet::new();
+    let mut out = Vec::new();
     while let Some(row) = rows.next().map_err(GaalError::from)? {
-        let id: String = row.get(0).map_err(GaalError::from)?;
-        ids.insert(id);
+        out.push(row.get::<_, String>(0).map_err(GaalError::from)?);
     }
-    Ok(Some(ids))
+    Ok(out)
 }
 
-fn resolve_requested_id(
-    requested: &str,
-    active_sessions: &[ActiveSession],
-    conn: Option<&Connection>,
-) -> Result<String, GaalError> {
-    if requested != "latest" {
-        return Ok(requested.to_string());
-    }
-
-    if let Some(id) = resolve_latest_active_id(active_sessions, conn) {
-        return Ok(id);
-    }
-
-    if let Some(conn) = conn {
-        let filter = ListFilter {
-            sort_by: Some("started".to_string()),
-            limit: Some(1),
-            include_children: true,
-            ..ListFilter::default()
-        };
-        if let Some(row) = list_sessions(conn, &filter)?.into_iter().next() {
-            return Ok(row.id);
-        }
-    }
-
-    Err(GaalError::NoResults)
+fn load_session_by_exact_id(conn: &Connection, id: &str) -> Result<SessionRow, GaalError> {
+    get_session(conn, id)?.ok_or_else(|| GaalError::NotFound(id.to_string()))
 }
 
-fn resolve_latest_active_id(
-    active_sessions: &[ActiveSession],
-    conn: Option<&Connection>,
-) -> Option<String> {
-    let mut best: Option<(String, String)> = None;
+fn build_inspect_data(
+    conn: &Connection,
+    row: &SessionRow,
+    args: &InspectArgs,
+) -> Result<InspectData, GaalError> {
+    let any_fact_filter = args.files.is_some() || args.commands || args.errors || args.git;
+    // Summary mode by default - compact card output unless --full or specific fact filters
+    let summary_mode = !args.full && !any_fact_filter;
+    let include_all_facts = !any_fact_filter && args.full;
+    let include_files = args.files.is_some() || include_all_facts;
+    let include_commands = args.commands || include_all_facts;
+    let include_errors = args.errors || include_all_facts;
+    let include_git = args.git || include_all_facts;
+    let include_trace = args.trace;
 
-    for active in active_sessions {
-        let parsed = active
-            .jsonl_path
-            .as_deref()
-            .and_then(|path| parse_session(path).ok());
+    let facts = get_facts(conn, &row.id, None)?;
 
-        let mut id = active
-            .id
-            .clone()
-            .or_else(|| parsed.as_ref().map(|p| p.meta.id.clone()));
-        if id.is_none() {
-            let runtime = active
-                .jsonl_path
-                .as_deref()
-                .map(|path| probe_runtime(path, active.engine, 100))
-                .unwrap_or_default();
-            id = runtime.session_id;
-        }
-        let id = id?;
+    let handoff = get_handoff(conn, &row.id)?;
+    let tags = get_tags(conn, &row.id)?;
 
-        let started_at = conn
-            .and_then(|c| get_session(c, id.as_str()).ok().flatten())
-            .map(|row| row.started_at)
-            .or_else(|| parsed.as_ref().map(|p| p.meta.started_at.clone()))
-            .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
-
-        match &best {
-            Some((_, best_started)) if started_at <= *best_started => {}
-            _ => best = Some((id, started_at)),
-        }
-    }
-
-    best.map(|(id, _)| id)
-}
-
-fn inspect_one(
-    id: &str,
-    active_sessions: &[ActiveSession],
-    conn: Option<&Connection>,
-) -> Result<InspectOutput, GaalError> {
-    if let Some(active) = find_active_by_id(active_sessions, id) {
-        return inspect_live(active, conn);
-    }
-
-    let Some(conn) = conn else {
-        return Err(GaalError::NotFound(id.to_string()));
-    };
-
-    let Some(row) = get_session(conn, id)? else {
-        return Err(GaalError::NotFound(id.to_string()));
-    };
-
-    inspect_archived(&row, conn)
-}
-
-fn find_active_by_id<'a>(
-    active_sessions: &'a [ActiveSession],
-    id: &str,
-) -> Option<&'a ActiveSession> {
-    active_sessions.iter().find(|session| {
-        if session.id.as_deref() == Some(id) {
-            return true;
-        }
-        let Some(path) = session.jsonl_path.as_deref() else {
-            return false;
-        };
-        parse_session(path)
-            .ok()
-            .map(|parsed| parsed.meta.id == id)
-            .unwrap_or(false)
-    })
-}
-
-fn inspect_live(
-    active: &ActiveSession,
-    conn: Option<&Connection>,
-) -> Result<InspectOutput, GaalError> {
-    let parsed = active
-        .jsonl_path
-        .as_deref()
-        .and_then(|path| parse_session(path).ok());
-
-    let runtime = active
-        .jsonl_path
-        .as_deref()
-        .map(|path| probe_runtime(path, active.engine, INSPECT_TAIL_LINES))
-        .unwrap_or_default();
-
-    let mut id = active
-        .id
-        .clone()
-        .or_else(|| parsed.as_ref().map(|p| p.meta.id.clone()))
-        .or_else(|| runtime.session_id.clone())
-        .unwrap_or_else(|| format!("pid-{}", active.pid));
-
-    let row = conn.and_then(|c| get_session(c, id.as_str()).ok().flatten());
-    if id.starts_with("pid-") {
-        if let Some(db_id) = row.as_ref().map(|s| s.id.clone()) {
-            id = db_id;
-        }
-    }
-
-    let facts = session_facts(
-        conn,
-        id.as_str(),
-        parsed.as_ref().map(|p| p.facts.as_slice()),
-    );
-
-    let model = row
-        .as_ref()
-        .and_then(|s| s.model.clone())
-        .or_else(|| parsed.as_ref().and_then(|p| p.meta.model.clone()));
-
-    let total_tokens = row
-        .as_ref()
-        .map(|s| s.total_input_tokens + s.total_output_tokens)
-        .or_else(|| {
-            parsed
-                .as_ref()
-                .map(|p| p.total_input_tokens + p.total_output_tokens)
-        })
-        .unwrap_or(0)
-        .max(0);
-
-    let context_window = peak_input_tokens(&runtime.usage_samples);
-    let tokens_limit = context_limit_tokens(active.engine, model.as_deref());
-
-    let now = Utc::now();
-    let last_event_ts = runtime
-        .last_event_ts
-        .clone()
-        .or_else(|| row.as_ref().and_then(|s| s.last_event_at.clone()))
-        .or_else(|| parsed.as_ref().and_then(|p| p.last_event_at.clone()));
-    let silence_secs = last_event_ts
-        .as_deref()
-        .and_then(|ts| age_from_ts(ts, now))
-        .unwrap_or(0);
-
-    let status = compute_session_status(&StatusParams {
-        ended_at: None,
-        exit_signal: None,
-        pid_alive: true,
-        silence_secs,
-        cpu_pct: active.process.cpu_pct,
-    });
-
-    let uptime_secs = row
-        .as_ref()
-        .map(|s| s.started_at.as_str())
-        .or_else(|| parsed.as_ref().map(|p| p.meta.started_at.as_str()))
-        .and_then(|ts| age_from_ts(ts, now))
-        .unwrap_or(0);
-
-    let turn = turn_snapshot(
-        &facts,
-        runtime.last_action.as_ref().map(|a| InspectAction {
-            kind: a.kind.clone(),
-            summary: a.summary.clone(),
-        }),
-        now,
-    );
-
-    let velocity = build_velocity(&facts, &runtime, total_tokens, uptime_secs, now, true);
-    let recent_errors = build_recent_errors(&facts, now);
-
-    Ok(InspectOutput {
-        id,
-        status,
-        pid: Some(active.pid),
-        engine: active.engine,
-        model,
-        uptime_secs,
-        process: Some(InspectProcess {
-            cpu_pct: round1(active.process.cpu_pct),
-            rss_mb: round1(active.process.rss_mb),
-        }),
-        context: InspectContext {
-            total_tokens,
-            context_window,
-            context_limit: tokens_limit,
-        },
-        current_turn: turn,
-        last_turn: None,
-        velocity,
-        recent_errors,
-    })
-}
-
-fn inspect_archived(row: &SessionRow, conn: &Connection) -> Result<InspectOutput, GaalError> {
-    let engine = parse_engine(&row.engine);
-    let path = Path::new(&row.jsonl_path);
-    let parsed = parse_session(path).ok();
-    let runtime = if path.exists() {
-        probe_runtime(path, engine, INSPECT_TAIL_LINES)
+    let files = if include_files {
+        collect_files(&facts, args.files.unwrap_or(FilesMode::All))
     } else {
-        Default::default()
+        FileOps {
+            read: Vec::new(),
+            written: Vec::new(),
+            edited: Vec::new(),
+        }
     };
 
-    let facts = session_facts(
-        Some(conn),
-        row.id.as_str(),
-        parsed.as_ref().map(|p| p.facts.as_slice()),
-    );
-    let model = row
-        .model
-        .clone()
-        .or_else(|| parsed.as_ref().and_then(|p| p.meta.model.clone()));
+    let commands = if include_commands {
+        collect_commands(&facts)
+    } else {
+        Vec::new()
+    };
 
-    let total_tokens = (row.total_input_tokens + row.total_output_tokens)
-        .max(0)
-        .max(
-            parsed
-                .as_ref()
-                .map(|p| p.total_input_tokens + p.total_output_tokens)
-                .unwrap_or(0),
-        );
-    let context_window = peak_input_tokens(&runtime.usage_samples);
-    let tokens_limit = context_limit_tokens(engine, model.as_deref());
+    let errors = if include_errors {
+        collect_errors(&facts)
+    } else {
+        Vec::new()
+    };
 
-    let now = Utc::now();
-    let anchor = row
-        .last_event_at
-        .as_deref()
-        .and_then(parse_ts)
-        .or_else(|| row.ended_at.as_deref().and_then(parse_ts))
-        .or_else(|| {
-            parsed
-                .as_ref()
-                .and_then(|p| p.last_event_at.as_deref().and_then(parse_ts))
+    let git_ops = if include_git {
+        collect_git_ops(&facts)
+    } else {
+        Vec::new()
+    };
+
+    let file_count = if summary_mode {
+        let all_files = collect_files(&facts, FilesMode::All);
+        Some(FileCount {
+            read: all_files.read.len(),
+            written: all_files.written.len(),
+            edited: all_files.edited.len(),
         })
-        .unwrap_or(now);
+    } else {
+        None
+    };
+    let command_count = if summary_mode {
+        Some(collect_commands(&facts).len())
+    } else {
+        None
+    };
+    let error_count = if summary_mode {
+        Some(collect_errors(&facts).len())
+    } else {
+        None
+    };
+    let git_op_count = if summary_mode {
+        Some(collect_git_ops(&facts).len())
+    } else {
+        None
+    };
 
-    let uptime_secs = duration_between(
-        row.started_at.as_str(),
-        row.ended_at
-            .as_deref()
-            .or(row.last_event_at.as_deref())
-            .unwrap_or(row.started_at.as_str()),
-    )
-    .unwrap_or(0);
-
-    let status = archived_status(row, parsed.as_ref());
-    let velocity = build_velocity(&facts, &runtime, total_tokens, uptime_secs, anchor, false);
-    let recent_errors = build_recent_errors(&facts, now);
-
-    let turn = turn_snapshot(
-        &facts,
-        runtime
-            .last_action
-            .as_ref()
-            .map(|a| InspectAction {
-                kind: a.kind.clone(),
-                summary: a.summary.clone(),
-            })
-            .or_else(|| {
-                latest_action_from_facts(&facts).map(|action| InspectAction {
-                    kind: action.kind,
-                    summary: action.summary,
-                })
-            }),
-        anchor,
-    );
-
-    Ok(InspectOutput {
+    let record = SessionRecord {
         id: row.id.clone(),
-        status,
-        pid: None,
-        engine,
-        model,
-        uptime_secs,
-        process: None,
-        context: InspectContext {
-            total_tokens,
-            context_window,
-            context_limit: tokens_limit,
+        engine: row.engine.clone(),
+        model: row.model.clone().unwrap_or_else(|| "unknown".to_string()),
+        cwd: row.cwd.clone().unwrap_or_default(),
+        started_at: row.started_at.clone(),
+        ended_at: row.ended_at.clone(),
+        status: "".to_string(), // AF2: Status field exists but should be removed from JSON output
+        duration_secs: duration_secs(row),
+        tokens: TokenUsage {
+            input: row.total_input_tokens.max(0) as u64,
+            output: row.total_output_tokens.max(0) as u64,
         },
-        current_turn: None,
-        last_turn: turn,
-        velocity,
-        recent_errors,
-    })
-}
-
-fn session_facts(
-    conn: Option<&Connection>,
-    id: &str,
-    parsed_fallback: Option<&[Fact]>,
-) -> Vec<Fact> {
-    if let Some(conn) = conn {
-        if let Ok(facts) = get_facts(conn, id, None) {
-            return facts;
-        }
-    }
-    parsed_fallback
-        .map(|facts| facts.to_vec())
-        .unwrap_or_default()
-}
-
-fn turn_snapshot(
-    facts: &[Fact],
-    runtime_last_action: Option<InspectAction>,
-    anchor: chrono::DateTime<Utc>,
-) -> Option<TurnSnapshot> {
-    if facts.is_empty() {
-        return None;
-    }
-
-    let turn_number = facts
-        .iter()
-        .filter_map(|fact| fact.turn_number)
-        .max()
-        .unwrap_or(0);
-
-    let selected = if turn_number > 0 {
-        facts
-            .iter()
-            .filter(|fact| fact.turn_number == Some(turn_number))
-            .collect::<Vec<_>>()
-    } else {
-        facts.iter().collect::<Vec<_>>()
+        peak_context: row.peak_context.max(0) as u64,
+        tools_used: row.total_tools.max(0) as u32,
+        turns: row.total_turns.max(0) as u32,
+        headline: handoff.as_ref().and_then(|h| h.headline.clone()),
+        files,
+        commands,
+        errors,
+        git_ops,
+        jsonl_path: row.jsonl_path.clone(),
+        last_event_at: row
+            .last_event_at
+            .clone()
+            .unwrap_or_else(|| row.started_at.clone()),
+        exit_signal: row.exit_signal.clone(),
+        tags,
     };
 
-    if selected.is_empty() {
-        return None;
-    }
-
-    let started_at = selected
-        .iter()
-        .map(|fact| fact.ts.as_str())
-        .find(|ts| !ts.is_empty())
-        .unwrap_or("1970-01-01T00:00:00Z")
-        .to_string();
-
-    let elapsed_secs = age_from_ts(started_at.as_str(), anchor).unwrap_or(0);
-    let actions_this_turn = selected
-        .iter()
-        .filter(|fact| {
-            matches!(
-                fact.fact_type,
-                FactType::FileRead
-                    | FactType::FileWrite
-                    | FactType::Command
-                    | FactType::TaskSpawn
-                    | FactType::GitOp
-            )
+    let trace = if include_trace {
+        Some(facts.clone())
+    } else {
+        None
+    };
+    let token_breakdown = if args.tokens {
+        Some(TokenBreakdown {
+            input_total: record.tokens.input,
+            output_total: record.tokens.output,
+            turns: record.turns,
+            avg_input_per_turn: avg_tokens(record.tokens.input, record.turns),
+            avg_output_per_turn: avg_tokens(record.tokens.output, record.turns),
         })
-        .count();
+    } else {
+        None
+    };
 
-    let last_action = runtime_last_action.or_else(|| {
-        selected
-            .iter()
-            .rev()
-            .find_map(|fact| match fact.fact_type {
-                FactType::FileRead => Some(("Read", fact.subject.clone(), fact.detail.clone())),
-                FactType::FileWrite => Some(("Write", fact.subject.clone(), fact.detail.clone())),
-                FactType::Command => Some(("Bash", fact.subject.clone(), fact.detail.clone())),
-                FactType::TaskSpawn => Some(("Task", fact.subject.clone(), fact.detail.clone())),
-                FactType::GitOp => Some(("Git", fact.subject.clone(), fact.detail.clone())),
-                _ => None,
-            })
-            .map(|(kind, subject, detail)| InspectAction {
-                kind: kind.to_string(),
-                summary: truncate(
-                    detail
-                        .or(subject)
-                        .unwrap_or_else(|| "action".to_string())
-                        .as_str(),
-                    120,
-                ),
-            })
-    });
-
-    Some(TurnSnapshot {
-        number: turn_number,
-        started_at,
-        elapsed_secs,
-        last_action,
-        actions_this_turn,
+    Ok(InspectData {
+        record,
+        trace,
+        token_breakdown,
+        file_count,
+        command_count,
+        error_count,
+        git_op_count,
     })
 }
 
-fn build_velocity(
-    facts: &[Fact],
-    runtime: &crate::commands::active::RuntimeProbe,
-    tokens_used: i64,
-    uptime_secs: u64,
-    anchor: chrono::DateTime<Utc>,
-    active: bool,
-) -> Velocity {
-    let actions_in_5m = count_actions_in_window(facts, anchor, 5);
-    let actions_per_minute_5m = round1(actions_in_5m as f64 / 5.0);
+fn to_json_value(data: InspectData, args: &InspectArgs) -> Result<Value, GaalError> {
+    let InspectData {
+        record,
+        trace,
+        token_breakdown,
+        file_count,
+        command_count,
+        error_count,
+        git_op_count,
+    } = data;
 
-    let mut tokens_per_minute_5m =
-        tokens_per_minute_from_samples(&runtime.usage_samples, anchor, 5);
-    if tokens_per_minute_5m <= 0.0 {
-        let minutes = if active {
-            (uptime_secs as f64 / 60.0).max(1.0)
-        } else {
-            let recent_minutes = 5.0;
-            if facts.is_empty() {
-                (uptime_secs as f64 / 60.0).max(1.0)
-            } else {
-                recent_minutes
-            }
-        };
-        tokens_per_minute_5m = round1(tokens_used.max(0) as f64 / minutes);
+    let mut map = match serde_json::to_value(record)
+        .map_err(|e| GaalError::Internal(format!("failed to serialize session record: {e}")))?
+    {
+        Value::Object(map) => map,
+        _ => {
+            return Err(GaalError::Internal(
+                "expected session record to serialize to object".to_string(),
+            ))
+        }
+    };
+
+    // AF2: Always remove status field from JSON output
+    map.remove("status");
+
+    let any_fact_filter = args.files.is_some() || args.errors || args.commands || args.git;
+    let summary_mode = !args.full && !any_fact_filter;
+    if summary_mode {
+        // AF2: Compact card format - remove full arrays, add counts
+        map.remove("files");
+        map.remove("commands");
+        map.remove("errors");
+        map.remove("git_ops");
+
+        map.insert(
+            "file_count".to_string(),
+            serde_json::to_value(file_count.unwrap_or(FileCount {
+                read: 0,
+                written: 0,
+                edited: 0,
+            }))
+            .map_err(|e| GaalError::Internal(format!("failed to serialize file count: {e}")))?,
+        );
+        map.insert(
+            "command_count".to_string(),
+            json!(command_count.unwrap_or(0)),
+        );
+        map.insert("error_count".to_string(), json!(error_count.unwrap_or(0)));
+        map.insert("git_op_count".to_string(), json!(git_op_count.unwrap_or(0)));
+
+        // AF2: Remove fields for compact card
+        map.remove("last_event_at");
+        map.remove("exit_signal");
+    } else if any_fact_filter {
+        if args.files.is_none() {
+            map.remove("files");
+        }
+        if !args.commands {
+            map.remove("commands");
+        }
+        if !args.errors {
+            map.remove("errors");
+        }
+        if !args.git {
+            map.remove("git_ops");
+        }
     }
 
-    Velocity {
-        actions_per_minute_5m,
-        tokens_per_minute_5m,
+    if !args.source {
+        map.remove("jsonl_path");
+    }
+
+    if let Some(trace) = trace {
+        map.insert(
+            "trace".to_string(),
+            serde_json::to_value(trace)
+                .map_err(|e| GaalError::Internal(format!("failed to serialize trace: {e}")))?,
+        );
+    }
+
+    if let Some(tokens) = token_breakdown {
+        map.insert(
+            "token_breakdown".to_string(),
+            serde_json::to_value(tokens).map_err(|e| {
+                GaalError::Internal(format!("failed to serialize token breakdown: {e}"))
+            })?,
+        );
+    }
+
+    Ok(Value::Object(map))
+}
+
+fn collect_files(facts: &[Fact], mode: FilesMode) -> FileOps {
+    let mut read = Vec::new();
+    let mut written = Vec::new();
+    let mut edited = Vec::new();
+
+    let mut read_seen = HashSet::new();
+    let mut written_seen = HashSet::new();
+    let mut edited_seen = HashSet::new();
+
+    for fact in facts {
+        match fact.fact_type {
+            FactType::FileRead if mode == FilesMode::Read || mode == FilesMode::All => {
+                if let Some(path) = fact_path(fact) {
+                    push_unique(&mut read, &mut read_seen, path);
+                }
+            }
+            FactType::FileWrite if mode == FilesMode::Write || mode == FilesMode::All => {
+                if let Some(path) = fact_path(fact) {
+                    if is_edit_fact(fact) {
+                        push_unique(&mut edited, &mut edited_seen, path);
+                    } else {
+                        push_unique(&mut written, &mut written_seen, path);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    FileOps {
+        read,
+        written,
+        edited,
     }
 }
 
-fn build_recent_errors(facts: &[Fact], now: chrono::DateTime<Utc>) -> Vec<RecentError> {
+fn collect_commands(facts: &[Fact]) -> Vec<CommandEntry> {
+    let mut out = Vec::new();
+    for fact in facts {
+        if !matches!(fact.fact_type, FactType::Command) {
+            continue;
+        }
+
+        let cmd = fact
+            .detail
+            .clone()
+            .or_else(|| fact.subject.clone())
+            .unwrap_or_else(|| "".to_string());
+        out.push(CommandEntry {
+            cmd,
+            exit_code: fact.exit_code.unwrap_or(0),
+            ts: fact.ts.clone(),
+        });
+    }
+    out
+}
+
+fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
     let mut out = Vec::new();
 
-    for fact in facts.iter().rev() {
-        if !matches!(fact.fact_type, FactType::Error | FactType::Command) {
+    for fact in facts {
+        if matches!(fact.fact_type, FactType::Error) {
+            out.push(ErrorEntry {
+                tool: fact.subject.clone().unwrap_or_else(|| "tool".to_string()),
+                cmd: fact
+                    .subject
+                    .clone()
+                    .or_else(|| fact.detail.clone())
+                    .unwrap_or_else(|| "".to_string()),
+                exit_code: fact.exit_code.unwrap_or(1),
+                snippet: truncate(&fact.detail.clone().unwrap_or_else(|| "".to_string()), 280),
+                ts: fact.ts.clone(),
+            });
             continue;
         }
 
-        let has_failure = matches!(fact.fact_type, FactType::Error)
-            || fact.exit_code.unwrap_or(0) != 0
-            || fact.success == Some(false);
-        if !has_failure {
-            continue;
-        }
-
-        let (tool, cmd) = infer_tool_and_cmd(fact);
-        let exit_code = fact.exit_code.unwrap_or(1);
-        let age_secs = age_from_ts(fact.ts.as_str(), now).unwrap_or(0);
-
-        out.push(RecentError {
-            tool,
-            cmd,
-            exit_code,
-            age_secs,
-        });
-
-        if out.len() >= 5 {
-            break;
+        if matches!(fact.fact_type, FactType::Command) && fact.exit_code.unwrap_or(0) != 0 {
+            let cmd = fact
+                .detail
+                .clone()
+                .or_else(|| fact.subject.clone())
+                .unwrap_or_else(|| "".to_string());
+            out.push(ErrorEntry {
+                tool: "Bash".to_string(),
+                cmd: cmd.clone(),
+                exit_code: fact.exit_code.unwrap_or(1),
+                snippet: truncate(&cmd, 280),
+                ts: fact.ts.clone(),
+            });
         }
     }
 
     out
 }
 
-fn infer_tool_and_cmd(fact: &Fact) -> (String, String) {
-    let detail = fact.detail.clone().unwrap_or_default();
-    let subject = fact.subject.clone().unwrap_or_default();
+fn collect_git_ops(facts: &[Fact]) -> Vec<GitOp> {
+    let mut out = Vec::new();
 
-    let tool = if matches!(fact.fact_type, FactType::Command) {
-        "Bash".to_string()
-    } else if subject.to_ascii_lowercase().contains("git") {
-        "Git".to_string()
-    } else {
-        "Tool".to_string()
-    };
+    for fact in facts {
+        if !matches!(fact.fact_type, FactType::GitOp) {
+            continue;
+        }
 
-    let cmd = if !detail.trim().is_empty() {
-        truncate(detail.as_str(), 200)
-    } else if !subject.trim().is_empty() {
-        truncate(subject.as_str(), 200)
-    } else {
-        "error".to_string()
-    };
+        let message = fact
+            .detail
+            .clone()
+            .or_else(|| fact.subject.clone())
+            .unwrap_or_else(|| "".to_string());
+        out.push(GitOp {
+            op: parse_git_op(&message),
+            message,
+            ts: fact.ts.clone(),
+        });
+    }
 
-    (tool, cmd)
+    out
 }
 
-fn archived_status(
-    row: &SessionRow,
-    parsed: Option<&crate::parser::types::ParsedSession>,
-) -> SessionStatus {
-    let signal = row
-        .exit_signal
+fn parse_git_op(cmd: &str) -> String {
+    let mut parts = cmd.split_whitespace();
+    let first = parts.next();
+    let second = parts.next();
+
+    match (first, second) {
+        (Some("git"), Some(op)) => op.to_string(),
+        _ => "git".to_string(),
+    }
+}
+
+fn fact_path(fact: &Fact) -> Option<String> {
+    if let Some(subject) = fact.subject.clone() {
+        let trimmed = subject.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if let Some(detail) = fact.detail.as_ref() {
+        return extract_path_from_detail(detail);
+    }
+
+    None
+}
+
+fn extract_path_from_detail(detail: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<Value>(detail).ok()?;
+    ["file_path", "path", "target_file", "filepath"]
+        .iter()
+        .find_map(|key| {
+            parsed
+                .get(key)
+                .and_then(Value::as_str)
+                .map(|text| text.to_string())
+        })
+}
+
+fn is_edit_fact(fact: &Fact) -> bool {
+    let Some(detail) = fact.detail.as_ref() else {
+        return false;
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(detail) else {
+        return false;
+    };
+
+    parsed.get("old_string").is_some()
+        || parsed.get("replace_all").is_some()
+        || parsed.get("oldText").is_some()
+        || parsed.get("newText").is_some()
+}
+
+fn split_csv(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn push_unique(vec: &mut Vec<String>, seen: &mut HashSet<String>, value: String) {
+    if seen.insert(value.clone()) {
+        vec.push(value);
+    }
+}
+
+fn duration_secs(row: &SessionRow) -> u64 {
+    let start = parse_ts(&row.started_at).unwrap_or_else(Utc::now);
+    let end = row
+        .ended_at
         .as_deref()
-        .or_else(|| parsed.and_then(|p| p.exit_signal.as_deref()))
-        .unwrap_or_default();
+        .and_then(parse_ts)
+        .or_else(|| row.last_event_at.as_deref().and_then(parse_ts))
+        .unwrap_or_else(Utc::now);
 
-    compute_session_status(&StatusParams {
-        ended_at: row.ended_at.as_deref(),
-        exit_signal: Some(signal),
-        pid_alive: false,
-        silence_secs: 0,
-        cpu_pct: 0.0,
-    })
+    let secs = end.signed_duration_since(start).num_seconds();
+    secs.max(0) as u64
 }
 
-fn parse_engine(raw: &str) -> Engine {
-    match raw.parse::<Engine>() {
-        Ok(engine) => engine,
-        Err(_) => {
-            if raw.eq_ignore_ascii_case("claude") {
-                Engine::Claude
+fn parse_ts(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|ts| ts.with_timezone(&Utc))
+}
+
+fn avg_tokens(total: u64, turns: u32) -> u64 {
+    if turns == 0 {
+        return 0;
+    }
+    total / u64::from(turns)
+}
+
+fn print_human(records: &[InspectData], args: &InspectArgs) {
+    let any_fact_filter = args.files.is_some() || args.commands || args.errors || args.git;
+    // Summary mode by default — full detail only with --full
+    let summary_mode = !args.full && !any_fact_filter;
+
+    for (idx, data) in records.iter().enumerate() {
+        if idx > 0 {
+            println!();
+            println!("---");
+            println!();
+        }
+
+        let record = &data.record;
+        println!("ID: {}", record.id);
+        println!("Engine: {}", record.engine);
+        println!("Model: {}", record.model);
+        println!("Started: {}", record.started_at);
+        println!("Duration: {}s", record.duration_secs);
+        println!("CWD: {}", format_cwd(&record.cwd, 80));
+        if record.peak_context > 0 {
+            println!("Peak Context: {}", format_peak_context(record.peak_context));
+        }
+
+        if let Some(headline) = &record.headline {
+            println!("Headline: {}", headline);
+        }
+
+        if summary_mode {
+            // Brief summary card: counts only, no full lists.
+            let fc = data.file_count.as_ref();
+            let files_read = fc.map(|f| f.read).unwrap_or(0);
+            let files_written = fc.map(|f| f.written).unwrap_or(0);
+            let files_edited = fc.map(|f| f.edited).unwrap_or(0);
+            let cmds = data.command_count.unwrap_or(0);
+            let errs = data.error_count.unwrap_or(0);
+            let git_ops = data.git_op_count.unwrap_or(0);
+            println!(
+                "Files: read={} written={} edited={}",
+                files_read, files_written, files_edited
+            );
+            println!(
+                "Ops: commands={} errors={} git={}",
+                cmds, errs, git_ops
+            );
+            if record.peak_context > 0 {
+                println!(
+                    "Tokens: in={} out={}  Peak: {}  Turns: {}  Tools: {}",
+                    record.tokens.input, record.tokens.output,
+                    format_peak_context(record.peak_context),
+                    record.turns, record.tools_used
+                );
             } else {
-                Engine::Codex
+                println!(
+                    "Tokens: in={} out={}  Turns: {}  Tools: {}",
+                    record.tokens.input, record.tokens.output, record.turns, record.tools_used
+                );
+            }
+        } else {
+            // Full detail mode (--full or explicit fact filter).
+            println!(
+                "Tokens: in={} out={}",
+                record.tokens.input, record.tokens.output
+            );
+            println!("Turns: {}", record.turns);
+            println!("Tools: {}", record.tools_used);
+
+            if !record.tags.is_empty() {
+                println!("Tags: {}", record.tags.join(", "));
+            }
+
+            if let Some(exit_signal) = &record.exit_signal {
+                println!("Exit: {}", exit_signal);
+            }
+
+            if let Some(ended_at) = &record.ended_at {
+                println!("Ended: {}", ended_at);
+            }
+
+            println!("Last Event: {}", record.last_event_at);
+
+            // Show files: when explicitly requested OR --full
+            let show_files = args.files.is_some() || args.full;
+            if show_files {
+                print_path_group("Files read", &record.files.read);
+                print_path_group("Files written", &record.files.written);
+                print_path_group("Files edited", &record.files.edited);
+            }
+
+            // Show commands: when explicitly requested OR --full
+            let show_commands = args.commands || args.full;
+            if show_commands && !record.commands.is_empty() {
+                println!("Commands:");
+                for cmd in &record.commands {
+                    println!("  $ {} (exit {})", cmd.cmd, cmd.exit_code);
+                }
+            }
+
+            // Show errors: when explicitly requested OR --full
+            let show_errors = args.errors || args.full;
+            if show_errors && !record.errors.is_empty() {
+                println!("Errors:");
+                for err in &record.errors {
+                    println!(
+                        "  - [{}] {} exit={} {}",
+                        err.ts, err.tool, err.exit_code, err.snippet
+                    );
+                }
+            }
+
+            // Show git ops: when explicitly requested OR --full
+            let show_git = args.git || args.full;
+            if show_git && !record.git_ops.is_empty() {
+                println!("Git ops:");
+                for op in &record.git_ops {
+                    println!("  - {} {}", op.op, op.message);
+                }
+            }
+        }
+
+        if args.source {
+            println!("Source: {}", record.jsonl_path);
+        }
+
+        if args.tokens {
+            if let Some(tokens) = &data.token_breakdown {
+                println!(
+                    "Token breakdown: turns={} avg_in/turn={} avg_out/turn={}",
+                    tokens.turns, tokens.avg_input_per_turn, tokens.avg_output_per_turn
+                );
+            }
+        }
+
+        if args.trace {
+            if let Some(trace) = &data.trace {
+                println!("Trace:");
+                for fact in trace {
+                    let kind = fact.fact_type.as_str();
+                    let subject = fact.subject.clone().unwrap_or_else(|| "".to_string());
+                    let detail = fact
+                        .detail
+                        .as_ref()
+                        .map(|s| truncate(s, 120))
+                        .unwrap_or_else(|| "".to_string());
+                    println!("  - [{}] {} {} {}", fact.ts, kind, subject, detail);
+                }
             }
         }
     }
 }
 
-fn duration_between(start: &str, end: &str) -> Option<u64> {
-    let start = parse_ts(start)?;
-    let end = parse_ts(end)?;
-    if end < start {
-        return Some(0);
+fn print_path_group(title: &str, values: &[String]) {
+    if values.is_empty() {
+        return;
     }
-    u64::try_from(end.signed_duration_since(start).num_seconds()).ok()
-}
-
-fn context_limit_tokens(engine: Engine, model: Option<&str>) -> i64 {
-    let model_lower = model.unwrap_or_default().to_ascii_lowercase();
-    if model_lower.contains("claude") {
-        return 200_000;
-    }
-    if model_lower.contains("codex") {
-        return 128_000;
-    }
-
-    match engine {
-        Engine::Claude => 200_000,
-        Engine::Codex => 128_000,
+    println!("{}:", title);
+    for value in values {
+        println!("  - {}", value);
     }
 }
 
-/// Return the highest input_tokens value from any single usage sample.
-/// This approximates peak context window usage — the largest prompt the
-/// model had to process in a single turn.
-fn peak_input_tokens(samples: &[crate::commands::active::UsageSample]) -> i64 {
-    samples.iter().map(|s| s.input_tokens).max().unwrap_or(0)
-}
-
-fn round1(value: f64) -> f64 {
-    (value * 10.0).round() / 10.0
-}
-
-fn truncate(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
+fn truncate(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
         return value.to_string();
     }
-    value.chars().take(max_chars).collect()
+    value.chars().take(max).collect::<String>()
 }
 
-fn print_json<T: Serialize>(value: &T, pretty: bool) -> Result<(), GaalError> {
-    let rendered = if pretty {
-        serde_json::to_string_pretty(value)
-    } else {
-        serde_json::to_string(value)
-    }
-    .map_err(|e| GaalError::Internal(format!("failed to serialize output: {e}")))?;
-    println!("{rendered}");
-    Ok(())
+/// Format peak context for human display.
+fn format_peak_context(peak: u64) -> String {
+    format!("{} peak", format_tokens(peak as i64))
 }
 
-fn print_human_inspect(payload: &InspectPayload) {
-    match payload {
-        InspectPayload::One(item) => print_human_one(item),
-        InspectPayload::Many(items) => {
-            for (idx, item) in items.iter().enumerate() {
-                if idx > 0 {
-                    println!();
-                    println!("---");
-                    println!();
-                }
-                print_human_one(item);
-            }
-        }
-    }
-}
-
-fn print_human_one(item: &InspectOutput) {
-    println!("ID:      {}", item.id);
-    println!("Engine:  {}", item.engine);
-    if let Some(model) = &item.model {
-        println!("Model:   {}", model);
-    }
-    println!("Status:  {}", item.status);
-    if let Some(pid) = item.pid {
-        println!("PID:     {}", pid);
-    }
-    println!("Uptime:  {}", format_duration(item.uptime_secs as i64));
-
-    if let Some(proc) = &item.process {
-        println!("CPU:     {:.1}%", proc.cpu_pct);
-        println!("RSS:     {:.1} MB", proc.rss_mb);
-    }
-
-    println!(
-        "Tokens:  total={} ctx_window={} ctx_limit={}",
-        format_tokens(item.context.total_tokens),
-        format_tokens(item.context.context_window),
-        format_tokens(item.context.context_limit)
-    );
-
-    let print_turn = |label: &str, turn: &TurnSnapshot| {
-        println!(
-            "{}:  turn #{} | elapsed={} | actions={}",
-            label,
-            turn.number,
-            format_duration(turn.elapsed_secs as i64),
-            turn.actions_this_turn
-        );
-        if let Some(action) = &turn.last_action {
-            println!("  Last action: [{}] {}", action.kind, action.summary);
-        }
-    };
-
-    if let Some(turn) = &item.current_turn {
-        print_turn("Current turn", turn);
-    }
-    if let Some(turn) = &item.last_turn {
-        print_turn("Last turn   ", turn);
-    }
-
-    println!(
-        "Velocity: {:.1} actions/min | {:.1} tokens/min (5m window)",
-        item.velocity.actions_per_minute_5m, item.velocity.tokens_per_minute_5m
-    );
-
-    if !item.recent_errors.is_empty() {
-        println!("Recent errors:");
-        for err in &item.recent_errors {
-            println!(
-                "  - [{}] {} exit={} {}s ago",
-                err.tool, err.cmd, err.exit_code, err.age_secs
-            );
-        }
-    }
-}

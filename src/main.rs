@@ -19,9 +19,6 @@ struct Cli {
 enum Commands {
     /// Fleet view across sessions.
     Ls {
-        /// Filter by status (repeatable).
-        #[arg(long)]
-        status: Vec<String>,
         /// Filter by engine.
         #[arg(long)]
         engine: Option<Engine>,
@@ -43,22 +40,19 @@ enum Commands {
         /// Max number of results.
         #[arg(long, default_value_t = 10)]
         limit: usize,
-        /// Include child/worker sessions.
-        #[arg(long)]
-        children: bool,
         /// Return aggregate totals instead of individual sessions.
         #[arg(long)]
         aggregate: bool,
     },
 
-    /// Full session record with optional focused views.
-    Show {
-        /// Session ID (or "latest").
-        #[arg(required = true)]
+
+    /// Session details with optional focused views (formerly show).
+    Inspect {
+        /// Session ID or ID prefix. Use `latest` to resolve the newest session.
         id: Option<String>,
         /// File ops view; when passed without a value, defaults to "all".
         #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "all")]
-        files: Option<ShowFiles>,
+        files: Option<InspectFiles>,
         /// Errors and non-zero exits only.
         #[arg(long)]
         errors: bool,
@@ -74,12 +68,6 @@ enum Commands {
         /// Token usage breakdown.
         #[arg(long)]
         tokens: bool,
-        /// Recursive spawn hierarchy.
-        #[arg(long)]
-        tree: bool,
-        /// Inline child session summaries.
-        #[arg(long)]
-        children: bool,
         /// Full event timeline.
         #[arg(long)]
         trace: bool,
@@ -97,32 +85,13 @@ enum Commands {
         tag: Vec<String>,
     },
 
-    /// Operational snapshot of one or more sessions.
-    Inspect {
-        /// Session ID (or "latest").
-        id: Option<String>,
-        /// Re-poll every 2s and refresh output.
-        #[arg(long)]
-        watch: bool,
-        /// Show all currently running sessions.
-        #[arg(long)]
-        active: bool,
-        /// Batch IDs in comma-delimited form.
-        #[arg(long, value_delimiter = ',')]
-        ids: Vec<String>,
-        /// Filter by tag.
-        #[arg(long)]
-        tag: Vec<String>,
-    },
-
     /// Inverted query: which session did X to Y.
     #[command(
-        arg_required_else_help = true,
-        after_long_help = "Verbs:\n  read       Files opened with the Read tool\n  wrote      Files created/modified with Write or Edit tool\n  ran        Commands executed via Bash tool (matches program names)\n  touched    Any file interaction (read + wrote combined)\n  changed    Files modified (wrote + edited, excludes read-only)\n  installed  Package/dependency installations detected in commands\n  deleted    File deletions (rm commands and file removals)"
+        after_long_help = "Available verbs:\n  read       Files opened with the Read tool\n  wrote      Files created/modified with Write or Edit tool\n  ran        Commands executed via Bash tool (matches program names)\n  touched    Any file interaction (read + wrote combined)\n  changed    Files modified (wrote + edited, excludes read-only)\n  deleted    File deletions (rm commands and file removals)"
     )]
     Who {
-        /// Action verb (read|wrote|ran|touched|installed|changed|deleted).
-        verb: String,
+        /// Action verb (read|wrote|ran|touched|changed|deleted).
+        verb: Option<String>,
         /// Target file/path/command pattern.
         target: Option<String>,
         /// Time window lower bound.
@@ -253,25 +222,11 @@ enum Commands {
         cmd: IndexCommand,
     },
 
-    /// Live process discovery for running sessions.
-    Active {
-        /// Restrict by engine.
-        #[arg(long)]
-        engine: Option<Engine>,
-        /// Re-poll every 2s and refresh output.
-        #[arg(long)]
-        watch: bool,
-        /// Flat list (no tree nesting).
-        #[arg(long)]
-        flat: bool,
-    },
-
     /// Apply or remove tags on a session.
     Tag {
         /// Session ID.
         id: String,
-        /// One or more tags.
-        #[arg(required = true)]
+        /// Tags to add/remove (not used with `gaal tag ls`).
         tags: Vec<String>,
         /// Remove tags instead of adding them.
         #[arg(long)]
@@ -333,11 +288,10 @@ enum LsSort {
     Tokens,
     Cost,
     Duration,
-    Status,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
-enum ShowFiles {
+enum InspectFiles {
     Read,
     Write,
     All,
@@ -383,7 +337,6 @@ fn run(cli: Cli) -> Result<(), GaalError> {
 
     match command {
         Commands::Ls {
-            status,
             engine,
             since,
             before,
@@ -391,11 +344,9 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             tag,
             sort,
             limit,
-            children,
             aggregate,
         } => {
             let args = gaal::commands::ls::LsArgs {
-                status: convert_ls_statuses(status)?,
                 engine: engine.map(convert_ls_engine),
                 since,
                 before,
@@ -403,13 +354,12 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 tag,
                 sort: Some(convert_ls_sort(sort)),
                 limit: usize_to_i64("limit", limit)?,
-                children,
                 aggregate,
                 human_readable: human,
             };
             gaal::commands::ls::run(args)
         }
-        Commands::Show {
+        Commands::Inspect {
             id,
             files,
             errors,
@@ -417,45 +367,24 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             git,
             full,
             tokens,
-            tree,
-            children,
             trace,
             source,
             markdown,
             ids,
             tag,
         } => {
-            let args = gaal::commands::show::ShowArgs {
+            let args = gaal::commands::inspect::InspectArgs {
                 id,
-                files: files.map(convert_show_files),
+                files: files.map(convert_inspect_files),
                 errors,
                 commands,
                 git,
                 full,
                 tokens,
-                tree,
-                children,
                 trace,
                 source,
                 markdown,
                 ids: csv_or_none(ids),
-                tag: single_or_none("--tag", tag)?,
-                human,
-            };
-            gaal::commands::show::run(args)
-        }
-        Commands::Inspect {
-            id,
-            watch,
-            active,
-            ids,
-            tag,
-        } => {
-            let args = gaal::commands::inspect::InspectArgs {
-                id,
-                watch,
-                active,
-                ids,
                 tag: single_or_none("--tag", tag)?,
                 human,
             };
@@ -474,7 +403,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             full,
         } => {
             let args = gaal::commands::who::WhoArgs {
-                verb,
+                verb: verb.unwrap_or_default(),
                 target,
                 since,
                 before,
@@ -594,43 +523,11 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 gaal::commands::index::run_prune(args)
             }
         },
-        Commands::Active { engine, watch, flat } => {
-            let args = gaal::commands::active::ActiveArgs {
-                engine: engine.map(convert_active_engine),
-                watch,
-                human,
-                flat,
-            };
-            gaal::commands::active::run(args)
-        }
         Commands::Tag { id, tags, remove } => {
             let args = gaal::commands::tag::TagArgs { id, tags, remove };
             gaal::commands::tag::run(args)
         }
     }
-}
-
-fn convert_ls_statuses(
-    statuses: Vec<String>,
-) -> Result<Vec<gaal::commands::ls::LsStatus>, GaalError> {
-    let mut out = Vec::with_capacity(statuses.len());
-    for raw in statuses {
-        let normalized = raw.trim().to_ascii_lowercase();
-        let parsed = match normalized.as_str() {
-            "active" => gaal::commands::ls::LsStatus::Active,
-            "idle" => gaal::commands::ls::LsStatus::Idle,
-            "completed" => gaal::commands::ls::LsStatus::Completed,
-            "failed" => gaal::commands::ls::LsStatus::Failed,
-            "unknown" => gaal::commands::ls::LsStatus::Unknown,
-            _ => {
-                return Err(GaalError::ParseError(format!(
-                    "invalid --status value `{raw}` (expected active|idle|completed|failed|unknown)"
-                )));
-            }
-        };
-        out.push(parsed);
-    }
-    Ok(out)
 }
 
 fn convert_ls_engine(engine: Engine) -> gaal::commands::ls::LsEngine {
@@ -647,15 +544,14 @@ fn convert_ls_sort(sort: LsSort) -> gaal::commands::ls::LsSort {
         LsSort::Tokens => gaal::commands::ls::LsSort::Tokens,
         LsSort::Cost => gaal::commands::ls::LsSort::Cost,
         LsSort::Duration => gaal::commands::ls::LsSort::Duration,
-        LsSort::Status => gaal::commands::ls::LsSort::Status,
     }
 }
 
-fn convert_show_files(mode: ShowFiles) -> gaal::commands::show::FilesMode {
+fn convert_inspect_files(mode: InspectFiles) -> gaal::commands::inspect::FilesMode {
     match mode {
-        ShowFiles::Read => gaal::commands::show::FilesMode::Read,
-        ShowFiles::Write => gaal::commands::show::FilesMode::Write,
-        ShowFiles::All => gaal::commands::show::FilesMode::All,
+        InspectFiles::Read => gaal::commands::inspect::FilesMode::Read,
+        InspectFiles::Write => gaal::commands::inspect::FilesMode::Write,
+        InspectFiles::All => gaal::commands::inspect::FilesMode::All,
     }
 }
 
@@ -684,13 +580,6 @@ fn convert_provider(provider: Provider) -> String {
     match provider {
         Provider::AgentMux => "agent-mux".to_string(),
         Provider::Openrouter => "openrouter".to_string(),
-    }
-}
-
-fn convert_active_engine(engine: Engine) -> gaal::parser::types::Engine {
-    match engine {
-        Engine::Claude => gaal::parser::types::Engine::Claude,
-        Engine::Codex => gaal::parser::types::Engine::Codex,
     }
 }
 

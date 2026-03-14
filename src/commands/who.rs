@@ -13,7 +13,7 @@ use crate::output::json::print_json;
 /// CLI arguments for `gaal who`.
 #[derive(Debug, Clone, Args)]
 pub struct WhoArgs {
-    /// Inverted query verb: read, wrote, ran, touched, installed, changed, deleted.
+    /// Inverted query verb: read, wrote, ran, touched, changed, deleted.
     pub verb: String,
     /// Optional query target (file path, command fragment, package, etc.).
     pub target: Option<String>,
@@ -77,12 +77,17 @@ struct WhoRow {
 
 impl From<WhoResult> for WhoRow {
     fn from(value: WhoResult) -> Self {
+        let subject = value
+            .subject
+            .as_deref()
+            .map(normalize_subject)
+            .map(str::to_string);
         Self {
             session_id: value.session_id,
             engine: value.engine,
             ts: value.ts,
             fact_type: value.fact_type,
-            subject: value.subject,
+            subject,
             detail: value.detail,
             session_headline: value.session_headline,
         }
@@ -100,11 +105,16 @@ struct WhoSummaryRow {
     headline: Option<String>,
 }
 
-/// Wrapper for JSON output that includes search metadata.
+#[derive(Debug, Clone, Serialize)]
+struct QueryWindow {
+    from: String,
+    to: String,
+}
+
+/// Wrapper for JSON output metadata.
 #[derive(Debug, Clone, Serialize)]
 struct WhoOutput<T: Serialize> {
-    search_window: String,
-    note: &'static str,
+    query_window: QueryWindow,
     shown: usize,
     total: usize,
     sessions: T,
@@ -112,7 +122,12 @@ struct WhoOutput<T: Serialize> {
 
 /// Execute `gaal who` and print matching facts as JSON or a compact table.
 pub fn run(args: WhoArgs) -> Result<(), GaalError> {
-    let verb = args.verb.to_ascii_lowercase();
+    let verb_raw = args.verb.trim();
+    if verb_raw.is_empty() {
+        print_no_args_help();
+        return Ok(());
+    }
+    let verb = verb_raw.to_ascii_lowercase();
     let spec = verb_spec(&verb)?;
     let note = verb_note(&verb);
     let full = args.full;
@@ -127,21 +142,12 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     let is_folder_target = target.as_deref().is_some_and(|value| value.ends_with('/'));
     let since = normalize_since(&args.since)?;
     let before = args.before.as_deref().map(normalize_before).transpose()?;
+    let query_window = build_query_window(Some(since.as_str()), before.as_deref());
 
     // Compute human-readable search window for display.
-    let since_date = since
-        .get(..10)
-        .unwrap_or(&since)
-        .to_string();
-    let before_date = before
-        .as_deref()
-        .and_then(|b| b.get(..10))
-        .map(str::to_string)
-        .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
+    let since_date = query_window.from.clone();
+    let before_date = query_window.to.clone();
     let since_label = format_since_label(&args.since);
-    let search_window = format!(
-        "{since_label} ({since_date} to {before_date})"
-    );
     let search_window_hint = format!(
         "Searching {since_label} ({since_date} \u{2192} {before_date}) \u{00b7} Use --since 30d for wider range"
     );
@@ -171,7 +177,18 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
         .map(WhoRow::from)
         .collect();
     if matches.is_empty() {
-        return Err(GaalError::NoResults);
+        if args.human {
+            eprintln!("No results found.");
+        } else {
+            let empty_output = serde_json::json!({
+                "query_window": query_window,
+                "shown": 0,
+                "total": 0,
+                "sessions": []
+            });
+            print_json(&empty_output).map_err(GaalError::from)?;
+        }
+        return Ok(());
     }
     let was_truncated = matches.len() < total_matches;
 
@@ -192,8 +209,7 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
             }
         } else {
             let output = WhoOutput {
-                search_window,
-                note,
+                query_window: query_window.clone(),
                 shown: matches.len(),
                 total: total_matches,
                 sessions: &matches,
@@ -220,8 +236,7 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
         }
     } else {
         let output = WhoOutput {
-            search_window,
-            note,
+            query_window,
             shown: matches.len(),
             total: total_matches,
             sessions: &summaries,
@@ -281,11 +296,16 @@ fn verb_spec(verb: &str) -> Result<VerbSpec, GaalError> {
         },
         _ => {
             return Err(GaalError::ParseError(format!(
-                "invalid who verb: {verb} (expected: read|wrote|ran|touched|installed|changed|deleted)"
+                "invalid who verb: {verb} (expected: read|wrote|ran|touched|changed|deleted)"
             )));
         }
     };
     Ok(spec)
+}
+
+fn print_no_args_help() {
+    println!("Usage: gaal who <verb> [target] [--since <time>] [--before <time>] [--cwd <path>] [--engine <engine>] [--tag <tag>] [--failed] [--limit <n>] [-F] [-H]");
+    println!("Available verbs: read, wrote, ran, touched, changed, deleted");
 }
 
 /// Return a one-line disclaimer about what the verb covers (and what it misses).
@@ -503,6 +523,25 @@ fn starts_with_ci(value: &str, prefix: &str) -> bool {
         .starts_with(&prefix.to_ascii_lowercase())
 }
 
+fn normalize_subject(subject: &str) -> &str {
+    if let Some(marker_idx) = subject.find("*** Update File:") {
+        let after_marker = &subject[marker_idx + "*** Update File:".len()..];
+        let end_newline = after_marker.find('\n');
+        let end_escaped = after_marker.find("\\n");
+        let end = match (end_newline, end_escaped) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => after_marker.len(),
+        };
+        let path = after_marker[..end].trim().trim_matches('"');
+        if !path.is_empty() {
+            return path;
+        }
+    }
+    subject
+}
+
 /// Group flat fact rows into per-session summaries for brief output.
 fn group_by_session(rows: &[WhoRow]) -> Vec<WhoSummaryRow> {
     let mut map: HashMap<String, WhoSummaryRow> = HashMap::new();
@@ -536,14 +575,19 @@ fn group_by_session(rows: &[WhoRow]) -> Vec<WhoSummaryRow> {
                 entry.subjects.push(short);
             }
         } else if let Some(ref detail) = row.detail {
-            // For commands, extract first line / first 80 chars
-            let short = detail
-                .lines()
-                .next()
-                .unwrap_or(detail)
-                .chars()
-                .take(80)
-                .collect::<String>();
+            let normalized = normalize_subject(detail);
+            let short = if normalized != detail {
+                normalized.to_string()
+            } else {
+                // For commands, extract first line / first 80 chars
+                detail
+                    .lines()
+                    .next()
+                    .unwrap_or(detail)
+                    .chars()
+                    .take(80)
+                    .collect::<String>()
+            };
             if !entry.subjects.contains(&short) {
                 entry.subjects.push(short);
             }
@@ -734,3 +778,38 @@ fn parse_absolute(value: &str, kind: BoundKind) -> Result<String, GaalError> {
         "invalid time value: {value} (use 7d, 24h, today, YYYY-MM-DD, or RFC3339)"
     )))
 }
+
+fn build_query_window(since: Option<&str>, before: Option<&str>) -> QueryWindow {
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    let from = since
+        .and_then(extract_date)
+        .unwrap_or_else(|| today.clone());
+    let to = before
+        .and_then(extract_date)
+        .unwrap_or_else(|| today.clone());
+    QueryWindow { from, to }
+}
+
+fn extract_date(value: &str) -> Option<String> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
+        return Some(dt.with_timezone(&Utc).format("%Y-%m-%d").to_string());
+    }
+
+    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        return Some(date.format("%Y-%m-%d").to_string());
+    }
+
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(value, fmt) {
+            return Some(Utc.from_utc_datetime(&naive).format("%Y-%m-%d").to_string());
+        }
+    }
+
+    None
+}
+

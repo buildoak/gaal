@@ -172,6 +172,22 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                         });
                     }
                     "token_count" => {
+                        // Codex emits duplicate token_count events per turn
+                        // (one per rate-limit bucket: "codex", "codex_bengalfox",
+                        // etc.).  All duplicates carry identical token counts but
+                        // different rate_limits metadata.  Without dedup the
+                        // totals inflate 2-3x.
+                        //
+                        // payload.id is always null on token_count events, so we
+                        // build a dedup key from total_token_usage.total_tokens
+                        // which is the running cumulative total — identical
+                        // across duplicates for the same turn, unique across
+                        // different turns.
+                        let dedup_key = record
+                            .pointer("/payload/info/total_token_usage/total_tokens")
+                            .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)))
+                            .map(|n| format!("codex_tc_{n}"));
+
                         events.push(SessionEvent {
                             timestamp: ts.clone(),
                             kind: EventKind::Usage {
@@ -181,10 +197,7 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                                 output_tokens: as_i64(
                                     record.pointer("/payload/info/last_token_usage/output_tokens"),
                                 ),
-                                dedup_key: record
-                                    .pointer("/payload/id")
-                                    .and_then(Value::as_str)
-                                    .map(str::to_string),
+                                dedup_key,
                             },
                         });
                     }

@@ -65,6 +65,8 @@ pub struct ParsedSession {
     pub total_input_tokens: i64,
     /// Aggregate output tokens.
     pub total_output_tokens: i64,
+    /// Maximum input tokens seen in any single API turn (peak context window usage).
+    pub peak_context: i64,
     /// Total tool calls seen.
     pub total_tools: i32,
     /// Total turn count.

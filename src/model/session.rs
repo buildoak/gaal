@@ -9,8 +9,6 @@ pub struct SessionRecord {
     pub engine: String,
     /// Model name used in the session.
     pub model: String,
-    /// Computed session status in string form for JSON compatibility.
-    pub status: String,
     /// Working directory associated with the session.
     pub cwd: String,
     /// Session start timestamp (RFC3339).
@@ -18,17 +16,15 @@ pub struct SessionRecord {
     /// Session end timestamp, if completed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
+    /// Computed runtime status label.
+    #[serde(default)]
+    pub status: String,
     /// Session duration in seconds.
     pub duration_secs: u64,
-    /// Parent session ID for spawned workers.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    /// Number of direct children.
-    pub child_count: u32,
-    /// Direct child session IDs.
-    pub children: Vec<String>,
     /// Aggregate token usage.
     pub tokens: TokenUsage,
+    /// Maximum input tokens in any single API turn (peak context window usage).
+    pub peak_context: u64,
     /// Total tool invocations.
     pub tools_used: u32,
     /// Total conversation turns.

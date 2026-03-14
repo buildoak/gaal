@@ -9,7 +9,7 @@ use crate::output::json::print_json;
 /// Arguments for `gaal tag`.
 #[derive(Debug, Clone)]
 pub struct TagArgs {
-    /// Session id or id prefix.
+    /// Session id or id prefix. Use `ls` to list distinct tags.
     pub id: String,
     /// Tags to add/remove.
     pub tags: Vec<String>,
@@ -27,6 +27,16 @@ struct TagResult {
 /// Runs the `gaal tag` command.
 pub fn run(args: TagArgs) -> Result<(), GaalError> {
     let conn = open_db()?;
+    if args.id == "ls" {
+        if args.remove || !args.tags.is_empty() {
+            return Err(GaalError::ParseError(
+                "`gaal tag ls` does not accept tags or --remove".to_string(),
+            ));
+        }
+        let tags = list_tags(&conn)?;
+        return print_json(&tags).map_err(GaalError::from);
+    }
+
     let session_id = resolve_session_id(&conn, &args.id)?;
     if args.tags.is_empty() {
         return Err(GaalError::ParseError(
@@ -51,6 +61,19 @@ pub fn run(args: TagArgs) -> Result<(), GaalError> {
         tags: args.tags,
     };
     print_json(&payload).map_err(GaalError::from)
+}
+
+fn list_tags(conn: &rusqlite::Connection) -> Result<Vec<String>, GaalError> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT tag FROM session_tags ORDER BY tag ASC")
+        .map_err(GaalError::from)?;
+    let mut rows = stmt.query([]).map_err(GaalError::from)?;
+
+    let mut tags = Vec::new();
+    while let Some(row) = rows.next().map_err(GaalError::from)? {
+        tags.push(row.get::<_, String>(0).map_err(GaalError::from)?);
+    }
+    Ok(tags)
 }
 
 fn resolve_session_id(

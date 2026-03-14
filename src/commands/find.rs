@@ -33,10 +33,13 @@ pub fn run(args: FindArgs) -> Result<(), GaalError> {
             .ok_or_else(|| GaalError::ParseError("invalid jsonl filename".to_string()))?
             .to_string();
 
+        let engine = infer_engine(&path);
+
         println!(
             "{}",
             json!({
                 "session_id": session_id,
+                "engine": engine,
                 "jsonl_path": path,
             })
         );
@@ -102,4 +105,20 @@ fn is_jsonl(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("jsonl"))
         .unwrap_or(false)
+}
+
+/// Infer the engine from a JSONL file path.
+///
+/// - `~/.claude/projects/` → "claude"
+/// - `~/.codex/` → "codex"
+/// - Otherwise → "unknown"
+fn infer_engine(path: &Path) -> &'static str {
+    let path_str = path.to_string_lossy();
+    if path_str.contains("/.claude/projects/") {
+        "claude"
+    } else if path_str.contains("/.codex/") {
+        "codex"
+    } else {
+        "unknown"
+    }
 }

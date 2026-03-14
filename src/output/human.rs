@@ -253,13 +253,10 @@ impl HumanReadable for Vec<SessionRecord> {
             return;
         }
 
-        let headers = [
-            "ID", "Engine", "Status", "Started", "Duration", "Tokens", "Model", "CWD",
-        ];
+        let headers = ["ID", "Engine", "Started", "Duration", "Tokens", "Model", "CWD"];
         let col_kinds = [
             ColumnKind::Fixed,    // ID
             ColumnKind::Fixed,    // Engine
-            ColumnKind::Fixed,    // Status
             ColumnKind::Fixed,    // Started
             ColumnKind::Fixed,    // Duration
             ColumnKind::Fixed,    // Tokens
@@ -278,7 +275,6 @@ impl HumanReadable for Vec<SessionRecord> {
                 vec![
                     id,
                     session.engine.clone(),
-                    session.status.clone(),
                     format_timestamp(&session.started_at),
                     format_duration(session.duration_secs as i64),
                     tokens,

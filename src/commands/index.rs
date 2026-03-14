@@ -258,7 +258,6 @@ pub fn run_status() -> Result<(), GaalError> {
         "db_size_bytes": status.db_size_bytes,
         "sessions_total": status.sessions_total,
         "sessions_by_engine": status.sessions_by_engine,
-        "sessions_by_status": status.sessions_by_status,
         "facts_total": status.facts_total,
         "handoffs_total": status.handoffs_total,
         "last_indexed_at": status.last_indexed_at,
@@ -279,7 +278,7 @@ pub fn run_reindex(args: ReindexArgs) -> Result<(), GaalError> {
 
     let parsed = parse_session(&path).map_err(GaalError::from)?;
     let offset = file_len_i64(&path)?;
-    let mut row = build_full_session_row(&parsed, &path, offset, existing.parent_id);
+    let mut row = build_full_session_row(&parsed, &path, offset);
     row.id = existing.id.clone();
     row.session_type = existing.session_type.clone();
     let facts = normalize_facts(parsed.facts, &existing.id);
@@ -423,9 +422,8 @@ pub(crate) fn index_discovered_session(
         .as_ref()
         .map(|row| row.id.as_str())
         .unwrap_or(&discovered.id);
-    let parent_id = existing.as_ref().and_then(|row| row.parent_id.clone());
     let mut session_row =
-        build_full_session_row(&parsed, &discovered.path, file_size_i64, parent_id);
+        build_full_session_row(&parsed, &discovered.path, file_size_i64);
     session_row.id = target_id.to_string();
     if let Some(row) = existing.as_ref() {
         session_row.session_type = row.session_type.clone();
@@ -458,7 +456,6 @@ fn build_full_session_row(
     parsed: &ParsedSession,
     path: &Path,
     last_indexed_offset: i64,
-    parent_id: Option<String>,
 ) -> SessionRow {
     SessionRow {
         id: parsed.meta.id.clone(),
@@ -469,13 +466,13 @@ fn build_full_session_row(
         ended_at: parsed.ended_at.clone(),
         exit_signal: parsed.exit_signal.clone(),
         last_event_at: parsed.last_event_at.clone(),
-        parent_id,
         session_type: "standalone".to_string(),
         jsonl_path: path.to_string_lossy().to_string(),
         total_input_tokens: parsed.total_input_tokens,
         total_output_tokens: parsed.total_output_tokens,
         total_tools: i64::from(parsed.total_tools),
         total_turns: i64::from(parsed.total_turns),
+        peak_context: parsed.peak_context,
         last_indexed_offset,
     }
 }
@@ -512,13 +509,13 @@ fn build_incremental_session_row(
             .last_event_at
             .clone()
             .or_else(|| existing.last_event_at.clone()),
-        parent_id: existing.parent_id.clone(),
         session_type: existing.session_type.clone(),
         jsonl_path: path.to_string_lossy().to_string(),
         total_input_tokens: existing.total_input_tokens + parsed_delta.total_input_tokens,
         total_output_tokens: existing.total_output_tokens + parsed_delta.total_output_tokens,
         total_tools: existing.total_tools + i64::from(parsed_delta.total_tools),
         total_turns: existing.total_turns + i64::from(parsed_delta.total_turns),
+        peak_context: existing.peak_context.max(parsed_delta.peak_context),
         last_indexed_offset: u64_to_i64(new_offset)?,
     })
 }
@@ -795,7 +792,6 @@ fn build_eywa_session_stub(entry: &EywaEntry) -> SessionRow {
         ended_at: Some(started_at.clone()),
         exit_signal: None,
         last_event_at: Some(started_at),
-        parent_id: None,
         session_type: "standalone".to_string(),
         jsonl_path: entry
             .content_path
@@ -805,6 +801,7 @@ fn build_eywa_session_stub(entry: &EywaEntry) -> SessionRow {
         total_output_tokens: 0,
         total_tools: 0,
         total_turns: 0,
+        peak_context: 0,
         last_indexed_offset: 0,
     }
 }

@@ -20,7 +20,9 @@ Tracked: 2026-03-09
 
 ---
 
-## I2: `gaal show -H` missing fields vs JSON [FIXED 2026-03-09]
+## I2: `gaal show -H` missing fields vs JSON [FIXED 2026-03-09] [REMOVED v0.1.0]
+
+NOTE: `gaal show` command removed in v0.1.0 - functionality merged into `gaal inspect`.
 
 **Severity:** Medium
 **Command:** `gaal show abb9d05a -H` vs `gaal show abb9d05a`
@@ -78,7 +80,9 @@ Additional: SQL query in `queries.rs:641-694` does NOT filter by `fact_type` —
 
 ---
 
-## I5: `gaal active -H` outputs JSON instead of table [FIXED 2026-03-09]
+## I5: `gaal active -H` outputs JSON instead of table [FIXED 2026-03-09] [REMOVED v0.1.0]
+
+NOTE: `gaal active` command removed in v0.1.0 - process monitoring discontinued.
 
 **Severity:** Medium
 **Command:** `gaal active -H`
@@ -110,7 +114,9 @@ Additional: SQL query in `queries.rs:641-694` does NOT filter by `fact_type` —
 
 ---
 
-## I6: `gaal active` stuck detection — false positives + config inconsistency [FIXED 2026-03-09]
+## I6: `gaal active` stuck detection — false positives + config inconsistency [FIXED 2026-03-09] [REMOVED v0.1.0]
+
+NOTE: `gaal active` command and stuck detection removed in v0.1.0.
 
 **Severity:** Medium
 **Command:** `gaal active -H`
@@ -153,7 +159,9 @@ No read-only connection path exists. `gaal ls` takes the same locks as `gaal ind
 
 ---
 
-## I9: `gaal active` can't find API-spawned Codex sessions [FIXED 2026-03-09]
+## I9: `gaal active` can't find API-spawned Codex sessions [FIXED 2026-03-09] [REMOVED v0.1.0]
+
+NOTE: `gaal active` command removed in v0.1.0 - process monitoring discontinued.
 
 **Severity:** Low-Medium
 **Command:** `gaal active` missing running Codex subagent
@@ -310,7 +318,9 @@ A future session reconnecting via this handoff would believe `wet` was still in 
 
 ---
 
-## I16: `gaal show` returns "not found" for current running session [FIXED 2026-03-10]
+## I16: `gaal show` returns "not found" for current running session [FIXED 2026-03-10] [REMOVED v0.1.0]
+
+NOTE: `gaal show` command removed in v0.1.0 - functionality merged into `gaal inspect`.
 
 **Severity:** High (blocks handoff of active sessions)
 **Session ID:** `019cd256-c7f9-72f0-a2fe-924fe3e8c603`
@@ -385,7 +395,9 @@ cannot start a transaction within a transaction
 
 ---
 
-## I19: `gaal active` false positive stuck detection [FIXED 2026-03-10]
+## I19: `gaal active` false positive stuck detection [FIXED 2026-03-10] [REMOVED v0.1.0]
+
+NOTE: `gaal active` command and all stuck detection removed in v0.1.0.
 
 **Severity:** High (alerts on healthy sessions)
 **Command:** `gaal active -H`
@@ -402,7 +414,9 @@ cannot start a transaction within a transaction
 
 ---
 
-## I20: `gaal active` lacks session summary — unclear what each session is doing [FIXED 2026-03-10]
+## I20: `gaal active` lacks session summary — unclear what each session is doing [FIXED 2026-03-10] [REMOVED v0.1.0]
+
+NOTE: `gaal active` command removed in v0.1.0.
 
 **Severity:** Medium (UX — table is just IDs and durations, no context)
 **Command:** `gaal active -H`
@@ -417,7 +431,9 @@ cannot start a transaction within a transaction
 
 ---
 
-## I21: `gaal active` needs first-principles rethink — mixed session types, subagent noise [FIXED 2026-03-10]
+## I21: `gaal active` needs first-principles rethink — mixed session types, subagent noise [FIXED 2026-03-10] [REMOVED v0.1.0]
+
+NOTE: `gaal active` command removed entirely in v0.1.0 instead of being fixed.
 
 **Severity:** High (architectural — active view is unusable for fleet management)
 
@@ -441,7 +457,7 @@ This flat list is noise. A coordinator session spawning 5 Codex workers shows as
 
 ---
 
-## I22: Active session detection logic — overfitted vs generalizable
+## I22: Active session detection logic — overfitted vs generalizable [CLOSED 2026-03-11]
 
 **Severity:** Medium (architecture)
 
@@ -463,7 +479,9 @@ This works for our specific setup (tmux sessions with named panes) but:
 
 ---
 
-## I23: `gaal show` with no parameters shows random session
+## I23: `gaal show` with no parameters shows random session [REMOVED v0.1.0]
+
+NOTE: `gaal show` command removed in v0.1.0.
 
 **Severity:** Low-Medium (confusing UX)
 **Command:** `gaal show` (no args)
@@ -479,7 +497,9 @@ Option 3 is ideal for the common case — a worker wanting to inspect its own se
 
 ---
 
-## I24: `gaal show <id>` not-found for sessions listed in `gaal active` [FIXED 2026-03-10]
+## I24: `gaal show <id>` not-found for sessions listed in `gaal active` [FIXED 2026-03-10] [REMOVED v0.1.0]
+
+NOTE: Both `gaal show` and `gaal active` commands removed in v0.1.0.
 
 **Severity:** High (active sessions can't be inspected)
 **Command:** `gaal show -H f6000264` → `{"error":"not found: f6000264","exit_code":3,"ok":false}`
@@ -545,7 +565,9 @@ Option 3 is ideal for the common case — a worker wanting to inspect its own se
 
 ---
 
-## I28: `gaal active` shows duplicate entries for same session ID [FIXED 2026-03-10]
+## I28: `gaal active` shows duplicate entries for same session ID [FIXED 2026-03-10] [REMOVED v0.1.0]
+
+NOTE: `gaal active` command removed in v0.1.0.
 
 **Severity:** High (active view is noisy and misleading)
 **Command:** `gaal active -H`
@@ -676,7 +698,9 @@ Session `019cd71a` (codex) shows as `stuck` with `silence (1180s)` — may be ge
 
 ---
 
-## I36: `gaal show -H` still too token-heavy — bypasses summary card
+## I36: `gaal show -H` still too token-heavy — bypasses summary card [REMOVED v0.1.0]
+
+NOTE: `gaal show` command removed in v0.1.0 - functionality moved to `gaal inspect`.
 
 **Severity:** High (UX + token waste)
 **Command:** `gaal show be1c2826 -H`
@@ -788,7 +812,7 @@ Verbs:
 
 ---
 
-## I43: `gaal who` with no args should show help, not error
+## I43: `gaal who` with no args should show help, not error [FIXED v0.1.0]
 
 **Severity:** Low (UX)
 **Command:** `gaal who` (no args)
@@ -856,6 +880,62 @@ Verbs:
 **Problem:** Output shows which sessions wrote the file but not when. Date/time of the actual file operations would make results much more actionable — user can see "session X wrote ISSUES.md 3 days ago" vs "session Y wrote it 2 hours ago."
 
 **Fix:** Include `first_seen` and `last_seen` timestamps for the matching facts in both JSON and `-H` output. Source from the fact's `created_at` or the session event timestamp.
+
+---
+
+## I48: Token counting accuracy — input + cache_creation + cache_read [FIXED v0.1.0]
+
+**Severity:** High (metrics accuracy)
+**Problem:** Token counting was inaccurate, not properly accounting for cache read/write operations.
+**Fix:** Token counting now properly includes input tokens + cache_creation + cache_read for accurate session cost tracking.
+
+---
+
+## I49: Error classification accuracy — only shell tools with exit_code != 0 [FIXED v0.1.0]
+
+**Severity:** High (error classification accuracy)
+**Problem:** Error classification was too broad, flagging non-error conditions as errors.
+**Fix:** Error classification now only flags shell tools (bash commands) with non-zero exit codes as errors.
+
+---
+
+## I50: `gaal show` / `gaal inspect` command merge [FIXED v0.1.0]
+
+**Severity:** High (command consolidation)
+**Problem:** `gaal show` and `gaal inspect` provided overlapping functionality with confusion over which to use.
+**Fix:** `gaal show` command removed, functionality merged into `gaal inspect` as the single session detail command.
+
+---
+
+## I51: SessionStatus / status field removal [FIXED v0.1.0]
+
+**Severity:** High (data model simplification)
+**Problem:** SessionStatus enum and status taxonomy provided little value, mostly noise.
+**Fix:** SessionStatus enum and related status fields removed from data model in v0.1.0.
+
+---
+
+## I52: `gaal ls` envelope format with query_window [FIXED v0.1.0]
+
+**Severity:** Medium (output format standardization)
+**Problem:** `gaal ls` output format inconsistent.
+**Fix:** `gaal ls` now returns standardized envelope format with query_window metadata.
+
+---
+
+## I53: `gaal who` codex subjects path cleaning [FIXED v0.1.0]
+
+**Severity:** Medium (data quality)
+**Problem:** Codex subjects contained patch strings instead of clean file paths.
+**Fix:** Codex subjects are now cleaned to contain proper file paths, not patch diff strings.
+
+---
+
+## I54: `gaal tag ls` subcommand addition [FIXED v0.1.0]
+
+**Severity:** Low (feature completeness)
+**Problem:** No way to list existing tags.
+**Fix:** Added `gaal tag ls` subcommand to list all available tags.
 
 ---
 

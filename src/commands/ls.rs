@@ -1,30 +1,24 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::str::FromStr;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, SecondsFormat, Utc};
 use clap::{ArgAction, Args, ValueEnum};
 use rusqlite::Connection;
 use serde::Serialize;
 
-use crate::commands::active::probe_runtime;
 use crate::db::open_db_readonly;
 use crate::db::queries::{self, count_sessions, ListFilter, SessionRow};
-use crate::discovery::active::{find_active_sessions, is_pid_alive, probe_pid};
 use crate::error::GaalError;
-use crate::model::{compute_session_status, SessionStatus, StatusParams, TokenUsage};
-use crate::output::human::{format_cwd, format_duration, format_timestamp, format_tokens, print_table_with_kinds, ColumnKind};
+use crate::model::TokenUsage;
+use crate::output::human::{
+    format_cwd, format_duration, format_timestamp, format_tokens, print_table_with_kinds,
+    ColumnKind,
+};
 use crate::output::{self, HumanReadable, OutputFormat};
-use crate::parser::types::Engine;
-
-const STATUS_TAIL_LINES: usize = 700;
 
 /// CLI arguments for `gaal ls`.
 #[derive(Debug, Clone, Args)]
 pub struct LsArgs {
-    /// Filter by computed session status (repeatable).
-    #[arg(long, value_enum, action = ArgAction::Append)]
-    pub status: Vec<LsStatus>,
     /// Filter by engine name.
     #[arg(long, value_enum)]
     pub engine: Option<LsEngine>,
@@ -44,29 +38,14 @@ pub struct LsArgs {
     #[arg(long, value_enum)]
     pub sort: Option<LsSort>,
     /// Maximum number of rows returned.
-    #[arg(long, default_value_t = 50)]
+    #[arg(long, default_value_t = 10)]
     pub limit: i64,
-    /// Include child/worker sessions.
-    #[arg(long, action = ArgAction::SetTrue)]
-    pub children: bool,
     /// Return totals instead of per-session rows.
     #[arg(long, action = ArgAction::SetTrue)]
     pub aggregate: bool,
     /// Render human-readable output.
     #[arg(short = 'H', action = ArgAction::SetTrue)]
     pub human_readable: bool,
-}
-
-/// Supported `gaal ls --status` values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
-#[value(rename_all = "lower")]
-pub enum LsStatus {
-    Active,
-    Idle,
-    Completed,
-    Failed,
-    Interrupted,
-    Unknown,
 }
 
 /// Supported `gaal ls --engine` values.
@@ -85,7 +64,6 @@ pub enum LsSort {
     Ended,
     Tokens,
     Duration,
-    Status,
     Cost,
 }
 
@@ -95,14 +73,12 @@ pub struct SessionSummary {
     pub id: String,
     pub engine: String,
     pub model: String,
-    pub status: String,
     pub cwd: String,
     pub started_at: String,
     pub ended_at: Option<String>,
     pub duration_secs: u64,
-    pub parent_id: Option<String>,
-    pub child_count: u32,
     pub tokens: TokenUsage,
+    pub peak_context: u64,
     pub tools_used: u64,
     pub headline: Option<String>,
 }
@@ -114,14 +90,28 @@ struct AggregateJson {
     total_output_tokens: i64,
     estimated_cost_usd: f64,
     by_engine: HashMap<String, i64>,
-    by_status: HashMap<String, i64>,
+}
+
+/// JSON envelope for `gaal ls` output (non-aggregate mode)
+#[derive(Debug, Clone, Serialize)]
+struct LsEnvelope {
+    query_window: QueryWindow,
+    shown: usize,
+    total: usize,
+    sessions: Vec<SessionSummary>,
+}
+
+/// Time window for queries
+#[derive(Debug, Clone, Serialize)]
+struct QueryWindow {
+    from: String,
+    to: String,
 }
 
 /// Run `gaal ls`.
 pub fn run(args: LsArgs) -> Result<(), GaalError> {
     let conn = open_db_readonly()?;
-    let requested_statuses = resolve_requested_statuses(&args);
-    let filter = build_filter(&args, &requested_statuses)?;
+    let filter = build_filter(&args)?;
 
     if args.aggregate {
         let aggregate = queries::get_aggregate(&conn, &filter)?;
@@ -131,11 +121,10 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
             total_output_tokens: aggregate.total_output_tokens,
             estimated_cost_usd: aggregate.estimated_cost_usd,
             by_engine: aggregate.by_engine,
-            by_status: aggregate.by_status,
         };
 
-        if requires_precise_aggregate(&args, &requested_statuses) {
-            payload = build_precise_aggregate(&conn, &filter, &args.tag, &requested_statuses)?;
+        if requires_precise_aggregate(&args) {
+            payload = build_precise_aggregate(&conn, &filter, &args.tag)?;
         }
         output::json::print_json(&payload).map_err(GaalError::from)?;
         return Ok(());
@@ -144,17 +133,11 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
     let mut rows = queries::list_sessions(&conn, &filter)?;
     rows = filter_rows_by_all_tags(&conn, rows, &args.tag)?;
 
-    let live_pids = load_live_pid_index();
     let now = Utc::now();
 
     let mut summaries = Vec::with_capacity(rows.len());
     for row in rows {
-        let pid = resolve_pid(&live_pids, &row);
-        let status = compute_session_status(&status_params_for_row(&row, pid, now));
-        if !matches_status_filter(&status, &requested_statuses) {
-            continue;
-        }
-        summaries.push(build_summary(&conn, row, status, now)?);
+        summaries.push(build_summary(&conn, row, now)?);
     }
     if summaries.is_empty() {
         return Err(GaalError::NoResults);
@@ -163,43 +146,42 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
     let shown = summaries.len();
     let total = count_sessions(&conn, &filter)? as usize;
 
-    let format = if args.human_readable {
-        OutputFormat::Human
-    } else {
-        OutputFormat::Json
-    };
-    output::print_output(&summaries, format).map_err(GaalError::from)?;
-
-    if shown < total {
-        if args.human_readable {
+    if args.human_readable {
+        output::print_output(&summaries, OutputFormat::Human).map_err(GaalError::from)?;
+        if shown < total {
             eprintln!(
                 "Showing {} of {} sessions \u{2014} use --limit N for more",
                 shown, total
             );
-        } else {
-            let footer = serde_json::json!({
-                "shown": shown,
-                "total": total,
-                "note": format!("Showing {} of {} sessions — use --limit N for more", shown, total)
-            });
-            eprintln!("{}", footer);
+        }
+    } else {
+        // JSON mode: output envelope with query_window
+        let query_window = build_query_window(&conn, &filter)?;
+        let envelope = LsEnvelope {
+            query_window,
+            shown,
+            total,
+            sessions: summaries,
+        };
+        output::json::print_json(&envelope).map_err(GaalError::from)?;
+
+        // Note goes to stderr, not stdout
+        if shown < total {
+            eprintln!("Showing {} of {} sessions — use --limit N for more", shown, total);
         }
     }
 
     Ok(())
 }
 
-fn requires_precise_aggregate(args: &LsArgs, statuses: &HashSet<LsStatus>) -> bool {
+fn requires_precise_aggregate(args: &LsArgs) -> bool {
     args.tag.len() > 1
-        || statuses.contains(&LsStatus::Idle)
-        || statuses.contains(&LsStatus::Unknown)
 }
 
 fn build_precise_aggregate(
     conn: &Connection,
     filter: &ListFilter,
     tags: &[String],
-    requested_statuses: &HashSet<LsStatus>,
 ) -> Result<AggregateJson, GaalError> {
     let mut all_filter = filter.clone();
     all_filter.limit = None;
@@ -207,27 +189,16 @@ fn build_precise_aggregate(
     let mut rows = queries::list_sessions(conn, &all_filter)?;
     rows = filter_rows_by_all_tags(conn, rows, tags)?;
 
-    let live_pids = load_live_pid_index();
-    let now = Utc::now();
-
     let mut by_engine: HashMap<String, i64> = HashMap::new();
-    let mut by_status: HashMap<String, i64> = HashMap::new();
     let mut total_input_tokens = 0_i64;
     let mut total_output_tokens = 0_i64;
     let mut sessions = 0_i64;
 
     for row in rows {
-        let pid = resolve_pid(&live_pids, &row);
-        let status = compute_session_status(&status_params_for_row(&row, pid, now));
-        if !matches_status_filter(&status, requested_statuses) {
-            continue;
-        }
-
         sessions += 1;
         total_input_tokens += row.total_input_tokens;
         total_output_tokens += row.total_output_tokens;
         *by_engine.entry(row.engine.clone()).or_insert(0) += 1;
-        *by_status.entry(status.to_string()).or_insert(0) += 1;
     }
 
     Ok(AggregateJson {
@@ -236,7 +207,6 @@ fn build_precise_aggregate(
         total_output_tokens,
         estimated_cost_usd: estimate_cost_usd(total_input_tokens, total_output_tokens),
         by_engine,
-        by_status,
     })
 }
 
@@ -256,24 +226,12 @@ impl LsSort {
             Self::Ended => "ended",
             Self::Tokens => "tokens",
             Self::Duration => "duration",
-            Self::Status => "status",
             Self::Cost => "cost",
         }
     }
 }
 
-#[derive(Default)]
-struct LivePidIndex {
-    by_id: HashMap<String, u32>,
-    by_path: HashMap<String, u32>,
-}
-
-fn resolve_requested_statuses(args: &LsArgs) -> HashSet<LsStatus> {
-    args.status.iter().copied().collect()
-}
-
-fn build_filter(args: &LsArgs, statuses: &HashSet<LsStatus>) -> Result<ListFilter, GaalError> {
-    let status = db_status_prefilter(statuses);
+fn build_filter(args: &LsArgs) -> Result<ListFilter, GaalError> {
     let since = args
         .since
         .as_deref()
@@ -289,41 +247,13 @@ fn build_filter(args: &LsArgs, statuses: &HashSet<LsStatus>) -> Result<ListFilte
 
     Ok(ListFilter {
         engine: args.engine.map(|engine| engine.as_str().to_string()),
-        status,
         since,
         before,
         cwd: args.cwd.clone(),
         tag,
         sort_by: args.sort.map(|sort| sort.as_str().to_string()),
         limit,
-        include_children: args.children,
     })
-}
-
-fn db_status_prefilter(statuses: &HashSet<LsStatus>) -> Option<Vec<String>> {
-    if statuses.is_empty() {
-        return None;
-    }
-
-    let mut out: HashSet<String> = HashSet::new();
-    for status in statuses {
-        match status {
-            LsStatus::Completed => {
-                out.insert("completed".to_string());
-            }
-            LsStatus::Failed => {
-                out.insert("failed".to_string());
-            }
-            LsStatus::Active | LsStatus::Idle | LsStatus::Unknown | LsStatus::Interrupted => {
-                out.insert("unknown".to_string());
-                out.insert("interrupted".to_string());
-            }
-        }
-    }
-
-    let mut vec: Vec<String> = out.into_iter().collect();
-    vec.sort_unstable();
-    Some(vec)
 }
 
 fn parse_time_bound(raw: &str, upper_bound: bool) -> Result<String, GaalError> {
@@ -438,83 +368,6 @@ fn filter_rows_by_all_tags(
     Ok(filtered)
 }
 
-fn load_live_pid_index() -> LivePidIndex {
-    let mut index = LivePidIndex::default();
-    let sessions = match find_active_sessions() {
-        Ok(sessions) => sessions,
-        Err(_) => return index,
-    };
-
-    for active in sessions {
-        if let Some(id) = active.id {
-            index.by_id.insert(id, active.pid);
-        }
-        if let Some(path) = active.jsonl_path {
-            index
-                .by_path
-                .insert(path.to_string_lossy().into_owned(), active.pid);
-        }
-    }
-
-    index
-}
-
-fn resolve_pid(index: &LivePidIndex, row: &SessionRow) -> Option<u32> {
-    index
-        .by_id
-        .get(&row.id)
-        .copied()
-        .or_else(|| index.by_path.get(&row.jsonl_path).copied())
-}
-
-fn status_params_for_row<'a>(
-    row: &'a SessionRow,
-    pid: Option<u32>,
-    now: DateTime<Utc>,
-) -> StatusParams<'a> {
-    let pid_alive = pid.map(is_pid_alive).unwrap_or(false);
-    if row.ended_at.is_some() || !pid_alive {
-        return StatusParams {
-            ended_at: row.ended_at.as_deref(),
-            exit_signal: row.exit_signal.as_deref(),
-            pid_alive,
-            silence_secs: 0,
-            cpu_pct: 0.0,
-        };
-    }
-
-    let silence_secs = if let Some(engine) = parse_engine(&row.engine) {
-        let runtime = probe_runtime(Path::new(&row.jsonl_path), engine, STATUS_TAIL_LINES);
-        runtime
-            .last_event_ts
-            .as_deref()
-            .and_then(parse_timestamp)
-            .or_else(|| row.last_event_at.as_deref().and_then(parse_timestamp))
-            .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
-            .unwrap_or(0)
-    } else {
-        row.last_event_at
-            .as_deref()
-            .and_then(parse_timestamp)
-            .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
-            .unwrap_or(0)
-    };
-
-    let cpu_pct = pid.and_then(probe_pid).map(|info| info.cpu_pct).unwrap_or(0.0);
-
-    StatusParams {
-        ended_at: row.ended_at.as_deref(),
-        exit_signal: row.exit_signal.as_deref(),
-        pid_alive,
-        silence_secs,
-        cpu_pct,
-    }
-}
-
-fn parse_engine(raw: &str) -> Option<Engine> {
-    Engine::from_str(&raw.to_ascii_lowercase()).ok()
-}
-
 fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
         return Some(dt.with_timezone(&Utc));
@@ -529,30 +382,11 @@ fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
     None
 }
 
-fn matches_status_filter(status: &SessionStatus, requested: &HashSet<LsStatus>) -> bool {
-    if requested.is_empty() {
-        return true;
-    }
-
-    let comparable = match status {
-        SessionStatus::Active => LsStatus::Active,
-        SessionStatus::Idle => LsStatus::Idle,
-        SessionStatus::Completed => LsStatus::Completed,
-        SessionStatus::Failed => LsStatus::Failed,
-        SessionStatus::Interrupted => LsStatus::Interrupted,
-        SessionStatus::Starting => LsStatus::Active,
-        SessionStatus::Unknown => LsStatus::Unknown,
-    };
-    requested.contains(&comparable)
-}
-
 fn build_summary(
     conn: &Connection,
     row: SessionRow,
-    status: SessionStatus,
     now: DateTime<Utc>,
 ) -> Result<SessionSummary, GaalError> {
-    let child_count = queries::count_children(conn, &row.id)?;
     let headline = queries::get_handoff(conn, &row.id)?.and_then(|handoff| handoff.headline);
 
     let duration_secs = compute_duration_secs(&row.started_at, row.ended_at.as_deref(), now);
@@ -561,17 +395,15 @@ fn build_summary(
         id: row.id,
         engine: row.engine,
         model: row.model.unwrap_or_else(|| "unknown".to_string()),
-        status: status.to_string(),
-        cwd: row.cwd.unwrap_or_default(),
+        cwd: truncate_cwd(&row.cwd.unwrap_or_default()),
         started_at: row.started_at,
         ended_at: row.ended_at,
         duration_secs,
-        parent_id: row.parent_id,
-        child_count: clamp_i32_to_u32(child_count),
         tokens: TokenUsage {
             input: clamp_i64_to_u64(row.total_input_tokens),
             output: clamp_i64_to_u64(row.total_output_tokens),
         },
+        peak_context: clamp_i64_to_u64(row.peak_context),
         tools_used: clamp_i64_to_u64(row.total_tools),
         headline,
     })
@@ -600,14 +432,6 @@ fn clamp_i64_to_u64(value: i64) -> u64 {
     }
 }
 
-fn clamp_i32_to_u32(value: i32) -> u32 {
-    if value <= 0 {
-        0
-    } else {
-        value as u32
-    }
-}
-
 fn u64_to_i64_saturating(value: u64) -> i64 {
     if value > i64::MAX as u64 {
         i64::MAX
@@ -624,6 +448,52 @@ fn estimate_cost_usd(total_input_tokens: i64, total_output_tokens: i64) -> f64 {
     (cost * 100.0).round() / 100.0
 }
 
+/// Truncate cwd to show only the last path component (no slashes)
+fn truncate_cwd(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// Build query window based on filter parameters
+fn build_query_window(conn: &Connection, filter: &ListFilter) -> Result<QueryWindow, GaalError> {
+    let now = Utc::now();
+
+    let from = if let Some(since) = &filter.since {
+        since.clone()
+    } else {
+        // Get earliest session date from DB, default to 10 days ago if none
+        match get_earliest_session_date(conn) {
+            Ok(Some(earliest)) => earliest,
+            _ => format_rfc3339(now - chrono::TimeDelta::try_days(10).unwrap_or_default()),
+        }
+    };
+
+    let to = filter.before.clone().unwrap_or_else(|| format_rfc3339(now));
+
+    Ok(QueryWindow { from, to })
+}
+
+/// Get the earliest session date from the database
+fn get_earliest_session_date(conn: &Connection) -> Result<Option<String>, GaalError> {
+    let mut stmt = conn.prepare("SELECT started_at FROM sessions ORDER BY started_at ASC LIMIT 1")?;
+    let mut rows = stmt.query_map([], |row| {
+        Ok(row.get::<_, String>("started_at")?)
+    })?;
+
+    if let Some(row) = rows.next() {
+        Ok(Some(row?))
+    } else {
+        Ok(None)
+    }
+}
+
 impl HumanReadable for Vec<SessionSummary> {
     fn print_human(&self) {
         if self.is_empty() {
@@ -632,18 +502,17 @@ impl HumanReadable for Vec<SessionSummary> {
         }
 
         let headers = [
-            "ID", "Engine", "Status", "Started", "Duration", "Tokens", "Tools", "Children",
-            "Model", "CWD",
+            "ID", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools", "Model",
+            "CWD",
         ];
         let col_kinds = [
             ColumnKind::Fixed,    // ID
             ColumnKind::Fixed,    // Engine
-            ColumnKind::Fixed,    // Status
             ColumnKind::Fixed,    // Started
             ColumnKind::Fixed,    // Duration
             ColumnKind::Fixed,    // Tokens
+            ColumnKind::Fixed,    // Peak
             ColumnKind::Fixed,    // Tools
-            ColumnKind::Fixed,    // Children
             ColumnKind::Variable, // Model
             ColumnKind::Variable, // CWD
         ];
@@ -656,15 +525,21 @@ impl HumanReadable for Vec<SessionSummary> {
                     format_tokens(u64_to_i64_saturating(session.tokens.input)),
                     format_tokens(u64_to_i64_saturating(session.tokens.output))
                 );
+                let peak = if session.peak_context > 0 {
+                    format!("{}",
+                        format_tokens(u64_to_i64_saturating(session.peak_context))
+                    )
+                } else {
+                    "-".to_string()
+                };
                 vec![
                     id,
                     session.engine.clone(),
-                    session.status.clone(),
                     format_timestamp(&session.started_at),
                     format_duration(u64_to_i64_saturating(session.duration_secs)),
                     tokens,
+                    peak,
                     session.tools_used.to_string(),
-                    session.child_count.to_string(),
                     session.model.clone(),
                     format_cwd(&session.cwd, 40),
                 ]

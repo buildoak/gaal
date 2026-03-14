@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{Map as JsonMap, Number, Value};
 
 use crate::error::GaalError;
-use crate::model::{compute_session_status, Fact, HandoffRecord, SessionStatus, StatusParams};
+use crate::model::{Fact, HandoffRecord};
 
 /// Database-level session row, flattened to only SQLite-backed fields.
 #[derive(Debug, Clone)]
@@ -18,13 +18,13 @@ pub struct SessionRow {
     pub ended_at: Option<String>,
     pub exit_signal: Option<String>,
     pub last_event_at: Option<String>,
-    pub parent_id: Option<String>,
     pub session_type: String,
     pub jsonl_path: String,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
     pub total_tools: i64,
     pub total_turns: i64,
+    pub peak_context: i64,
     pub last_indexed_offset: i64,
 }
 
@@ -32,14 +32,12 @@ pub struct SessionRow {
 #[derive(Debug, Clone, Default)]
 pub struct ListFilter {
     pub engine: Option<String>,
-    pub status: Option<Vec<String>>,
     pub since: Option<String>,
     pub before: Option<String>,
     pub cwd: Option<String>,
     pub tag: Option<String>,
     pub sort_by: Option<String>,
     pub limit: Option<i64>,
-    pub include_children: bool,
 }
 
 /// Supported fact types for `who` queries and fact filtering.
@@ -108,7 +106,6 @@ pub struct IndexStatus {
     pub db_size_bytes: u64,
     pub sessions_total: i64,
     pub sessions_by_engine: HashMap<String, i64>,
-    pub sessions_by_status: HashMap<String, i64>,
     pub facts_total: i64,
     pub handoffs_total: i64,
     pub last_indexed_at: Option<String>,
@@ -124,7 +121,6 @@ pub struct AggregateResult {
     pub total_output_tokens: i64,
     pub estimated_cost_usd: f64,
     pub by_engine: HashMap<String, i64>,
-    pub by_status: HashMap<String, i64>,
 }
 
 /// Insert or update a session row by primary key.
@@ -133,13 +129,13 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
         r#"
         INSERT INTO sessions (
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
-            total_turns, last_indexed_offset
+            session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
+            total_turns, peak_context, last_indexed_offset
         )
         VALUES (
             :id, :engine, :model, :cwd, :started_at, :ended_at, :exit_signal, :last_event_at,
-            :parent_id, :session_type, :jsonl_path, :total_input_tokens, :total_output_tokens, :total_tools,
-            :total_turns, :last_indexed_offset
+            :session_type, :jsonl_path, :total_input_tokens, :total_output_tokens, :total_tools,
+            :total_turns, :peak_context, :last_indexed_offset
         )
         ON CONFLICT(id) DO UPDATE SET
             engine = excluded.engine,
@@ -149,13 +145,13 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             ended_at = excluded.ended_at,
             exit_signal = excluded.exit_signal,
             last_event_at = excluded.last_event_at,
-            parent_id = excluded.parent_id,
             session_type = excluded.session_type,
             jsonl_path = excluded.jsonl_path,
             total_input_tokens = excluded.total_input_tokens,
             total_output_tokens = excluded.total_output_tokens,
             total_tools = excluded.total_tools,
             total_turns = excluded.total_turns,
+            peak_context = excluded.peak_context,
             last_indexed_offset = excluded.last_indexed_offset
         "#,
         named_params! {
@@ -167,13 +163,13 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             ":ended_at": &session.ended_at,
             ":exit_signal": &session.exit_signal,
             ":last_event_at": &session.last_event_at,
-            ":parent_id": &session.parent_id,
             ":session_type": &session.session_type,
             ":jsonl_path": &session.jsonl_path,
             ":total_input_tokens": session.total_input_tokens,
             ":total_output_tokens": session.total_output_tokens,
             ":total_tools": session.total_tools,
             ":total_turns": session.total_turns,
+            ":peak_context": session.peak_context,
             ":last_indexed_offset": session.last_indexed_offset,
         },
     )
@@ -337,8 +333,8 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<SessionRow>, Ga
         r#"
         SELECT
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
-            total_turns, last_indexed_offset
+            session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
+            total_turns, peak_context, last_indexed_offset
         FROM sessions
         WHERE id = :id
         "#,
@@ -349,15 +345,10 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<SessionRow>, Ga
     .map_err(db_err)
 }
 
-/// List sessions with DB-level filtering and status filtering applied post-query.
+/// List sessions with DB-level filtering.
 pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<SessionRow>, GaalError> {
     let cwd_like = filter.cwd.as_ref().map(|value| format!("%{value}%"));
     let limit = filter.limit.unwrap_or(50).max(1);
-    let include_children = if filter.include_children {
-        1_i64
-    } else {
-        0_i64
-    };
 
     let sort_key = filter
         .sort_by
@@ -369,11 +360,6 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
         "tokens" => "(s.total_input_tokens + s.total_output_tokens) DESC",
         "cost" => "(s.total_input_tokens + s.total_output_tokens) DESC",
         "duration" => "(strftime('%s', COALESCE(s.ended_at, CURRENT_TIMESTAMP)) - strftime('%s', s.started_at)) DESC",
-        "status" => "CASE
-                        WHEN s.ended_at IS NULL THEN 0
-                        WHEN s.exit_signal IN ('error', 'max_tokens', 'killed', 'failed') THEN 2
-                        ELSE 1
-                     END ASC, s.started_at DESC",
         _ => "s.started_at DESC",
     };
 
@@ -381,14 +367,13 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
         r#"
         SELECT
             s.id, s.engine, s.model, s.cwd, s.started_at, s.ended_at, s.exit_signal, s.last_event_at,
-            s.parent_id, s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens, s.total_tools,
-            s.total_turns, s.last_indexed_offset
+            s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens, s.total_tools,
+            s.total_turns, s.peak_context, s.last_indexed_offset
         FROM sessions s
         WHERE (:engine IS NULL OR s.engine = :engine)
           AND (:since IS NULL OR s.started_at >= :since)
           AND (:before IS NULL OR s.started_at <= :before)
           AND (:cwd_like IS NULL OR s.cwd LIKE :cwd_like)
-          AND (:include_children = 1 OR s.parent_id IS NULL)
           AND (
               :tag IS NULL OR EXISTS (
                   SELECT 1 FROM session_tags t
@@ -407,7 +392,6 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
             ":since": filter.since.as_deref(),
             ":before": filter.before.as_deref(),
             ":cwd_like": cwd_like.as_deref(),
-            ":include_children": include_children,
             ":tag": filter.tag.as_deref(),
             ":limit": limit,
         })
@@ -418,27 +402,12 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
         out.push(row_to_session(row).map_err(db_err)?);
     }
 
-    if let Some(status_filters) = &filter.status {
-        if !status_filters.is_empty() {
-            let allowed: HashSet<String> = status_filters
-                .iter()
-                .map(|status| status.to_ascii_lowercase())
-                .collect();
-            out.retain(|row| allowed.contains(session_status_label(row)));
-        }
-    }
-
     Ok(out)
 }
 
 /// Count sessions matching the filter (ignoring LIMIT) for "Showing N of M" messages.
 pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, GaalError> {
     let cwd_like = filter.cwd.as_ref().map(|value| format!("%{value}%"));
-    let include_children = if filter.include_children {
-        1_i64
-    } else {
-        0_i64
-    };
 
     let sql = r#"
         SELECT COUNT(*)
@@ -447,7 +416,6 @@ pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, Gaa
           AND (:since IS NULL OR s.started_at >= :since)
           AND (:before IS NULL OR s.started_at <= :before)
           AND (:cwd_like IS NULL OR s.cwd LIKE :cwd_like)
-          AND (:include_children = 1 OR s.parent_id IS NULL)
           AND (
               :tag IS NULL OR EXISTS (
                   SELECT 1 FROM session_tags t
@@ -464,7 +432,6 @@ pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, Gaa
                 ":since": filter.since.as_deref(),
                 ":before": filter.before.as_deref(),
                 ":cwd_like": cwd_like.as_deref(),
-                ":include_children": include_children,
                 ":tag": filter.tag.as_deref(),
             },
             |row| row.get(0),
@@ -553,33 +520,6 @@ pub fn get_facts(
     Ok(out)
 }
 
-/// List child sessions by parent id.
-pub fn get_children(conn: &Connection, parent_id: &str) -> Result<Vec<SessionRow>, GaalError> {
-    let mut stmt = conn
-        .prepare(
-            r#"
-            SELECT
-                id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-                parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
-                total_turns, last_indexed_offset
-            FROM sessions
-            WHERE parent_id = :parent_id
-            ORDER BY started_at ASC
-            "#,
-        )
-        .map_err(db_err)?;
-
-    let mut rows = stmt
-        .query(named_params! { ":parent_id": parent_id })
-        .map_err(db_err)?;
-
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().map_err(db_err)? {
-        out.push(row_to_session(row).map_err(db_err)?);
-    }
-    Ok(out)
-}
-
 /// Get the handoff record for a session.
 pub fn get_handoff(
     conn: &Connection,
@@ -663,16 +603,6 @@ pub fn get_tags(conn: &Connection, session_id: &str) -> Result<Vec<String>, Gaal
         out.push(row.get::<_, String>(0).map_err(db_err)?);
     }
     Ok(out)
-}
-
-/// Count child sessions for a given session id.
-pub fn count_children(conn: &Connection, session_id: &str) -> Result<i32, GaalError> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM sessions WHERE parent_id = :session_id",
-        named_params! { ":session_id": session_id },
-        |row| row.get(0),
-    )
-    .map_err(db_err)
 }
 
 /// Run an inverted "who did what" query over facts joined with sessions/handoffs.
@@ -825,23 +755,6 @@ pub fn get_index_status(conn: &Connection) -> Result<IndexStatus, GaalError> {
         }
     }
 
-    let mut sessions_by_status: HashMap<String, i64> = HashMap::new();
-    {
-        let mut stmt = conn
-            .prepare("SELECT ended_at, exit_signal FROM sessions")
-            .map_err(db_err)?;
-        let mut rows = stmt.query([]).map_err(db_err)?;
-        while let Some(row) = rows.next().map_err(db_err)? {
-            let ended_at: Option<String> = row.get(0).map_err(db_err)?;
-            let exit_signal: Option<String> = row.get(1).map_err(db_err)?;
-            let status = status_from_fields(
-                ended_at.as_deref(),
-                exit_signal.as_deref(),
-            );
-            *sessions_by_status.entry(status.to_string()).or_insert(0) += 1;
-        }
-    }
-
     let last_indexed_at: Option<String> = conn
         .query_row("SELECT MAX(last_event_at) FROM sessions", [], |row| {
             row.get(0)
@@ -858,7 +771,6 @@ pub fn get_index_status(conn: &Connection) -> Result<IndexStatus, GaalError> {
         db_size_bytes,
         sessions_total,
         sessions_by_engine,
-        sessions_by_status,
         facts_total,
         handoffs_total,
         last_indexed_at,
@@ -874,7 +786,6 @@ pub fn get_aggregate(conn: &Connection, filter: &ListFilter) -> Result<Aggregate
     let sessions = list_sessions(conn, &aggregate_filter)?;
 
     let mut by_engine: HashMap<String, i64> = HashMap::new();
-    let mut by_status: HashMap<String, i64> = HashMap::new();
     let mut total_input_tokens = 0_i64;
     let mut total_output_tokens = 0_i64;
 
@@ -882,9 +793,6 @@ pub fn get_aggregate(conn: &Connection, filter: &ListFilter) -> Result<Aggregate
         total_input_tokens += session.total_input_tokens;
         total_output_tokens += session.total_output_tokens;
         *by_engine.entry(session.engine.clone()).or_insert(0) += 1;
-        *by_status
-            .entry(session_status(session).to_string())
-            .or_insert(0) += 1;
     }
 
     Ok(AggregateResult {
@@ -893,7 +801,6 @@ pub fn get_aggregate(conn: &Connection, filter: &ListFilter) -> Result<Aggregate
         total_output_tokens,
         estimated_cost_usd: estimate_cost_usd(total_input_tokens, total_output_tokens),
         by_engine,
-        by_status,
     })
 }
 
@@ -907,7 +814,6 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         ended_at: row.get("ended_at")?,
         exit_signal: row.get("exit_signal")?,
         last_event_at: row.get("last_event_at")?,
-        parent_id: row.get("parent_id")?,
         session_type: row
             .get::<_, Option<String>>("session_type")?
             .unwrap_or_else(|| "standalone".to_string()),
@@ -916,34 +822,9 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         total_output_tokens: row.get("total_output_tokens")?,
         total_tools: row.get("total_tools")?,
         total_turns: row.get("total_turns")?,
+        peak_context: row.get::<_, Option<i64>>("peak_context")?.unwrap_or(0),
         last_indexed_offset: row.get("last_indexed_offset")?,
     })
-}
-
-fn session_status(row: &SessionRow) -> SessionStatus {
-    status_from_fields(row.ended_at.as_deref(), row.exit_signal.as_deref())
-}
-
-fn status_from_fields(ended_at: Option<&str>, exit_signal: Option<&str>) -> SessionStatus {
-    compute_session_status(&StatusParams {
-        ended_at,
-        exit_signal,
-        pid_alive: false,
-        silence_secs: 0,
-        cpu_pct: 0.0,
-    })
-}
-
-fn session_status_label(row: &SessionRow) -> &'static str {
-    match session_status(row) {
-        SessionStatus::Active => "active",
-        SessionStatus::Idle => "idle",
-        SessionStatus::Completed => "completed",
-        SessionStatus::Failed => "failed",
-        SessionStatus::Interrupted => "interrupted",
-        SessionStatus::Starting => "starting",
-        SessionStatus::Unknown => "unknown",
-    }
 }
 
 fn estimate_cost_usd(total_input_tokens: i64, total_output_tokens: i64) -> f64 {

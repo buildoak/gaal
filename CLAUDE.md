@@ -4,22 +4,26 @@ Session observability CLI for Claude Code and Codex. Rust, single binary, macOS-
 
 ## v0.1.0 Scope (public release)
 
-Five commands. Nothing else until these are solid.
+Nine commands. Core session observability without monitoring features.
 
 | Command | What it does |
 |---------|-------------|
-| `gaal active` | What's running right now. PIDs, engine, duration, CWD, last action. No heuristics. |
-| `gaal show <id>` | Inspect a session. Headline, duration, engine, files touched, commands run. |
-| `gaal search <query>` | Find sessions by content. BM25 ranked via Tantivy. |
+| `gaal inspect <id>` | Session detail view. Files, commands, timeline, git ops. |
+| `gaal ls` | List sessions with envelope format and query_window. |
+| `gaal who <verb> <target>` | Find sessions by file/command activity. Query_window support. |
 | `gaal recall <topic>` | Ranked retrieval for session continuity. Handoff files + JSONL fallback. |
+| `gaal search <query>` | Find sessions by content. BM25 ranked via Tantivy. |
 | `gaal create-handoff <id>` | Generate handoff document via LLM extraction. |
+| `gaal salt` | Generate unique token for self-identification. |
+| `gaal find-salt <token>` | Find JSONL file by salt token. |
+| `gaal index` | Index JSONL files and tag management. |
+| `gaal tag` | Tag management with 'tag ls' subcommand. |
 
-### Session Detection: Dual Strategy
+### Session Detection: Salt-Based Strategy
 
-1. **From outside** (`gaal active`): `proc_pidpath` — resolves Claude/Codex processes via macOS APIs. Fast, zero false positives.
-2. **From inside** (self-identification): `gaal salt` + `gaal find-salt SALT` — content-addressed detection. A unique salt token is printed into the session JSONL (via tool-result), then grepped to find the file. No PIDs, no process trees. Works through subagent indirection, broken process ancestry, and concurrent sessions.
+**Self-identification**: `gaal salt` + `gaal find-salt SALT` — content-addressed detection. A unique salt token is printed into the session JSONL (via tool-result), then grepped to find the file. No PIDs, no process trees. Works through subagent indirection, broken process ancestry, and concurrent sessions.
 
-Both strategies ship in v0.1.0. They complement — proc_pidpath for fleet view, salt for self-identification.
+This strategy enables reliable session discovery from within sessions without external process monitoring.
 
 ### Self-Handoff Protocol (from inside a session)
 
@@ -43,8 +47,13 @@ These are **deleted, not deferred**. Do not re-implement.
 
 | Feature | Why killed |
 |---------|-----------|
+| `gaal active` command | Process monitoring too fragile. Removed in v0.1.0. |
+| `gaal show` command | Merged into `inspect`. Redundant commands removed. |
+| SessionStatus enum | Status taxonomy was noise. Removed in v0.1.0. |
+| --live, --watch, --active flags | Real-time monitoring features removed. |
+| Velocity, context %, recent_errors fields | Heuristic calculations were unreliable. |
+| Process blocks in output | No process monitoring in v0.1.0. |
 | Stuck detection | Heuristic garbage. Wrong more than right. 50+ edge cases for near-zero value. |
-| Context % calculation | Always wrong. Undercounts Claude, overcounts Codex. |
 | Parent-child linking | 1 out of 2,433 sessions ever linked. Dead feature. |
 | Loop detection | Premature. Insufficient signal in JSONL to detect reliably. |
 
@@ -87,22 +96,24 @@ read Rust source → reason about what "should" work → write fix → cargo bui
 
 - **Parser:** Dual Claude/Codex JSONL parsers. They have fundamentally different event schemas. Every feature touching parsed data must handle both.
 - **DB:** SQLite for session metadata + Tantivy for full-text search. Use `savepoint_with_name()` for nested transactions — never `unchecked_transaction()`.
-- **Detection:** `proc_pidpath()` via libproc FFI. Cross-reference with JSONL file discovery for session-to-PID mapping.
+- **Detection:** Salt-based session discovery via content addressing.
 - **Output:** JSON-first for agent consumption. Human-readable formatting via `--human` / `-H` flags.
 
 ## Key Paths
 
 | Path | What |
 |------|------|
-| `src/discovery/active.rs` | proc_pidpath detection, dedup, ghost filtering |
-| `src/commands/active.rs` | Active sessions command |
 | `src/commands/salt.rs` | Salt token generation for self-identification |
 | `src/commands/find.rs` | JSONL file discovery by salt token (`find-salt` command) |
+| `src/commands/inspect.rs` | Session detail view (merged `show` functionality) |
+| `src/commands/ls.rs` | Session listing with envelope format |
+| `src/commands/who.rs` | File/command activity search |
 | `src/commands/handoff.rs` | LLM-powered handoff generation (`create-handoff`, supports `--jsonl` direct path) |
 | `src/commands/index.rs` | Indexing pipeline |
+| `src/commands/tag.rs` | Tag management with `tag ls` subcommand |
 | `src/db/schema.rs` | SQLite schema + autocommit guard |
 | `src/parser/` | Claude + Codex JSONL parsers |
-| `ISSUES.md` | Full issue history (I1-I33+) |
+| `ISSUES.md` | Full issue history (I1-I40+) |
 | `TESTS.md` | Stress test harness |
 
 ## Build
