@@ -450,8 +450,22 @@ fn process_session_handoff(
     provider: &str,
     format: &str,
 ) -> Result<ProcessedSessionHandoff, GaalError> {
-    let facts = get_facts(conn, &session.id, None)?;
-    let context = build_context(session, &facts, provider, format);
+    // Try session markdown transcript first (full narrative context),
+    // fall back to DB facts (lossy structured context).
+    let context = match resolve_session_transcript(session, config) {
+        Some(transcript) => {
+            eprintln!(
+                "Using session transcript ({} chars) for context",
+                transcript.len()
+            );
+            build_context_from_transcript(session, &transcript, provider, format)
+        }
+        None => {
+            eprintln!("No session transcript found, falling back to DB facts");
+            let facts = get_facts(conn, &session.id, None)?;
+            build_context(session, &facts, provider, format)
+        }
+    };
 
     let max_attempts = 2;
     let mut response = String::new();
@@ -991,6 +1005,110 @@ fn load_prompt(path: &Path) -> Result<String, GaalError> {
         }
         Err(err) => Err(GaalError::Io(err)),
     }
+}
+
+/// Attempt to locate and read a session markdown transcript.
+///
+/// Checks three sources in priority order:
+/// 1. External output directory (e.g. pratchett-os/data/claude-code-sessions/) via config
+/// 2. Gaal's own rendered markdown (~/.gaal/data/{engine}/sessions/YYYY/MM/DD/{id}.md)
+/// 3. On-the-fly render from the session's JSONL file
+///
+/// Returns `None` if all sources fail.
+fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Option<String> {
+    let short_id: String = session.id.chars().take(8).collect();
+    let (year, month, day) = date_parts(&session.started_at);
+
+    // 1. External output directory (config.markdown_output_dir)
+    if let Some(ref output_dir) = config.markdown_output_dir {
+        let external_path = output_dir
+            .join(&year)
+            .join(&month)
+            .join(&day)
+            .join(format!("{short_id}.md"));
+        if let Ok(content) = fs::read_to_string(&external_path) {
+            if !content.trim().is_empty() {
+                eprintln!("  -> transcript source: {}", external_path.display());
+                return Some(content);
+            }
+        }
+    }
+
+    // 2. Gaal's own session markdown directory
+    let gaal_md_path = gaal_home()
+        .join("data")
+        .join(&session.engine)
+        .join("sessions")
+        .join(&year)
+        .join(&month)
+        .join(&day)
+        .join(format!("{short_id}.md"));
+    if let Ok(content) = fs::read_to_string(&gaal_md_path) {
+        if !content.trim().is_empty() {
+            eprintln!("  -> transcript source: {}", gaal_md_path.display());
+            return Some(content);
+        }
+    }
+
+    // 3. On-the-fly render from JSONL (if path exists and is readable)
+    let jsonl_path = Path::new(&session.jsonl_path);
+    if jsonl_path.exists() {
+        match crate::render::session_md::render_session_markdown(jsonl_path) {
+            Ok(content) if !content.trim().is_empty() => {
+                eprintln!("  -> transcript source: rendered from {}", jsonl_path.display());
+                return Some(content);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("  -> on-the-fly render failed: {e}");
+            }
+        }
+    }
+
+    None
+}
+
+/// Build LLM context from a full session markdown transcript.
+///
+/// Wraps the transcript with the same session metadata header used by
+/// `build_context()` so the extraction prompt sees engine/model ground truth.
+fn build_context_from_transcript(
+    session: &SessionRow,
+    transcript: &str,
+    provider: &str,
+    format: &str,
+) -> String {
+    let engine = &session.engine;
+    let model = session.model.as_deref().unwrap_or("unknown");
+
+    format!(
+        "Requested provider: {provider}\nRequested format: {format}\n\n\
+GROUND TRUTH (do not override in your output):\n\
+- engine: {engine}\n\
+- model: {model}\n\
+These values are determined from the session source. Do not infer or hallucinate different engine/model values.\n\n\
+Session Summary:\n\
+- id: {id}\n\
+- engine: {engine}\n\
+- model: {model}\n\
+- cwd: {cwd}\n\
+- started_at: {started_at}\n\
+- ended_at: {ended_at}\n\
+- total_input_tokens: {input_tokens}\n\
+- total_output_tokens: {output_tokens}\n\
+- total_tools: {tools}\n\
+- total_turns: {turns}\n\n\
+--- FULL SESSION TRANSCRIPT ---\n\n\
+{transcript}\n",
+        id = session.id,
+        cwd = session.cwd.as_deref().unwrap_or("."),
+        started_at = session.started_at,
+        ended_at = session.ended_at.as_deref().unwrap_or("in_progress"),
+        input_tokens = session.total_input_tokens,
+        output_tokens = session.total_output_tokens,
+        tools = session.total_tools,
+        turns = session.total_turns
+    )
 }
 
 fn build_context(session: &SessionRow, facts: &[Fact], provider: &str, format: &str) -> String {
