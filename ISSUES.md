@@ -985,3 +985,20 @@ Verbs:
 **Root cause:** `who ran` used `contains_ci()` to match the search term against the entire `detail` field (full bash command string). Any substring match anywhere in arguments, file paths, or piped commands would trigger a hit.
 
 **Fix:** Introduced `MatchMode::CommandName` which extracts program names from shell command strings by splitting on `&&`, `||`, `|`, `;` and taking the first token of each segment (skipping variable assignments and env prefixes like `sudo`, `env`, etc.). The search term now matches only against extracted command names, not the full argument string.
+
+---
+
+## I55: Fact extraction pipeline produces lossy context for create-handoff
+
+**Severity:** Medium (workaround: session.md transcripts now used directly)
+**File:** `src/commands/handoff.rs` (`build_context()`)
+
+**Problem:** `build_context()` constructs LLM context from DB facts: commands (cap 40), errors (cap 20), file ops (cap 40), decisions (cap 20), each truncated to 400 chars. This produces ~3.5k tokens from sessions that may span 190+ turns.
+
+Conversational decisions (e.g., "delete gaal active", "merge show into inspect") are NOT indexed as facts because they happen in assistant replies, not tool calls. The fact extractor only captures tool invocations — so strategic reversals mid-session are invisible to `build_context()`.
+
+Result: the handoff LLM sees early-session state but misses late-session reversals, producing factually wrong handoffs. Discovered when session `75b8d982` (70hr, 190 turns) handoff described deleted features as still existing.
+
+**Workaround applied:** `create-handoff` now reads full session.md transcripts instead of fact-based context.
+
+**Action:** Audit fact extraction code. Determine whether fact-based context should be improved (new fact types for decisions) or removed entirely in favor of session.md. May be able to simplify handoff.rs significantly.
