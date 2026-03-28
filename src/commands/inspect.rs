@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use clap::{Args, ValueEnum};
@@ -7,14 +8,13 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::db::open_db_readonly;
-use crate::db::queries::{
-    get_facts, get_handoff, get_session, get_tags, SessionRow,
-};
+use crate::db::queries::{get_facts, get_handoff, get_session, get_tags, SessionRow};
 use crate::error::GaalError;
 use crate::model::{
     CommandEntry, ErrorEntry, Fact, FactType, FileOps, GitOp, SessionRecord, TokenUsage,
 };
 use crate::output::human::{format_cwd, format_tokens};
+use crate::parser::event::EventKind;
 use crate::output::json::print_json;
 
 /// File-operation output mode for `gaal inspect --files`.
@@ -66,10 +66,6 @@ pub struct InspectArgs {
     #[arg(long)]
     pub source: bool,
 
-    /// Render as session markdown (full conversation flow).
-    #[arg(long)]
-    pub markdown: bool,
-
     /// Batch mode session IDs (comma-separated prefixes).
     #[arg(long, conflicts_with = "tag", conflicts_with = "id")]
     pub ids: Option<String>,
@@ -87,6 +83,8 @@ pub struct InspectArgs {
 struct TokenBreakdown {
     input_total: u64,
     output_total: u64,
+    cache_read_input_tokens: i64,
+    cache_creation_input_tokens: i64,
     turns: u32,
     avg_input_per_turn: u64,
     avg_output_per_turn: u64,
@@ -120,25 +118,6 @@ pub fn run(args: InspectArgs) -> Result<(), GaalError> {
 
     let conn = open_db_readonly()?;
     let session_rows = resolve_sessions(&conn, &args)?;
-
-    // Handle --markdown: render JSONL to markdown directly.
-    if args.markdown {
-        let row = session_rows
-            .into_iter()
-            .next()
-            .ok_or(GaalError::NoResults)?;
-        let jsonl_path = std::path::Path::new(&row.jsonl_path);
-        if !jsonl_path.exists() {
-            return Err(GaalError::NotFound(format!(
-                "JSONL source file not found: {}",
-                row.jsonl_path
-            )));
-        }
-        let markdown = crate::render::session_md::render_session_markdown(jsonl_path)
-            .map_err(|e| GaalError::Internal(format!("failed to render session markdown: {e}")))?;
-        print!("{markdown}");
-        return Ok(());
-    }
 
     let mut out = Vec::with_capacity(session_rows.len());
     for row in session_rows {
@@ -195,7 +174,7 @@ fn resolve_sessions(conn: &Connection, args: &InspectArgs) -> Result<Vec<Session
     Ok(vec![resolve_one(conn, &requested)?])
 }
 
-fn resolve_one(conn: &Connection, raw_id: &str) -> Result<SessionRow, GaalError> {
+pub(crate) fn resolve_one(conn: &Connection, raw_id: &str) -> Result<SessionRow, GaalError> {
     if raw_id == "latest" {
         let latest_id = find_latest_session_id(conn)?;
         return load_session_by_exact_id(conn, &latest_id);
@@ -209,7 +188,7 @@ fn resolve_one(conn: &Connection, raw_id: &str) -> Result<SessionRow, GaalError>
     }
 }
 
-fn find_latest_session_id(conn: &Connection) -> Result<String, GaalError> {
+pub(crate) fn find_latest_session_id(conn: &Connection) -> Result<String, GaalError> {
     conn.query_row(
         "SELECT id FROM sessions ORDER BY started_at DESC LIMIT 1",
         [],
@@ -221,7 +200,10 @@ fn find_latest_session_id(conn: &Connection) -> Result<String, GaalError> {
     })
 }
 
-fn find_session_ids_by_prefix(conn: &Connection, prefix: &str) -> Result<Vec<String>, GaalError> {
+pub(crate) fn find_session_ids_by_prefix(
+    conn: &Connection,
+    prefix: &str,
+) -> Result<Vec<String>, GaalError> {
     let like = format!("{prefix}%");
     let mut stmt = conn
         .prepare("SELECT id FROM sessions WHERE id LIKE :prefix ORDER BY started_at DESC")
@@ -261,7 +243,10 @@ fn find_session_ids_by_tag(conn: &Connection, tag: &str) -> Result<Vec<String>, 
     Ok(out)
 }
 
-fn load_session_by_exact_id(conn: &Connection, id: &str) -> Result<SessionRow, GaalError> {
+pub(crate) fn load_session_by_exact_id(
+    conn: &Connection,
+    id: &str,
+) -> Result<SessionRow, GaalError> {
     get_session(conn, id)?.ok_or_else(|| GaalError::NotFound(id.to_string()))
 }
 
@@ -375,9 +360,12 @@ fn build_inspect_data(
         None
     };
     let token_breakdown = if args.tokens {
+        let (cache_read, cache_creation) = extract_cache_tokens(row);
         Some(TokenBreakdown {
             input_total: record.tokens.input,
             output_total: record.tokens.output,
+            cache_read_input_tokens: cache_read,
+            cache_creation_input_tokens: cache_creation,
             turns: record.turns,
             avg_input_per_turn: avg_tokens(record.tokens.input, record.turns),
             avg_output_per_turn: avg_tokens(record.tokens.output, record.turns),
@@ -699,6 +687,55 @@ fn avg_tokens(total: u64, turns: u32) -> u64 {
     total / u64::from(turns)
 }
 
+/// Extract cache token breakdown by re-parsing the JSONL.
+/// Returns (cache_read_input_tokens, cache_creation_input_tokens).
+fn extract_cache_tokens(row: &SessionRow) -> (i64, i64) {
+    let path = Path::new(&row.jsonl_path);
+    if !path.exists() {
+        return (0, 0);
+    }
+
+    let engine = match row.engine.as_str() {
+        "claude" => crate::parser::Engine::Claude,
+        "codex" => crate::parser::Engine::Codex,
+        _ => return (0, 0),
+    };
+
+    let events = match engine {
+        crate::parser::Engine::Claude => crate::parser::claude::parse_events(path),
+        crate::parser::Engine::Codex => crate::parser::codex::parse_events(path),
+    };
+
+    let events = match events {
+        Ok(events) => events,
+        Err(_) => return (0, 0),
+    };
+
+    let mut seen_keys: HashSet<String> = HashSet::new();
+    let mut cache_read = 0_i64;
+    let mut cache_creation = 0_i64;
+
+    for event in &events {
+        if let EventKind::Usage {
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            dedup_key,
+            ..
+        } = &event.kind
+        {
+            if let Some(key) = dedup_key {
+                if !seen_keys.insert(key.clone()) {
+                    continue;
+                }
+            }
+            cache_read += cache_read_input_tokens;
+            cache_creation += cache_creation_input_tokens;
+        }
+    }
+
+    (cache_read, cache_creation)
+}
+
 fn print_human(records: &[InspectData], args: &InspectArgs) {
     let any_fact_filter = args.files.is_some() || args.commands || args.errors || args.git;
     // Summary mode by default — full detail only with --full
@@ -739,16 +776,15 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
                 "Files: read={} written={} edited={}",
                 files_read, files_written, files_edited
             );
-            println!(
-                "Ops: commands={} errors={} git={}",
-                cmds, errs, git_ops
-            );
+            println!("Ops: commands={} errors={} git={}", cmds, errs, git_ops);
             if record.peak_context > 0 {
                 println!(
                     "Tokens: in={} out={}  Peak: {}  Turns: {}  Tools: {}",
-                    record.tokens.input, record.tokens.output,
+                    record.tokens.input,
+                    record.tokens.output,
                     format_peak_context(record.peak_context),
-                    record.turns, record.tools_used
+                    record.turns,
+                    record.tools_used
                 );
             } else {
                 println!(
@@ -828,6 +864,13 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
                     "Token breakdown: turns={} avg_in/turn={} avg_out/turn={}",
                     tokens.turns, tokens.avg_input_per_turn, tokens.avg_output_per_turn
                 );
+                if tokens.cache_read_input_tokens > 0 || tokens.cache_creation_input_tokens > 0 {
+                    println!(
+                        "  Cache: read={} creation={}",
+                        format_tokens(tokens.cache_read_input_tokens),
+                        format_tokens(tokens.cache_creation_input_tokens),
+                    );
+                }
             }
         }
 
@@ -887,7 +930,6 @@ fn print_inspect_help() {
     eprintln!("  --tokens        Include token usage breakdown");
     eprintln!("  --trace         Include full fact timeline");
     eprintln!("  --source        Include source JSONL path");
-    eprintln!("  --markdown      Render as session markdown (full conversation flow)");
     eprintln!("  -F, --full      Include all arrays and fields (full output)");
     eprintln!("  -H, --human     Render human-readable output");
     eprintln!("  --ids <list>    Batch mode: comma-separated session ID prefixes");
@@ -898,4 +940,3 @@ fn print_inspect_help() {
     eprintln!("  gaal inspect latest --files --errors");
     eprintln!("  gaal inspect abc123 -F --tokens");
 }
-
