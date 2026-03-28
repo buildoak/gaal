@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -18,16 +19,22 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
     let file = File::open(path)
         .with_context(|| format!("failed to open Codex session file: {}", path.display()))?;
     let mut reader = BufReader::new(file);
-    if offset > 0 {
-        reader
-            .seek(SeekFrom::Start(offset))
-            .with_context(|| format!("failed to seek Codex session file: {}", path.display()))?;
-    }
 
     let mut events: Vec<SessionEvent> = Vec::new();
+    let mut tool_meta_by_call_id: HashMap<String, (String, Value)> = HashMap::new();
+    let mut line_offset = 0_u64;
 
-    for line_result in reader.lines() {
-        let line = line_result.context("failed to read Codex JSONL line")?;
+    loop {
+        let mut line = String::new();
+        let bytes_read = reader
+            .read_line(&mut line)
+            .context("failed to read Codex JSONL line")?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        let line_start = line_offset;
+        line_offset = line_offset.saturating_add(bytes_read as u64);
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -43,9 +50,13 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let should_emit = line_start >= offset;
 
         match record_type {
             "session_meta" => {
+                if !should_emit {
+                    continue;
+                }
                 let session_id = record
                     .pointer("/payload/id")
                     .and_then(Value::as_str)
@@ -69,6 +80,9 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                 });
             }
             "turn_context" => {
+                if !should_emit {
+                    continue;
+                }
                 let session_id = record
                     .pointer("/payload/id")
                     .and_then(Value::as_str)
@@ -92,6 +106,9 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                 });
             }
             "event_msg" => {
+                if !should_emit {
+                    continue;
+                }
                 let event_type = record
                     .pointer("/payload/type")
                     .and_then(Value::as_str)
@@ -188,17 +205,24 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                             .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)))
                             .map(|n| format!("codex_tc_{n}"));
 
-                        let raw_input = as_i64(
-                            record.pointer("/payload/info/last_token_usage/input_tokens"),
-                        );
+                        let raw_input =
+                            as_i64(record.pointer("/payload/info/last_token_usage/input_tokens"));
                         // Codex uses `cached_input_tokens` (input_tokens includes cached).
                         // Take max of both field names for robustness.
                         let cached = std::cmp::max(
-                            as_i64(record.pointer("/payload/info/last_token_usage/cached_input_tokens")),
-                            as_i64(record.pointer("/payload/info/last_token_usage/cache_read_input_tokens")),
+                            as_i64(
+                                record
+                                    .pointer("/payload/info/last_token_usage/cached_input_tokens"),
+                            ),
+                            as_i64(
+                                record.pointer(
+                                    "/payload/info/last_token_usage/cache_read_input_tokens",
+                                ),
+                            ),
                         );
                         let reasoning = as_i64(
-                            record.pointer("/payload/info/last_token_usage/reasoning_output_tokens"),
+                            record
+                                .pointer("/payload/info/last_token_usage/reasoning_output_tokens"),
                         );
 
                         events.push(SessionEvent {
@@ -233,21 +257,34 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                         .to_string();
                     let name = extract_tool_name(&record, payload_type);
                     let input = extract_tool_input_event(&record, payload_type);
-                    events.push(SessionEvent {
-                        timestamp: ts.clone(),
-                        kind: EventKind::ToolUse(ToolUseEvent { id, name, input }),
-                    });
+                    if !id.is_empty() {
+                        tool_meta_by_call_id.insert(id.clone(), (name.clone(), input.clone()));
+                    }
+                    if should_emit {
+                        events.push(SessionEvent {
+                            timestamp: ts.clone(),
+                            kind: EventKind::ToolUse(ToolUseEvent { id, name, input }),
+                        });
+                    }
                 }
 
                 if matches!(
                     payload_type,
                     "function_call_output" | "custom_tool_call_output"
                 ) {
+                    if !should_emit {
+                        continue;
+                    }
                     let tool_use_id = record
                         .pointer("/payload/call_id")
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string();
+                    let (tool_name, tool_input) = tool_meta_by_call_id
+                        .get(&tool_use_id)
+                        .cloned()
+                        .map(|(name, input)| (Some(name), Some(input)))
+                        .unwrap_or((None, None));
                     let content = codex_tool_result_content(record.pointer("/payload/output"));
                     let is_error = record
                         .pointer("/payload/is_error")
@@ -259,15 +296,19 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                             tool_use_id,
                             content,
                             is_error,
+                            tool_name,
+                            tool_input,
                         },
                     });
                 }
 
-                if let Some(usage) = extract_response_item_usage_event(&record) {
-                    events.push(SessionEvent {
-                        timestamp: ts.clone(),
-                        kind: usage,
-                    });
+                if should_emit {
+                    if let Some(usage) = extract_response_item_usage_event(&record) {
+                        events.push(SessionEvent {
+                            timestamp: ts.clone(),
+                            kind: usage,
+                        });
+                    }
                 }
             }
             _ => {}
@@ -384,4 +425,52 @@ fn extract_assistant_text(record: &Value, event_type: &str) -> Option<String> {
         .map(str::trim)
         .unwrap_or_default();
     (!text.is_empty()).then(|| text.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("gaal-codex-{unique}-{name}.jsonl"))
+    }
+
+    #[test]
+    fn incremental_parse_keeps_tool_metadata_for_prior_call_ids() {
+        let path = temp_path("incremental");
+        let call = concat!(
+            "{\"timestamp\":\"2026-03-07T10:00:00Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"cargo build\\\"}\",\"call_id\":\"call_1\"}}\n"
+        );
+        let output = concat!(
+            "{\"timestamp\":\"2026-03-07T10:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"Command failed\\nProcess exited with code 1\"}}\n"
+        );
+        fs::write(&path, format!("{call}{output}")).unwrap();
+
+        let events = parse_events_from_offset(&path, call.len() as u64).unwrap();
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(events.len(), 1);
+        match &events[0].kind {
+            EventKind::ToolResult {
+                tool_use_id,
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                assert_eq!(tool_use_id, "call_1");
+                assert_eq!(tool_name.as_deref(), Some("exec_command"));
+                assert_eq!(
+                    tool_input.as_ref().and_then(|value| value.get("cmd")).and_then(Value::as_str),
+                    Some("cargo build")
+                );
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
 }

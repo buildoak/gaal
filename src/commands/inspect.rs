@@ -558,6 +558,7 @@ fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
 
     for fact in facts {
         if matches!(fact.fact_type, FactType::Error) {
+            let dedup_cmd = error_dedup_cmd(fact, true);
             let entry = ErrorEntry {
                 tool: fact.subject.clone().unwrap_or_else(|| "tool".to_string()),
                 cmd: fact
@@ -569,7 +570,7 @@ fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
                 snippet: truncate(&fact.detail.clone().unwrap_or_else(|| "".to_string()), 280),
                 ts: fact.ts.clone(),
             };
-            let key = (entry.cmd.clone(), entry.exit_code);
+            let key = (dedup_cmd, entry.exit_code);
             if let Some(idx) = seen.get(&key).copied() {
                 out[idx] = entry;
             } else {
@@ -580,6 +581,7 @@ fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
         }
 
         if matches!(fact.fact_type, FactType::Command) && fact.exit_code.unwrap_or(0) != 0 {
+            let dedup_cmd = error_dedup_cmd(fact, false);
             let cmd = fact
                 .detail
                 .clone()
@@ -592,7 +594,7 @@ fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
                 snippet: truncate(&cmd, 280),
                 ts: fact.ts.clone(),
             };
-            let key = (entry.cmd.clone(), entry.exit_code);
+            let key = (dedup_cmd, entry.exit_code);
             if let std::collections::hash_map::Entry::Vacant(slot) = seen.entry(key) {
                 slot.insert(out.len());
                 out.push(entry);
@@ -601,6 +603,48 @@ fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
     }
 
     out
+}
+
+fn error_dedup_cmd(fact: &Fact, prefer_wrapped_command: bool) -> String {
+    if let Some(subject) = fact.subject.clone() {
+        let trimmed = subject.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    if prefer_wrapped_command {
+        if let Some(detail) = fact.detail.as_deref() {
+            if let Some(cmd) = extract_wrapped_shell_command(detail) {
+                return cmd;
+            }
+        }
+    }
+
+    fact.detail.clone().unwrap_or_default()
+}
+
+fn extract_wrapped_shell_command(detail: &str) -> Option<String> {
+    let first_line = detail.lines().next()?.trim();
+    let raw = first_line.strip_prefix("Command: /bin/bash -lc ")?;
+    Some(unquote_shell_wrapper(raw))
+}
+
+fn unquote_shell_wrapper(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(stripped) = trimmed
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+    {
+        return stripped.to_string();
+    }
+    if let Some(stripped) = trimmed
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    {
+        return stripped.replace("\\\"", "\"");
+    }
+    trimmed.to_string()
 }
 
 fn collect_git_ops(facts: &[Fact]) -> Vec<GitOp> {
@@ -963,4 +1007,50 @@ fn truncate(value: &str, max: usize) -> String {
 /// Format peak context for human display.
 fn format_peak_context(peak: u64) -> String {
     format!("{} peak", format_tokens(peak as i64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fact(
+        fact_type: FactType,
+        subject: Option<&str>,
+        detail: Option<&str>,
+        exit_code: Option<i32>,
+    ) -> Fact {
+        Fact {
+            id: None,
+            session_id: "sess".to_string(),
+            ts: "2026-03-07T10:00:00Z".to_string(),
+            turn_number: Some(1),
+            fact_type,
+            subject: subject.map(str::to_string),
+            detail: detail.map(str::to_string),
+            exit_code,
+            success: Some(exit_code.unwrap_or(0) == 0),
+        }
+    }
+
+    #[test]
+    fn collect_errors_deduplicates_matching_command_and_error_facts() {
+        let long_cmd = "sqlite3 ~/.gaal/index.db \"select id, jsonl_path from sessions where engine='claude' and total_tools=0 order by started_at desc limit 30;\"";
+        let truncated = truncate(long_cmd, 100);
+        let facts = vec![
+            fact(FactType::Command, Some(&truncated), Some(long_cmd), Some(5)),
+            fact(
+                FactType::Error,
+                Some(&truncated),
+                Some(&format!(
+                    "Command: /bin/bash -lc \"{}\"\nChunk ID: x\nProcess exited with code 5\nOutput:\nError",
+                    long_cmd.replace('"', "\\\"")
+                )),
+                Some(5),
+            ),
+        ];
+
+        let errors = collect_errors(&facts);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].exit_code, 5);
+    }
 }

@@ -946,8 +946,7 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
                 }
             }
 
-            EventKind::SubagentCompletion { .. }
-            | EventKind::StopSignal { .. } => {}
+            EventKind::SubagentCompletion { .. } | EventKind::StopSignal { .. } => {}
         }
     }
 

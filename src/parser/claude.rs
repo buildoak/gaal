@@ -313,6 +313,8 @@ fn extract_claude_tool_result_events(content: &Value) -> Vec<EventKind> {
             tool_use_id,
             content,
             is_error,
+            tool_name: None,
+            tool_input: None,
         });
     }
 

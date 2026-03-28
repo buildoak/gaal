@@ -27,6 +27,8 @@ pub enum EventKind {
         tool_use_id: String,
         content: Option<String>,
         is_error: bool,
+        tool_name: Option<String>,
+        tool_input: Option<Value>,
     },
     Usage {
         input_tokens: i64,

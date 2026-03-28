@@ -10,7 +10,9 @@ use std::path::Path;
 use crate::model::fact::FactType;
 use crate::model::Fact;
 
-use super::common::{is_git_command, parse_exit_code, resolve_started_at, tool_call_fact, truncate};
+use super::common::{
+    is_git_command, parse_exit_code, resolve_started_at, tool_call_fact, truncate,
+};
 use super::event::{ContentBlock, EventKind, SessionEvent};
 use super::types::{Engine, ParsedSession, SessionMeta};
 
@@ -138,7 +140,8 @@ pub fn extract_parsed_session(
                     cache_creation_tokens += cache_creation_input_tokens;
                     reasoning_tokens += evt_reasoning;
                     // Track peak context: full input for the turn (non-cached + cache_read + cache_creation).
-                    let full_input = input_tokens + cache_read_input_tokens + cache_creation_input_tokens;
+                    let full_input =
+                        input_tokens + cache_read_input_tokens + cache_creation_input_tokens;
                     if full_input > peak_context {
                         peak_context = full_input;
                     }
@@ -274,6 +277,8 @@ pub fn extract_parsed_session(
                 tool_use_id,
                 content: output_text,
                 is_error,
+                tool_name: fallback_tool_name,
+                tool_input: fallback_tool_input,
             } => {
                 let turn_number = if total_turns > 0 {
                     Some(total_turns)
@@ -282,10 +287,24 @@ pub fn extract_parsed_session(
                 };
                 let exit_code = parse_exit_code(output_text.as_deref().unwrap_or_default());
                 let state = tool_state_by_id.get(tool_use_id).cloned();
-                let tool_name = state.as_ref().map(|s| s.tool_name.as_str()).unwrap_or("");
+                let fallback_tool_fact = state.as_ref().is_none().then(|| {
+                    fallback_tool_name
+                        .as_deref()
+                        .zip(fallback_tool_input.as_ref())
+                        .and_then(|(name, input)| {
+                            tool_call_fact(name, input, ts_str.clone(), turn_number)
+                        })
+                });
+                let fallback_tool_fact = fallback_tool_fact.flatten();
+                let tool_name = state
+                    .as_ref()
+                    .map(|s| s.tool_name.as_str())
+                    .or(fallback_tool_name.as_deref())
+                    .unwrap_or("");
                 let is_shell = is_shell_tool(tool_name);
                 let is_blocked_tool = is_non_error_tool(tool_name);
-                let shell_non_zero_exit = is_shell && exit_code.map(|code| code != 0).unwrap_or(false);
+                let shell_non_zero_exit =
+                    is_shell && exit_code.map(|code| code != 0).unwrap_or(false);
 
                 // Backfill exit_code on the matching tool-call fact.
                 if let Some(state) = state.as_ref() {
@@ -302,7 +321,8 @@ pub fn extract_parsed_session(
 
                 // AF4: Error facts come only from explicit `is_error` or shell non-zero exits.
                 // Certain non-shell tools are explicitly excluded from error classification.
-                let should_create_error_fact = !is_blocked_tool && (*is_error || shell_non_zero_exit);
+                let should_create_error_fact =
+                    !is_blocked_tool && (*is_error || shell_non_zero_exit);
                 if should_create_error_fact {
                     let error_key = if !tool_use_id.is_empty() {
                         format!("tool:{tool_use_id}")
@@ -316,10 +336,18 @@ pub fn extract_parsed_session(
                             ts: ts_str.clone(),
                             turn_number,
                             fact_type: FactType::Error,
-                            subject: state.as_ref().and_then(|s| s.subject.clone()),
+                            subject: state
+                                .as_ref()
+                                .and_then(|s| s.subject.clone())
+                                .or_else(|| {
+                                    fallback_tool_fact.as_ref().and_then(|fact| fact.subject.clone())
+                                }),
                             detail: output_text
                                 .clone()
-                                .or_else(|| state.as_ref().and_then(|s| s.detail.clone())),
+                                .or_else(|| state.as_ref().and_then(|s| s.detail.clone()))
+                                .or_else(|| {
+                                    fallback_tool_fact.as_ref().and_then(|fact| fact.detail.clone())
+                                }),
                             exit_code,
                             success: Some(false),
                         });
@@ -454,6 +482,8 @@ mod tests {
                 tool_use_id: tool_use_id.to_string(),
                 content: Some(content.to_string()),
                 is_error,
+                tool_name: None,
+                tool_input: None,
             },
         }
     }
@@ -572,7 +602,11 @@ mod tests {
         let events = vec![assistant_msg("2026-03-07T10:00:00Z", &long_text)];
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
         let detail = result.facts[0].detail.as_ref().unwrap();
-        assert_eq!(detail.len(), 5000, "full assistant reply content should be preserved");
+        assert_eq!(
+            detail.len(),
+            5000,
+            "full assistant reply content should be preserved"
+        );
     }
 
     #[test]
@@ -749,6 +783,29 @@ mod tests {
     }
 
     #[test]
+    fn tool_result_with_fallback_tool_metadata_still_creates_shell_error_fact() {
+        let events = vec![SessionEvent {
+            timestamp: Some("2026-03-07T10:01:00Z".to_string()),
+            kind: EventKind::ToolResult {
+                tool_use_id: "call_1".to_string(),
+                content: Some("Command failed\nProcess exited with code 1".to_string()),
+                is_error: false,
+                tool_name: Some("exec_command".to_string()),
+                tool_input: Some(json!({"cmd": "cargo build"})),
+            },
+        }];
+        let result = extract_parsed_session(&events, Engine::Codex, Path::new("test.jsonl"));
+        let error_facts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "error")
+            .collect();
+        assert_eq!(error_facts.len(), 1);
+        assert_eq!(error_facts[0].subject, Some("cargo build".to_string()));
+        assert_eq!(error_facts[0].exit_code, Some(1));
+    }
+
+    #[test]
     fn output_containing_error_creates_error_fact() {
         let events = vec![
             tool_use_event(
@@ -807,12 +864,7 @@ mod tests {
                 "WebSearch",
                 json!({"query": "rust error handling"}),
             ),
-            tool_result_event(
-                "2026-03-07T10:01:00Z",
-                "call_1",
-                "request failed",
-                true,
-            ),
+            tool_result_event("2026-03-07T10:01:00Z", "call_1", "request failed", true),
         ];
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
         let error_facts: Vec<_> = result
