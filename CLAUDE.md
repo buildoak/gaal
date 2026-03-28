@@ -4,16 +4,17 @@ Session observability CLI for Claude Code and Codex. Rust, single binary, macOS-
 
 ## v0.1.0 Scope (public release)
 
-Nine commands. Core session observability without monitoring features.
+Eleven commands. Core session observability without monitoring features.
 
 | Command | What it does |
 |---------|-------------|
-| `gaal inspect <id>` | Session detail view. Files, commands, timeline, git ops. |
+| `gaal inspect <id>` | Session detail view. Files, commands, timeline, git ops, token breakdown. |
 | `gaal ls` | List sessions with envelope format and query_window. |
 | `gaal who <verb> <target>` | Find sessions by file/command activity. Query_window support. |
 | `gaal recall <topic>` | Ranked retrieval for session continuity. Handoff files + JSONL fallback. |
 | `gaal search <query>` | Find sessions by content. BM25 ranked via Tantivy. |
-| `gaal create-handoff <id>` | Generate handoff document via LLM extraction. |
+| `gaal create-handoff <id>` | Generate handoff document via LLM extraction (agent-mux dispatch). |
+| `gaal transcript <id>` | Session transcript markdown — path metadata or `--stdout` dump. |
 | `gaal salt` | Generate unique token for self-identification. |
 | `gaal find-salt <token>` | Find JSONL file by salt token. |
 | `gaal index` | Index JSONL files and tag management. |
@@ -92,12 +93,31 @@ The pattern that fails:
 read Rust source → reason about what "should" work → write fix → cargo build (debug) → wonder why nothing changed
 ```
 
+## Token Accounting (fixed 2026-03-28)
+
+- **Cache tokens** are fully tracked: `cache_read_tokens` and `cache_creation_tokens` stored in DB, surfaced in `inspect --tokens`, and included in transcript frontmatter.
+- **Peak context** = max(input_tokens + cache_read + cache_creation) across all turns. Represents actual API context window usage per turn. This is NOT file size.
+- **Model-aware cost estimation:** `estimate_session_cost()` uses per-model pricing (Opus $15/$75, Sonnet $3/$15, Codex $2/$8 per Mtok). Cache read and creation tokens are priced separately.
+- **Tool counting:** Both Claude and Codex tool uses are counted. Claude tools appear as `ContentBlock::ToolUse` inside `AssistantMessage` events. Codex tools appear as standalone `EventKind::ToolUse` events. Both paths increment `total_tools`.
+- **Usage deduplication:** Claude uses `dedup_key` (message ID) to avoid double-counting. Codex uses cumulative `total_tokens` as dedup key to handle rate-limit bucket duplicates.
+- **Error deduplication:** Error facts are keyed by `tool:{tool_use_id}` or `ts:{timestamp}|exit:{code}` to prevent double-counting.
+
+## AX Error Philosophy
+
+Gaal's errors are designed to teach calling agents. Every error includes:
+1. **What went wrong** — specific, not generic
+2. **A working example** — correct invocation the agent can copy
+3. **A hint** — what to try next
+
+Exit codes are meaningful and consistent: 0=success, 1=no results, 2=ambiguous ID, 3=not found, 10=no index, 11=parse error. The `-H` flag routes errors through `format_human()` for readable stderr output.
+
 ## Architecture Notes
 
 - **Parser:** Dual Claude/Codex JSONL parsers. They have fundamentally different event schemas. Every feature touching parsed data must handle both.
 - **DB:** SQLite for session metadata + Tantivy for full-text search. Use `savepoint_with_name()` for nested transactions — never `unchecked_transaction()`.
 - **Detection:** Salt-based session discovery via content addressing.
 - **Output:** JSON-first for agent consumption. Human-readable formatting via `--human` / `-H` flags.
+- **Transcript rendering:** JSONL events are parsed into `SessionData`, then rendered to markdown with YAML frontmatter (session_id, date, model, tokens, cache breakdown).
 
 ## Key Paths
 
@@ -111,10 +131,13 @@ read Rust source → reason about what "should" work → write fix → cargo bui
 | `src/commands/handoff.rs` | LLM-powered handoff generation (`create-handoff`, supports `--jsonl` direct path) |
 | `src/commands/index.rs` | Indexing pipeline |
 | `src/commands/tag.rs` | Tag management with `tag ls` subcommand |
-| `src/db/schema.rs` | SQLite schema + autocommit guard |
+| `src/commands/transcript.rs` | Session transcript markdown generation |
+| `src/db/schema.rs` | SQLite schema + autocommit guard + column migrations |
 | `src/parser/` | Claude + Codex JSONL parsers |
-| `ISSUES.md` | Full issue history (I1-I40+) |
-| `TESTS.md` | Stress test harness |
+| `src/parser/facts.rs` | Unified fact extraction from events (tool counting, error dedup, peak context) |
+| `src/render/session_md.rs` | JSONL events to markdown renderer (frontmatter, turns, subagents) |
+| `src/error.rs` | AX-compliant error types with `format_human()` method |
+| `skill/SKILL.md` | Agent skill file for gaal |
 
 ## Build
 

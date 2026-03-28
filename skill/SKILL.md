@@ -2,21 +2,23 @@
 name: gaal
 description: |
   Agent session observability CLI. Query, inspect, and search across Claude Code and Codex
-  sessions. Fleet view, file/command attribution, live process monitoring, full-text search,
-  semantic recall, and LLM-powered handoff generation. Rust binary, JSON output, pipe-friendly.
+  sessions. Fleet view, file/command attribution, full-text search, semantic recall, token/cost
+  accounting, transcript rendering, and LLM-powered handoff generation. Rust binary, JSON output,
+  pipe-friendly. AX-designed errors teach agents what went wrong and how to fix it.
   Use when: session observability, find session, session history, who wrote/read/ran a file,
-  search sessions, active sessions, session fleet view, inspect session health, handoff generation,
+  search sessions, session fleet view, inspect session details, handoff generation,
   recall context from past sessions, session memory, continuity, past sessions, what was I working on,
   session start, session end, historical sessions, prior context, previous session,
   eywa, session continuity, reconnect with previous sessions, get session context,
-  cost tracking, self-identification, salt token.
+  cost tracking, token breakdown, cache tokens, self-identification, salt token, transcript.
   Replaces eywa for session recall and handoff generation.
-  Do NOT use for: cross-session prompt injection (use session-ctl), live JSONL tailing (not yet implemented).
+  Do NOT use for: cross-session prompt injection (use session-ctl), live JSONL tailing (not supported),
+  real-time process monitoring (removed in v0.1.0).
 ---
 
 # gaal
 
-Agent session observability CLI. 11 verbs + 1 utility. JSON default, `-H` for tables.
+Agent session observability CLI. 11 commands. JSON default, `-H` for human-readable tables and errors.
 
 ## Paths
 
@@ -146,7 +148,7 @@ gaal index import-eywa
 gaal ls --limit 10 -H
 
 # What did a session write?
-gaal show latest --files write
+gaal inspect latest --files write
 
 # Who modified this file?
 OUTPUT=$(gaal who wrote CLAUDE.md --since 7d); echo "$OUTPUT" | jq '.'
@@ -154,8 +156,11 @@ OUTPUT=$(gaal who wrote CLAUDE.md --since 7d); echo "$OUTPUT" | jq '.'
 # Search across all sessions
 gaal search "gaussian moat" --limit 5
 
-# What's running right now?
-gaal ls --status active -H
+# Session transcript artifact (path metadata by default)
+gaal transcript latest
+
+# Dump transcript markdown directly
+gaal transcript latest --stdout
 ```
 
 ## Decision Tree
@@ -163,8 +168,9 @@ gaal ls --status active -H
 | Need | Tool |
 |------|------|
 | Fleet overview / recent sessions | `gaal ls` |
-| Drill into ONE session (files, commands, errors, tree) | `gaal show <id>` |
-| What's running RIGHT NOW (live PIDs) | `gaal ls --status active` |
+| Drill into ONE session (files, commands, errors, trace, source path) | `gaal inspect <id>` |
+| Get rendered transcript markdown for ONE session | `gaal transcript <id>` |
+| Fleet totals instead of individual sessions | `gaal ls --aggregate` |
 | Session health / operational snapshot | `gaal inspect <id>` |
 | "Who wrote/read/ran X?" (inverted query) | `gaal who <verb> <target>` |
 | Free-text search across content | `gaal search <query>` |
@@ -178,18 +184,22 @@ gaal ls --status active -H
 ### Fleet View
 | Command | What |
 |---------|------|
-| `gaal ls` | List sessions (filters: `--engine`, `--since`, `--status`, `--tag`). Default limit 10, shows "N of M" footer |
+| `gaal ls` | List sessions (filters: `--engine`, `--since`, `--before`, `--cwd`, `--tag`, `--sort`). Default limit 10, shows "N of M" footer |
 | `gaal ls --aggregate` | Token/cost totals instead of session list |
-| `gaal ls --status active` | Live/active sessions (filters by computed status) |
+| `gaal ls --all` | Include noisy sessions (0 tool calls and <30s duration) |
 
 ### Drill-Down
 | Command | What |
 |---------|------|
-| `gaal show <id>` | Full session record. `-H` shows summary card (not full dump) |
-| `gaal show <id> --files write` | Files modified by session |
-| `gaal show <id> --errors` | Errors and non-zero exits |
-| `gaal show <id> --trace` | Full event timeline (level 2) |
-| `gaal inspect <id>` | Operational snapshot (velocity, health signals). `-H` renders human-readable card |
+| `gaal inspect <id>` | Session details with optional focused views. `-H` renders human-readable output |
+| `gaal inspect <id> --files write` | Files modified by session |
+| `gaal inspect <id> --errors` | Errors and non-zero exits |
+| `gaal inspect <id> --commands` | Commands only |
+| `gaal inspect <id> --trace` | Full event timeline |
+| `gaal inspect <id> --source` | Raw JSONL source path |
+| `gaal inspect --ids a1b2,c3d4` | Batch inspect multiple sessions |
+| `gaal transcript <id>` | Return transcript path/size metadata as JSON |
+| `gaal transcript <id> --stdout` | Dump rendered transcript markdown to stdout |
 
 ### Inverted Queries
 | Command | What |
@@ -198,7 +208,8 @@ gaal ls --status active -H
 | `gaal who wrote <path>` | Sessions that modified a file |
 | `gaal who ran "<cmd>"` | Sessions that ran a command |
 | `gaal who touched <term>` | Broadest — files OR commands mentioning term |
-| `gaal who installed <pkg>` | Package install detection (pip/npm/brew/cargo) |
+| `gaal who changed <path>` | Sessions that changed a file |
+| `gaal who deleted <path>` | Sessions that deleted a file or removed it via command |
 
 All `who` verbs: default limit 10 with "showing N of M" indicator. Add `-F`/`--full` for verbose per-fact output. Verb matching is by command name (not substring). Search window displayed in output.
 
@@ -241,7 +252,7 @@ Gaal stores **shortened 8-character IDs**, not full UUIDs. The shortening logic 
 
 **Why different?** UUIDv4 is random throughout — first 8 chars are unique. UUIDv7 has a shared timestamp prefix (sessions started in the same ms share it) — only the random suffix provides uniqueness, so last 8 hex chars are used.
 
-**What you can pass to gaal commands** (`show`, `create-handoff`, `inspect`, etc.):
+**What you can pass to gaal commands** (`inspect`, `transcript`, `create-handoff`, etc.):
 
 | Input | Behavior |
 |-------|----------|
@@ -255,36 +266,52 @@ Gaal stores **shortened 8-character IDs**, not full UUIDs. The shortening logic 
 ## Output Contract
 
 - **Default:** JSON to stdout. Errors to stderr as JSON `{"error": "...", "exit_code": N}`.
-- **`-H` flag:** Human-readable tables.
+- **`-H` flag:** Human-readable tables. Also applies to error output — errors render as structured text (what/example/hint) instead of JSON.
 - **Exit codes:** 0=success, 1=no results, 2=ambiguous ID, 3=not found, 10=no index, 11=parse error. Full table: `references/exit-codes.md`
-- **Batch flags:** `--ids`, `--tag`, `--active` avoid N+1 patterns. One call, all results.
+- **Batch flags:** `--ids` and `--tag` avoid N+1 patterns where supported. One call, all results.
+
+## AX Error Handling
+
+Every gaal error is designed to teach calling agents (AX = Agent Experience). Errors include three parts:
+1. **What went wrong** — specific to the command and input
+2. **A working example** — correct invocation the agent can copy-paste
+3. **A hint** — what to try next to recover
+
+When handling gaal errors in scripts or agent code:
+- Check exit code first (0=success, non-zero=error)
+- Parse stderr for structured error info
+- With `-H`: errors are plain text (What/Example/Hint format)
+- Without `-H`: errors are JSON `{"error": "...", "exit_code": N}`
+- Common recovery: widen `--since` window, check session ID exists via `gaal ls`, run `gaal index backfill` if index is stale
 
 ## Agent Consumption Notes
 
 **Pipe gotcha with `gaal who`:** The `who` verb consumes trailing args greedily. Piping directly (`gaal who wrote X | jq`) may fail. Workaround:
 ```bash
 OUTPUT=$(gaal who wrote CLAUDE.md --since 7d)
-echo "$OUTPUT" | jq '.[0].session_id'
+echo "$OUTPUT" | jq '.results[0].session_id // .[0].session_id'
 ```
 
 **jq assertion pattern** (verify schema in scripts):
 ```bash
-gaal ls --limit 1 | jq -e 'length == 1 and all(.id and .engine)' > /dev/null
+gaal ls --limit 1 | jq -e '.sessions | length == 1 and all(.[]; .id and .engine)' > /dev/null
 ```
 
 **Composable pipeline:**
 ```bash
-gaal ls --since today | jq -r '.[].id' | xargs -I{} gaal show {} --files write
+gaal ls --since today | jq -r '.sessions[].id' | xargs -I{} gaal inspect {} --files write
 ```
+
+**Transcript behavior:** `gaal transcript <id>` is path-first by default. It returns JSON with the rendered markdown path, size, and token estimate. Use `--stdout` only when you explicitly want the markdown content in the calling context.
 
 ## Anti-Patterns
 
 | Do NOT | Do instead |
 |--------|------------|
 | Pipe `gaal who` directly with `\|` | Capture to variable first, then pipe |
-| Use process-based detection for "recent active sessions" | Use `gaal ls --status active` (queries archive, computes status from PID liveness) |
-| Read entire session JSONL manually | Use `gaal show <id> --trace` or `--source` |
-| Call `gaal show` in a loop for multiple IDs | Use `gaal show --ids a1b2,c3d4` (batch mode) |
+| Assume `gaal ls` has `--status active` or a separate `active` command | Use `gaal ls --all` plus `gaal inspect <id>` for drill-down |
+| Read entire session JSONL manually | Use `gaal inspect <id> --trace`, `gaal inspect <id> --source`, or `gaal transcript <id>` |
+| Call `gaal inspect` in a loop for multiple IDs | Use `gaal inspect --ids a1b2,c3d4` where possible |
 | Assume `gaal recall` works without handoffs | Check `gaal index status` handoffs_total first |
 | Run `gaal create-handoff` without agent-mux installed | Verify agent-mux availability; handoff needs LLM |
 

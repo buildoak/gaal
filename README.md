@@ -4,7 +4,7 @@ Session observability for AI coding agents. Like k9s for your Claude Code and Co
 
 ## The problem
 
-You're running Claude Code and Codex sessions all day. Some last minutes, some last hours. You need to know: what's running right now? What did that session from yesterday actually do? Where's the context I need to continue this work?
+You're running Claude Code and Codex sessions all day. Some last minutes, some last hours. You need to know: what did that session from yesterday actually do? Where's the context I need to continue this work? How much did it cost?
 
 The JSONL files are there -- Claude and Codex both write them -- but they're 10-50MB blobs of undocumented, engine-specific event streams. Nobody reads those raw. gaal parses both formats, indexes everything into SQLite + Tantivy, and gives you five-second answers to the questions that actually matter.
 
@@ -27,68 +27,66 @@ gaal index backfill
 
 Three commands you'll reach for daily:
 
-**What's running right now?**
+**Fleet view -- what happened recently?**
 
 ```
-$ gaal active -H
-FLEET: 2 active, 1 starting
-
-3ffb65d8  codex   starting   1d 3h  "coordinator"
-58ec9fa4  claude  active    21h 9m  "boot Jenkins"  [3 PIDs]
-019cdbf6  codex   active     5m 5s  "coordinator"
+$ gaal ls --limit 5 -H
+ID        Engine  Started      Duration  Tokens       Peak  Tools  Model              CWD
+--------  ------  -----------  --------  -----------  ----  -----  -----------------  -----------
+acabe588  claude  today 18:25  3h 46m    2K / 13K     124K  74     claude-opus-4-6    coordinator
+1ab21f89  claude  today 18:38  3h 25m    28 / 311     74K   8      claude-opus-4-6
+65eeec4f  claude  today 19:03  2m 1s     2K / 495     69K   10     claude-sonnet-4-6
+875f36ae  codex   today 21:50  8m 39s    180K / 21K   181K  114    gpt-5.4            gaal
 ```
 
-**What did session X do?**
+**Drill into a session:**
 
 ```
-$ gaal show latest -H
-ID: 8041767e
-Engine: codex
-Model: gpt-5.4
-Status: completed
-Duration: 249s
-Tokens: in=656K out=12K
-Tools: 30
-Commands:
-  $ cat SOUL.md (exit 0)
-  $ rg -n "sqrt36-upper-bound" ... (exit 0)
-  ...
+$ gaal inspect latest --tokens -H
+Session: 875f36ae (codex, gpt-5.4)
+Duration: 8m 39s
+Tokens: input=180K output=21K cache_read=5.4M
+Peak context: 181K
+Estimated cost: $1.23
+Tools used: 114
 ```
 
 **Find past sessions about a topic:**
 
 ```
-$ gaal search "handoff" --limit 3 -H
-Score  Session   Engine  Turn  Type     Snippet
-12.62  466b3aac  codex   1     command  rg -n "handoff|extract.*handoff|..." ...
-12.60  0e2361ff  codex   1     error    let args = gaal::commands::handoff::HandoffArgs ...
-12.56  b47749ac  codex   1     error    handoff generates handoff MDs via LLM ...
+$ gaal recall "auth refactor" --format brief --limit 3 -H
+session: 2b2f6f7e
+date: 2026-03-04
+headline: Refactored auth middleware, added refresh token handling
+projects: gaal, coordinator
+substance: 2 duration_minutes: 5290 score: 29.923
 ```
 
 ## Commands
 
 | Command | What it does |
 |---------|-------------|
-| `active` | Live process discovery. PIDs, engine, duration, CWD, last action. |
-| `ls` | Fleet view -- all sessions, filterable by status/engine/date/cwd/tag. |
-| `show <id>` | Full session record. Files, commands, errors, tokens, git ops. |
-| `inspect <id>` | Operational snapshot -- CPU, RSS, velocity, context window usage. |
+| `ls` | Fleet view -- all sessions, filterable by engine/date/cwd/tag. |
+| `inspect <id>` | Session detail view. Files, commands, errors, tokens, git ops. |
+| `transcript <id>` | Session transcript markdown -- path metadata or `--stdout` dump. |
 | `who <verb> <target>` | Inverted query: which session read/wrote/ran/deleted X? |
 | `search <query>` | Full-text search via Tantivy BM25. Filter by field, engine, time. |
 | `recall <topic>` | Ranked retrieval for session continuity. Best sessions first. |
-| `create-handoff [id]` | Generate handoff document via LLM extraction. |
+| `create-handoff [id]` | Generate handoff document via LLM extraction (agent-mux). |
 | `salt` | Generate a salt token for self-identification (see below). |
 | `find-salt <salt>` | Find the JSONL file containing a salt token. |
 | `tag <id> <tags>` | Apply or remove tags on sessions. |
-| `index` | Index maintenance -- backfill, reindex, prune, status. |
+| `index` | Index maintenance -- backfill, status, import-eywa. |
 
 All commands output JSON by default. Add `-H` for human-readable tables.
 
 ## How it works
 
-gaal discovers sessions through two paths. **From outside**: `proc_pidpath` via macOS libproc FFI resolves running Claude/Codex processes, cross-references with JSONL file discovery, and maps PIDs to sessions. **From inside** (when an agent wants to find its own session): content-addressed salt tokens -- see [self-handoff protocol](#self-handoff-protocol).
-
 The indexer parses both Claude and Codex JSONL formats -- they have fundamentally different event schemas -- into a unified SQLite store with Tantivy full-text search on top. Data lives at `~/.gaal/`.
+
+**Token accounting** tracks input, output, cache_read, cache_creation, and reasoning tokens per session. Peak context = max(input + cache_read + cache_creation) across all turns. Cost estimation is model-aware (Opus/Sonnet/Codex rates).
+
+**Session detection** from inside a running session uses content-addressed salt tokens -- see [self-handoff protocol](#self-handoff-protocol).
 
 ## Agent integration
 
@@ -101,11 +99,28 @@ gaal recall "auth refactor" --format brief --limit 3
 # "Which session touched this file?"
 gaal who wrote "src/auth/middleware.rs" --since 7d
 
-# "Fleet status for the coordinator"
-gaal active
+# "Fleet status"
+gaal ls --since 1d -H
 ```
 
 Agents get ~500-token summaries, not 26K JSONL dumps. The `--full` / `-F` flag unlocks verbose output when needed.
+
+### Error handling (AX design)
+
+Every gaal error is designed to teach calling agents:
+
+1. **What went wrong** -- specific, actionable
+2. **A working example** -- correct invocation the agent can copy
+3. **A hint** -- what to try next
+
+```
+$ gaal inspect nonexistent -H
+What went wrong: Session `nonexistent` was not found.
+Example: gaal inspect latest -H
+Hint: List recent sessions with `gaal ls --since 7d -H`, then rerun `gaal inspect` with a valid 8-character ID prefix.
+```
+
+Exit codes: 0=success, 1=no results, 2=ambiguous ID, 3=not found, 10=no index, 11=parse error.
 
 ### Recall
 
@@ -122,36 +137,28 @@ substance: 2 duration_minutes: 5290 score: 29.923
 
 Formats: `brief` (default, agent-optimized), `summary`, `handoff`, `full`, `eywa` (legacy compat).
 
-### Inspect
+### Token breakdown
 
-Real-time operational snapshot of a running session:
-
-```
-$ gaal inspect latest -H
-ID:      019cdbf6
-Engine:  codex
-Status:  active
-PID:     38425
-Uptime:  5m 23s
-CPU:     0.0%
-RSS:     82.8 MB
-Tokens:  total=668K ctx_window=134K ctx_limit=128K
-Velocity: 0.0 actions/min | 240K tokens/min (5m window)
+```bash
+gaal inspect latest --tokens
 ```
 
-`--watch` for live 2s polling. `--active` to inspect all running sessions at once.
+Returns input_total, output_total, cache_read, cache_creation, reasoning_tokens, estimated_cost_usd, turns, and per-turn averages. Cache tokens are critical for Opus sessions where 90%+ of input is cache reads.
 
-### Fleet view
+### Transcript
 
+```bash
+# Get transcript path metadata (default)
+gaal transcript latest
+
+# Dump markdown to stdout (use sparingly -- can be 50K+ tokens)
+gaal transcript latest --stdout
+
+# Force re-render even if cached
+gaal transcript latest --force --stdout
 ```
-$ gaal ls --limit 5 -H
-ID        Engine  Status     Started      Duration  Tokens      Tools  Model             CWD
-8041767e  codex   completed  today 12:14  4m 9s     656K / 12K  30     gpt-5.4           /.../coordinator
-80db6eaa  codex   completed  today 11:51  20m 17s   7.2M / 29K  115    gpt-5.4           /.../solver
-b6ed94fa  claude  completed  today 11:30  45m 7s    13 / 10     7      claude-opus-4-6   /.../coordinator
-```
 
-Filter by anything: `--engine claude`, `--status active`, `--since 1d`, `--cwd /path`, `--tag important`. Sort by `--sort tokens` or `--sort cost`.
+Transcript frontmatter includes: session_id, date, model (full name), turns, all four token fields (input, output, cache_read, cache_creation).
 
 ## Self-handoff protocol
 
@@ -188,8 +195,9 @@ Clean build: ~8 min. Incremental: ~30s.
 gaal is session observability. Not a session manager, not a debugger, not an agent framework.
 
 Killed features (not deferred -- deleted):
+- **`gaal active` command** -- process monitoring too fragile
+- **`gaal show` command** -- merged into `inspect`
 - **Stuck detection** -- heuristic garbage, wrong more than right
-- **Context % calculation** -- always wrong across engines
 - **Parent-child linking** -- 1 out of 2,433 sessions ever linked
 - **Loop detection** -- insufficient signal in JSONL
 
