@@ -192,21 +192,27 @@ pub fn extract_parsed_session(
 
                 // One AssistantReply fact per text block (matches old per-block behaviour).
                 for block in content {
-                    if let ContentBlock::Text(text) = block {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            facts.push(Fact {
-                                id: None,
-                                session_id: String::new(),
-                                ts: ts_str.clone(),
-                                turn_number,
-                                fact_type: FactType::AssistantReply,
-                                subject: None,
-                                detail: Some(trimmed.to_string()),
-                                exit_code: None,
-                                success: None,
-                            });
+                    match block {
+                        ContentBlock::Text(text) => {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                facts.push(Fact {
+                                    id: None,
+                                    session_id: String::new(),
+                                    ts: ts_str.clone(),
+                                    turn_number,
+                                    fact_type: FactType::AssistantReply,
+                                    subject: None,
+                                    detail: Some(trimmed.to_string()),
+                                    exit_code: None,
+                                    success: None,
+                                });
+                            }
                         }
+                        ContentBlock::ToolUse(_) => {
+                            total_tools += 1;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -402,6 +408,21 @@ mod tests {
         }
     }
 
+    fn assistant_msg_with_tool_use(ts: &str, id: &str, name: &str, input: Value) -> SessionEvent {
+        SessionEvent {
+            timestamp: Some(ts.to_string()),
+            kind: EventKind::AssistantMessage {
+                content: vec![ContentBlock::ToolUse(ToolUseEvent {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    input,
+                })],
+                model: None,
+                stop_reason: None,
+            },
+        }
+    }
+
     fn tool_use_event(ts: &str, id: &str, name: &str, input: Value) -> SessionEvent {
         SessionEvent {
             timestamp: Some(ts.to_string()),
@@ -563,6 +584,18 @@ mod tests {
             .collect();
         assert_eq!(read_facts.len(), 1);
         assert_eq!(read_facts[0].subject, Some("/src/main.rs".to_string()));
+    }
+
+    #[test]
+    fn inline_assistant_tool_use_counts_toward_total_tools() {
+        let events = vec![assistant_msg_with_tool_use(
+            "2026-03-07T10:00:00Z",
+            "toolu_1",
+            "Bash",
+            json!({"command": "ls -la"}),
+        )];
+        let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
+        assert_eq!(result.total_tools, 1);
     }
 
     #[test]
