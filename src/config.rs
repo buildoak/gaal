@@ -75,6 +75,10 @@ pub struct AgentMuxConfig {
     pub timeout_secs: Option<u64>,
     /// Default effort level for dispatch.
     pub effort: Option<String>,
+    /// Override cwd for agent-mux dispatch.
+    /// When set, this cwd is passed to agent-mux instead of the session's cwd.
+    /// Required for role-based dispatch where skills are resolved relative to cwd.
+    pub cwd: Option<String>,
 }
 
 impl Default for AgentMuxConfig {
@@ -85,6 +89,7 @@ impl Default for AgentMuxConfig {
             variant: None,
             timeout_secs: None,
             effort: None,
+            cwd: None,
         }
     }
 }

@@ -22,10 +22,13 @@ format = "eywa"
 [agent-mux]
 # Binary name or absolute path to agent-mux
 path = "agent-mux"
-# role = "researcher"
+role = "handoff-extractor"
 # variant = ""
 timeout_secs = 120
 # effort = "high"
+# Override cwd for dispatch — agent-mux v2 resolves skills relative to cwd.
+# Set to a directory with .claude/skills/ containing role-referenced skills.
+# cwd = "/path/to/project/with/skills"
 
 [stuck]
 # Seconds of silence before a session is considered stuck

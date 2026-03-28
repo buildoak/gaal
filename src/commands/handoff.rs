@@ -1259,6 +1259,16 @@ fn invoke_agent_mux(
         .map(str::trim)
         .filter(|effort| !effort.is_empty());
 
+    // When a role is used, agent-mux v2 resolves skills relative to --cwd.
+    // The config cwd override ensures skills are found regardless of the session's cwd.
+    // Falls back to the session's cwd if no override is configured.
+    let effective_cwd = mux_config
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .unwrap_or(cwd);
+
     let mut command = Command::new(&mux_config.path);
     if let Some(role) = role {
         command.arg("-R").arg(role);
@@ -1276,11 +1286,19 @@ fn invoke_agent_mux(
             .arg(model);
     }
 
+    // Override response truncation — handoff documents with the JSON metadata
+    // block typically need 4000-8000 chars, exceeding agent-mux's default
+    // response_max_chars (4000). Without this override, the response gets
+    // truncated and the JSON metadata block at the end is lost.
+    // Note: -1 (unlimited) is not reliably honored by agent-mux v2's config
+    // merge, so we use an explicit large value instead.
     let child = command
         .arg("--timeout")
         .arg(mux_timeout_secs.to_string())
         .arg("--cwd")
-        .arg(cwd)
+        .arg(effective_cwd)
+        .arg("--response-max-chars")
+        .arg("50000")
         .arg(request)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
