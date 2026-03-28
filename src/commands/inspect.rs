@@ -82,9 +82,12 @@ pub struct InspectArgs {
 #[derive(Debug, Clone, Serialize)]
 struct TokenBreakdown {
     input_total: u64,
+    input_total_note: &'static str,
     output_total: u64,
     cache_read_input_tokens: i64,
     cache_creation_input_tokens: i64,
+    peak_context: u64,
+    peak_context_note: &'static str,
     reasoning_tokens: i64,
     estimated_cost_usd: f64,
     turns: u32,
@@ -372,9 +375,12 @@ fn build_inspect_data(
             };
         Some(TokenBreakdown {
             input_total: record.tokens.input,
+            input_total_note: "non-cached input tokens summed across the whole session",
             output_total: record.tokens.output,
             cache_read_input_tokens: cache_read,
             cache_creation_input_tokens: cache_creation,
+            peak_context: record.peak_context,
+            peak_context_note: "max single-turn input = non-cached input + cache read + cache creation",
             reasoning_tokens: row.reasoning_tokens,
             estimated_cost_usd: crate::db::queries::estimate_session_cost(row),
             turns: record.turns,
@@ -781,7 +787,10 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
         println!("Duration: {}s", record.duration_secs);
         println!("CWD: {}", format_cwd(&record.cwd, 80));
         if record.peak_context > 0 {
-            println!("Peak Context: {}", format_peak_context(record.peak_context));
+            println!(
+                "Peak Context: {} (max single-turn input incl. cache)",
+                format_peak_context(record.peak_context)
+            );
         }
 
         if let Some(headline) = &record.headline {
@@ -804,7 +813,7 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
             println!("Ops: commands={} errors={} git={}", cmds, errs, git_ops);
             if record.peak_context > 0 {
                 println!(
-                    "Tokens: in={} out={}  Peak: {}  Turns: {}  Tools: {}",
+                    "Tokens: in(non-cache)={} out={}  Peak(max turn incl. cache): {}  Turns: {}  Tools: {}",
                     record.tokens.input,
                     record.tokens.output,
                     format_peak_context(record.peak_context),
@@ -813,14 +822,14 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
                 );
             } else {
                 println!(
-                    "Tokens: in={} out={}  Turns: {}  Tools: {}",
+                    "Tokens: in(non-cache)={} out={}  Turns: {}  Tools: {}",
                     record.tokens.input, record.tokens.output, record.turns, record.tools_used
                 );
             }
         } else {
             // Full detail mode (--full or explicit fact filter).
             println!(
-                "Tokens: in={} out={}",
+                "Tokens: in(non-cache total)={} out={}",
                 record.tokens.input, record.tokens.output
             );
             println!("Turns: {}", record.turns);
@@ -892,6 +901,17 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
                     tokens.avg_output_per_turn,
                     tokens.estimated_cost_usd,
                 );
+                println!(
+                    "  Input total: {} ({})",
+                    tokens.input_total, tokens.input_total_note
+                );
+                if tokens.peak_context > 0 {
+                    println!(
+                        "  Peak context: {} ({})",
+                        format_peak_context(tokens.peak_context),
+                        tokens.peak_context_note,
+                    );
+                }
                 if tokens.cache_read_input_tokens > 0 || tokens.cache_creation_input_tokens > 0 {
                     println!(
                         "  Cache: read={} creation={}",
