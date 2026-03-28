@@ -70,6 +70,10 @@ struct SessionData {
     timestamp_end: Option<String>,
     duration_seconds: Option<f64>,
     models_used: Vec<String>,
+    total_input_tokens: i64,
+    total_output_tokens: i64,
+    cache_read_tokens: i64,
+    cache_creation_tokens: i64,
     subagent_deltas: Vec<SubagentDelta>,
 }
 
@@ -720,6 +724,11 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
     let mut summary: Option<String> = None;
     let mut timestamps: Vec<String> = Vec::new();
     let mut models: BTreeSet<String> = BTreeSet::new();
+    let mut total_input_tokens = 0i64;
+    let mut total_output_tokens = 0i64;
+    let mut cache_read_tokens = 0i64;
+    let mut cache_creation_tokens = 0i64;
+    let mut usage_keys_seen: BTreeSet<String> = BTreeSet::new();
 
     // -- Build turns from events --
     let mut turns: Vec<Turn> = Vec::new();
@@ -758,6 +767,26 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
 
             EventKind::Summary { text } => {
                 summary = Some(text.clone());
+            }
+
+            EventKind::Usage {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                dedup_key,
+                ..
+            } => {
+                let should_count = dedup_key
+                    .as_ref()
+                    .map(|key| usage_keys_seen.insert(key.clone()))
+                    .unwrap_or(true);
+                if should_count {
+                    total_input_tokens += input_tokens;
+                    total_output_tokens += output_tokens;
+                    cache_read_tokens += cache_read_input_tokens;
+                    cache_creation_tokens += cache_creation_input_tokens;
+                }
             }
 
             EventKind::UserMessage { content } => {
@@ -912,8 +941,7 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
                 }
             }
 
-            EventKind::Usage { .. }
-            | EventKind::SubagentCompletion { .. }
+            EventKind::SubagentCompletion { .. }
             | EventKind::StopSignal { .. } => {}
         }
     }
@@ -1005,6 +1033,10 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
         timestamp_end: ts_end,
         duration_seconds,
         models_used: models.into_iter().collect(),
+        total_input_tokens,
+        total_output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
         subagent_deltas,
     }
 }
@@ -1279,12 +1311,16 @@ fn render_frontmatter(session: &SessionData) -> String {
     let model_str = session
         .models_used
         .first()
-        .map(|m| fmt_model(m))
+        .cloned()
         .unwrap_or_else(|| "unknown".to_string());
 
     format!(
-        "---\nsession_id: {sid}\ndate: {date_str}\nstart: {start_str}\nend: {end_str}\nduration: {duration_str}\nmodel: {model_str}\nturns: {}\n---",
-        session.turns.len()
+        "---\nsession_id: {sid}\ndate: {date_str}\nstart: {start_str}\nend: {end_str}\nduration: {duration_str}\nmodel: {model_str}\nturns: {}\ntotal_input_tokens: {}\ntotal_output_tokens: {}\ncache_read_tokens: {}\ncache_creation_tokens: {}\n---",
+        session.turns.len(),
+        session.total_input_tokens,
+        session.total_output_tokens,
+        session.cache_read_tokens,
+        session.cache_creation_tokens
     )
 }
 
@@ -1870,6 +1906,10 @@ mod tests {
             timestamp_end: Some("2026-03-07T11:30:00Z".to_string()),
             duration_seconds: Some(5400.0),
             models_used: vec!["claude-opus-4-20250514".to_string()],
+            total_input_tokens: 123,
+            total_output_tokens: 456,
+            cache_read_tokens: 78,
+            cache_creation_tokens: 90,
             subagent_deltas: vec![],
         };
         let fm = render_frontmatter(&session);
@@ -1878,8 +1918,12 @@ mod tests {
         assert!(fm.contains("start: 14:00")); // UTC+4
         assert!(fm.contains("end: 15:30"));
         assert!(fm.contains("duration: 1h 30m"));
-        assert!(fm.contains("model: Opus"));
+        assert!(fm.contains("model: claude-opus-4-20250514"));
         assert!(fm.contains("turns: 0"));
+        assert!(fm.contains("total_input_tokens: 123"));
+        assert!(fm.contains("total_output_tokens: 456"));
+        assert!(fm.contains("cache_read_tokens: 78"));
+        assert!(fm.contains("cache_creation_tokens: 90"));
     }
 
     #[test]
