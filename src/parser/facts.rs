@@ -193,7 +193,7 @@ pub fn extract_parsed_session(
                                 turn_number,
                                 fact_type: FactType::AssistantReply,
                                 subject: None,
-                                detail: Some(truncate(trimmed, 500)),
+                                detail: Some(trimmed.to_string()),
                                 exit_code: None,
                                 success: None,
                             });
@@ -525,12 +525,12 @@ mod tests {
     }
 
     #[test]
-    fn assistant_reply_truncated_to_500() {
-        let long_text = "x".repeat(1000);
+    fn assistant_reply_preserves_full_content() {
+        let long_text = "x".repeat(5000);
         let events = vec![assistant_msg("2026-03-07T10:00:00Z", &long_text)];
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
         let detail = result.facts[0].detail.as_ref().unwrap();
-        assert_eq!(detail.len(), 500);
+        assert_eq!(detail.len(), 5000, "full assistant reply content should be preserved");
     }
 
     #[test]
