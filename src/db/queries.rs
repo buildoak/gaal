@@ -782,7 +782,9 @@ pub fn get_index_status(conn: &Connection) -> Result<IndexStatus, GaalError> {
 /// Aggregate token/cost and bucket counts over a filtered session set.
 pub fn get_aggregate(conn: &Connection, filter: &ListFilter) -> Result<AggregateResult, GaalError> {
     let mut aggregate_filter = filter.clone();
-    aggregate_filter.limit = None;
+    // Override limit to fetch all matching sessions — list_sessions defaults
+    // None to 50, which silently truncated aggregate results.
+    aggregate_filter.limit = Some(i64::MAX);
     let sessions = list_sessions(conn, &aggregate_filter)?;
 
     let mut by_engine: HashMap<String, i64> = HashMap::new();

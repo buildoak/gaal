@@ -224,7 +224,7 @@ fn build_precise_aggregate(
     tags: &[String],
 ) -> Result<AggregateJson, GaalError> {
     let mut all_filter = filter.clone();
-    all_filter.limit = None;
+    all_filter.limit = Some(i64::MAX);
 
     let mut rows = queries::list_sessions(conn, &all_filter)?;
     rows = filter_rows_by_all_tags(conn, rows, tags)?;
