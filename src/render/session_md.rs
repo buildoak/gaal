@@ -184,6 +184,11 @@ fn truncate_claude(text: &str) -> String {
     )
 }
 
+fn strip_xml_tags(text: &str) -> String {
+    let re = Regex::new(r"</?[^>]+>").expect("xml tag regex");
+    re.replace_all(text, "").to_string()
+}
+
 /// Detect skill injection messages and replace with succinct note.
 fn filter_skill_injection(text: &str) -> String {
     if text.is_empty() {
@@ -1256,6 +1261,7 @@ fn session_to_markdown(session: &SessionData) -> String {
         .clone()
         .or_else(|| get_first_user_prompt(&session.turns))
         .unwrap_or_else(|| "Untitled".to_string());
+    let summary = strip_xml_tags(summary.trim()).trim().to_string();
     let title = if summary.len() > 80 {
         let truncated: String = summary.chars().take(77).collect();
         format!("{truncated}...")
@@ -1924,6 +1930,12 @@ mod tests {
         assert!(fm.contains("total_output_tokens: 456"));
         assert!(fm.contains("cache_read_tokens: 78"));
         assert!(fm.contains("cache_creation_tokens: 90"));
+    }
+
+    #[test]
+    fn test_strip_xml_tags() {
+        let text = "<environment_context>Hello <b>world</b></environment_context>";
+        assert_eq!(strip_xml_tags(text), "Hello world");
     }
 
     #[test]
