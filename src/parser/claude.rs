@@ -131,20 +131,11 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                 events.push(SessionEvent {
                     timestamp: ts.clone(),
                     kind: EventKind::AssistantMessage {
-                        content: blocks.clone(),
+                        content: blocks,
                         model,
                         stop_reason,
                     },
                 });
-
-                for block in blocks {
-                    if let ContentBlock::ToolUse(tool_use) = block {
-                        events.push(SessionEvent {
-                            timestamp: ts.clone(),
-                            kind: EventKind::ToolUse(tool_use),
-                        });
-                    }
-                }
             }
             "progress" => {
                 if let Some(progress) = extract_agent_progress_event(&record) {
