@@ -79,6 +79,7 @@ pub fn extract_parsed_session(
     let mut total_tools = 0i32;
     let mut total_turns = 0i32;
     let mut usage_keys_seen: HashSet<String> = HashSet::new();
+    let mut error_keys_seen: HashSet<String> = HashSet::new();
 
     // -- Facts --
     let mut facts: Vec<Fact> = Vec::new();
@@ -303,19 +304,26 @@ pub fn extract_parsed_session(
                 // Certain non-shell tools are explicitly excluded from error classification.
                 let should_create_error_fact = !is_blocked_tool && (*is_error || shell_non_zero_exit);
                 if should_create_error_fact {
-                    facts.push(Fact {
-                        id: None,
-                        session_id: String::new(),
-                        ts: ts_str.clone(),
-                        turn_number,
-                        fact_type: FactType::Error,
-                        subject: state.as_ref().and_then(|s| s.subject.clone()),
-                        detail: output_text
-                            .clone()
-                            .or_else(|| state.as_ref().and_then(|s| s.detail.clone())),
-                        exit_code,
-                        success: Some(false),
-                    });
+                    let error_key = if !tool_use_id.is_empty() {
+                        format!("tool:{tool_use_id}")
+                    } else {
+                        format!("ts:{ts_str}|exit:{:?}", exit_code)
+                    };
+                    if error_keys_seen.insert(error_key) {
+                        facts.push(Fact {
+                            id: None,
+                            session_id: String::new(),
+                            ts: ts_str.clone(),
+                            turn_number,
+                            fact_type: FactType::Error,
+                            subject: state.as_ref().and_then(|s| s.subject.clone()),
+                            detail: output_text
+                                .clone()
+                                .or_else(|| state.as_ref().and_then(|s| s.detail.clone())),
+                            exit_code,
+                            success: Some(false),
+                        });
+                    }
                 }
             }
 
@@ -717,6 +725,27 @@ mod tests {
             .collect();
         assert_eq!(error_facts.len(), 1);
         assert_eq!(error_facts[0].success, Some(false));
+    }
+
+    #[test]
+    fn duplicate_error_tool_results_for_same_call_are_deduplicated() {
+        let events = vec![
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "exec_command",
+                json!({"cmd": "cargo build"}),
+            ),
+            tool_result_event("2026-03-07T10:01:00Z", "call_1", "Exit code 101", true),
+            tool_result_event("2026-03-07T10:01:01Z", "call_1", "Exit code 101", true),
+        ];
+        let result = extract_parsed_session(&events, Engine::Codex, Path::new("test.jsonl"));
+        let error_facts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "error")
+            .collect();
+        assert_eq!(error_facts.len(), 1);
     }
 
     #[test]

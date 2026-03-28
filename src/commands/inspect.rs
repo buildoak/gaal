@@ -546,10 +546,11 @@ fn collect_commands(facts: &[Fact]) -> Vec<CommandEntry> {
 
 fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
     let mut out = Vec::new();
+    let mut seen: std::collections::HashMap<(String, i32), usize> = std::collections::HashMap::new();
 
     for fact in facts {
         if matches!(fact.fact_type, FactType::Error) {
-            out.push(ErrorEntry {
+            let entry = ErrorEntry {
                 tool: fact.subject.clone().unwrap_or_else(|| "tool".to_string()),
                 cmd: fact
                     .subject
@@ -559,7 +560,14 @@ fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
                 exit_code: fact.exit_code.unwrap_or(1),
                 snippet: truncate(&fact.detail.clone().unwrap_or_else(|| "".to_string()), 280),
                 ts: fact.ts.clone(),
-            });
+            };
+            let key = (entry.cmd.clone(), entry.exit_code);
+            if let Some(idx) = seen.get(&key).copied() {
+                out[idx] = entry;
+            } else {
+                seen.insert(key, out.len());
+                out.push(entry);
+            }
             continue;
         }
 
@@ -569,13 +577,18 @@ fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
                 .clone()
                 .or_else(|| fact.subject.clone())
                 .unwrap_or_else(|| "".to_string());
-            out.push(ErrorEntry {
+            let entry = ErrorEntry {
                 tool: "Bash".to_string(),
                 cmd: cmd.clone(),
                 exit_code: fact.exit_code.unwrap_or(1),
                 snippet: truncate(&cmd, 280),
                 ts: fact.ts.clone(),
-            });
+            };
+            let key = (entry.cmd.clone(), entry.exit_code);
+            if let std::collections::hash_map::Entry::Vacant(slot) = seen.entry(key) {
+                slot.insert(out.len());
+                out.push(entry);
+            }
         }
     }
 
