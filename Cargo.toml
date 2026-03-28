@@ -22,7 +22,6 @@ tantivy = "0.22"
 toml = "0.8"
 dirs = "5"
 regex = "1"
-libproc = "0.14"
 rand = "0.9"
 terminal_size = "0.4"
 
