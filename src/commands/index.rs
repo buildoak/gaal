@@ -23,6 +23,7 @@ use crate::parser::types::Engine;
 use crate::parser::{parse_session, parse_session_incremental, ParsedSession};
 
 const EPOCH_RFC3339: &str = "1970-01-01T00:00:00Z";
+const SUSPICIOUS_PEAK_CONTEXT_THRESHOLD: i64 = 10_000_000;
 
 /// Arguments for `gaal index backfill`.
 #[derive(Debug, Clone)]
@@ -347,9 +348,13 @@ pub(crate) fn index_discovered_session(
 ) -> Result<IndexOutcome, GaalError> {
     let existing = get_session(conn, &discovered.id)?;
     let file_size_i64 = u64_to_i64(discovered.file_size)?;
+    let existing_peak_context_suspicious = existing
+        .as_ref()
+        .map(|row| row.peak_context > SUSPICIOUS_PEAK_CONTEXT_THRESHOLD)
+        .unwrap_or(false);
 
     if let Some(row) = existing.as_ref() {
-        if !force && row.last_indexed_offset == file_size_i64 {
+        if !force && !existing_peak_context_suspicious && row.last_indexed_offset == file_size_i64 {
             return Ok(IndexOutcome::Skipped);
         }
     }
@@ -358,6 +363,7 @@ pub(crate) fn index_discovered_session(
         .as_ref()
         .map(|row| {
             !force
+                && row.peak_context <= SUSPICIOUS_PEAK_CONTEXT_THRESHOLD
                 && row.last_indexed_offset >= 0
                 && (row.last_indexed_offset as u64) < discovered.file_size
         })
