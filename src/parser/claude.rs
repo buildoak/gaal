@@ -171,14 +171,19 @@ fn extract_claude_usage_event(record: &Value) -> Option<EventKind> {
     if usage.is_null() {
         return None;
     }
+    // input_tokens from Claude API is the raw non-cached input only.
+    // Cache fields are separate — do NOT sum them into input_tokens.
     let input_tokens = as_i64(usage.get("input_tokens"));
     let cache_creation_input_tokens = as_i64(usage.get("cache_creation_input_tokens"));
     let cache_read_input_tokens = as_i64(usage.get("cache_read_input_tokens"));
+    // Future-proofing: Claude may emit reasoning_tokens in usage.
+    let reasoning_tokens = as_i64(usage.get("reasoning_tokens"));
     Some(EventKind::Usage {
-        input_tokens: input_tokens + cache_creation_input_tokens + cache_read_input_tokens,
+        input_tokens,
         output_tokens: as_i64(record.pointer("/message/usage/output_tokens")),
         cache_read_input_tokens,
         cache_creation_input_tokens,
+        reasoning_tokens,
         dedup_key: record
             .pointer("/message/id")
             .and_then(Value::as_str)

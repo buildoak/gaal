@@ -85,6 +85,8 @@ struct TokenBreakdown {
     output_total: u64,
     cache_read_input_tokens: i64,
     cache_creation_input_tokens: i64,
+    reasoning_tokens: i64,
+    estimated_cost_usd: f64,
     turns: u32,
     avg_input_per_turn: u64,
     avg_output_per_turn: u64,
@@ -360,12 +362,20 @@ fn build_inspect_data(
         None
     };
     let token_breakdown = if args.tokens {
-        let (cache_read, cache_creation) = extract_cache_tokens(row);
+        // Prefer DB-stored cache tokens; fall back to re-parsing JSONL if DB has zeros
+        // (handles sessions indexed before the schema migration).
+        let (cache_read, cache_creation) = if row.cache_read_tokens > 0 || row.cache_creation_tokens > 0 {
+            (row.cache_read_tokens, row.cache_creation_tokens)
+        } else {
+            extract_cache_tokens(row)
+        };
         Some(TokenBreakdown {
             input_total: record.tokens.input,
             output_total: record.tokens.output,
             cache_read_input_tokens: cache_read,
             cache_creation_input_tokens: cache_creation,
+            reasoning_tokens: row.reasoning_tokens,
+            estimated_cost_usd: crate::db::queries::estimate_session_cost(row),
             turns: record.turns,
             avg_input_per_turn: avg_tokens(record.tokens.input, record.turns),
             avg_output_per_turn: avg_tokens(record.tokens.output, record.turns),
@@ -861,14 +871,21 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
         if args.tokens {
             if let Some(tokens) = &data.token_breakdown {
                 println!(
-                    "Token breakdown: turns={} avg_in/turn={} avg_out/turn={}",
-                    tokens.turns, tokens.avg_input_per_turn, tokens.avg_output_per_turn
+                    "Token breakdown: turns={} avg_in/turn={} avg_out/turn={} cost=${:.2}",
+                    tokens.turns, tokens.avg_input_per_turn, tokens.avg_output_per_turn,
+                    tokens.estimated_cost_usd,
                 );
                 if tokens.cache_read_input_tokens > 0 || tokens.cache_creation_input_tokens > 0 {
                     println!(
                         "  Cache: read={} creation={}",
                         format_tokens(tokens.cache_read_input_tokens),
                         format_tokens(tokens.cache_creation_input_tokens),
+                    );
+                }
+                if tokens.reasoning_tokens > 0 {
+                    println!(
+                        "  Reasoning: {}",
+                        format_tokens(tokens.reasoning_tokens),
                     );
                 }
             }

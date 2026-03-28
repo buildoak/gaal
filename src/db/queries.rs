@@ -22,6 +22,9 @@ pub struct SessionRow {
     pub jsonl_path: String,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub reasoning_tokens: i64,
     pub total_tools: i64,
     pub total_turns: i64,
     pub peak_context: i64,
@@ -129,13 +132,15 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
         r#"
         INSERT INTO sessions (
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
-            total_turns, peak_context, last_indexed_offset
+            session_type, jsonl_path, total_input_tokens, total_output_tokens,
+            cache_read_tokens, cache_creation_tokens, reasoning_tokens,
+            total_tools, total_turns, peak_context, last_indexed_offset
         )
         VALUES (
             :id, :engine, :model, :cwd, :started_at, :ended_at, :exit_signal, :last_event_at,
-            :session_type, :jsonl_path, :total_input_tokens, :total_output_tokens, :total_tools,
-            :total_turns, :peak_context, :last_indexed_offset
+            :session_type, :jsonl_path, :total_input_tokens, :total_output_tokens,
+            :cache_read_tokens, :cache_creation_tokens, :reasoning_tokens,
+            :total_tools, :total_turns, :peak_context, :last_indexed_offset
         )
         ON CONFLICT(id) DO UPDATE SET
             engine = excluded.engine,
@@ -149,6 +154,9 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             jsonl_path = excluded.jsonl_path,
             total_input_tokens = excluded.total_input_tokens,
             total_output_tokens = excluded.total_output_tokens,
+            cache_read_tokens = excluded.cache_read_tokens,
+            cache_creation_tokens = excluded.cache_creation_tokens,
+            reasoning_tokens = excluded.reasoning_tokens,
             total_tools = excluded.total_tools,
             total_turns = excluded.total_turns,
             peak_context = excluded.peak_context,
@@ -167,6 +175,9 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             ":jsonl_path": &session.jsonl_path,
             ":total_input_tokens": session.total_input_tokens,
             ":total_output_tokens": session.total_output_tokens,
+            ":cache_read_tokens": session.cache_read_tokens,
+            ":cache_creation_tokens": session.cache_creation_tokens,
+            ":reasoning_tokens": session.reasoning_tokens,
             ":total_tools": session.total_tools,
             ":total_turns": session.total_turns,
             ":peak_context": session.peak_context,
@@ -333,8 +344,9 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<SessionRow>, Ga
         r#"
         SELECT
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            session_type, jsonl_path, total_input_tokens, total_output_tokens, total_tools,
-            total_turns, peak_context, last_indexed_offset
+            session_type, jsonl_path, total_input_tokens, total_output_tokens,
+            cache_read_tokens, cache_creation_tokens, reasoning_tokens,
+            total_tools, total_turns, peak_context, last_indexed_offset
         FROM sessions
         WHERE id = :id
         "#,
@@ -367,8 +379,9 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
         r#"
         SELECT
             s.id, s.engine, s.model, s.cwd, s.started_at, s.ended_at, s.exit_signal, s.last_event_at,
-            s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens, s.total_tools,
-            s.total_turns, s.peak_context, s.last_indexed_offset
+            s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens,
+            s.cache_read_tokens, s.cache_creation_tokens, s.reasoning_tokens,
+            s.total_tools, s.total_turns, s.peak_context, s.last_indexed_offset
         FROM sessions s
         WHERE (:engine IS NULL OR s.engine = :engine)
           AND (:since IS NULL OR s.started_at >= :since)
@@ -790,10 +803,12 @@ pub fn get_aggregate(conn: &Connection, filter: &ListFilter) -> Result<Aggregate
     let mut by_engine: HashMap<String, i64> = HashMap::new();
     let mut total_input_tokens = 0_i64;
     let mut total_output_tokens = 0_i64;
+    let mut total_cost = 0.0_f64;
 
     for session in &sessions {
         total_input_tokens += session.total_input_tokens;
         total_output_tokens += session.total_output_tokens;
+        total_cost += estimate_session_cost(session);
         *by_engine.entry(session.engine.clone()).or_insert(0) += 1;
     }
 
@@ -801,7 +816,7 @@ pub fn get_aggregate(conn: &Connection, filter: &ListFilter) -> Result<Aggregate
         sessions: sessions.len() as i64,
         total_input_tokens,
         total_output_tokens,
-        estimated_cost_usd: estimate_cost_usd(total_input_tokens, total_output_tokens),
+        estimated_cost_usd: (total_cost * 100.0).round() / 100.0,
         by_engine,
     })
 }
@@ -822,6 +837,9 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         jsonl_path: row.get("jsonl_path")?,
         total_input_tokens: row.get("total_input_tokens")?,
         total_output_tokens: row.get("total_output_tokens")?,
+        cache_read_tokens: row.get::<_, Option<i64>>("cache_read_tokens")?.unwrap_or(0),
+        cache_creation_tokens: row.get::<_, Option<i64>>("cache_creation_tokens")?.unwrap_or(0),
+        reasoning_tokens: row.get::<_, Option<i64>>("reasoning_tokens")?.unwrap_or(0),
         total_tools: row.get("total_tools")?,
         total_turns: row.get("total_turns")?,
         peak_context: row.get::<_, Option<i64>>("peak_context")?.unwrap_or(0),
@@ -829,11 +847,36 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
     })
 }
 
-fn estimate_cost_usd(total_input_tokens: i64, total_output_tokens: i64) -> f64 {
-    const INPUT_USD_PER_MTOK: f64 = 3.0;
-    const OUTPUT_USD_PER_MTOK: f64 = 15.0;
-    let cost = (total_input_tokens as f64 / 1_000_000.0) * INPUT_USD_PER_MTOK
-        + (total_output_tokens as f64 / 1_000_000.0) * OUTPUT_USD_PER_MTOK;
+/// Model-aware cost rates: (input, output, cache_read, cache_write) per MTok.
+fn cost_rates(model: &str) -> (f64, f64, f64, f64) {
+    let m = model.to_lowercase();
+    // gpt-5.4-mini must be checked before gpt-5.4
+    if m.contains("gpt-5.4-mini") {
+        (0.15, 0.60, 0.015, 0.0)
+    } else if m.contains("gpt-5.4") {
+        (2.50, 10.0, 0.25, 0.0)
+    } else if m.contains("opus") {
+        (15.0, 75.0, 1.5, 18.75)
+    } else if m.contains("haiku") {
+        (0.25, 1.25, 0.025, 0.3)
+    } else if m.contains("sonnet") {
+        (3.0, 15.0, 0.3, 3.75)
+    } else {
+        (3.0, 15.0, 0.3, 3.75) // default sonnet
+    }
+}
+
+/// Estimate cost for a single session using model-aware rates.
+/// Reasoning tokens are charged at the output rate.
+pub fn estimate_session_cost(row: &SessionRow) -> f64 {
+    let model = row.model.as_deref().unwrap_or("sonnet");
+    let (rate_in, rate_out, rate_cr, rate_cw) = cost_rates(model);
+    let mtok = 1_000_000.0_f64;
+    let cost = (row.total_input_tokens as f64 / mtok) * rate_in
+        + (row.total_output_tokens as f64 / mtok) * rate_out
+        + (row.cache_read_tokens as f64 / mtok) * rate_cr
+        + (row.cache_creation_tokens as f64 / mtok) * rate_cw
+        + (row.reasoning_tokens as f64 / mtok) * rate_out;
     (cost * 100.0).round() / 100.0
 }
 

@@ -232,20 +232,18 @@ fn build_precise_aggregate(
     let mut by_engine: HashMap<String, i64> = HashMap::new();
     let mut total_input_tokens = 0_i64;
     let mut total_output_tokens = 0_i64;
-    let mut sessions = 0_i64;
 
-    for row in rows {
-        sessions += 1;
+    for row in &rows {
         total_input_tokens += row.total_input_tokens;
         total_output_tokens += row.total_output_tokens;
         *by_engine.entry(row.engine.clone()).or_insert(0) += 1;
     }
 
     Ok(AggregateJson {
-        sessions,
+        sessions: rows.len() as i64,
         total_input_tokens,
         total_output_tokens,
-        estimated_cost_usd: estimate_cost_usd(total_input_tokens, total_output_tokens),
+        estimated_cost_usd: estimate_cost_usd_for_rows(&rows),
         by_engine,
     })
 }
@@ -480,12 +478,9 @@ fn u64_to_i64_saturating(value: u64) -> i64 {
     }
 }
 
-fn estimate_cost_usd(total_input_tokens: i64, total_output_tokens: i64) -> f64 {
-    const INPUT_USD_PER_MTOK: f64 = 3.0;
-    const OUTPUT_USD_PER_MTOK: f64 = 15.0;
-    let cost = (total_input_tokens as f64 / 1_000_000.0) * INPUT_USD_PER_MTOK
-        + (total_output_tokens as f64 / 1_000_000.0) * OUTPUT_USD_PER_MTOK;
-    (cost * 100.0).round() / 100.0
+fn estimate_cost_usd_for_rows(rows: &[SessionRow]) -> f64 {
+    let total: f64 = rows.iter().map(|r| queries::estimate_session_cost(r)).sum();
+    (total * 100.0).round() / 100.0
 }
 
 /// Truncate cwd to show only the last path component (no slashes)

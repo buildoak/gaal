@@ -33,6 +33,7 @@ pub enum EventKind {
         output_tokens: i64,
         cache_read_input_tokens: i64,
         cache_creation_input_tokens: i64,
+        reasoning_tokens: i64,
         dedup_key: Option<String>,
     },
     SubagentProgress {

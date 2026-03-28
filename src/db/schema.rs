@@ -57,6 +57,26 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
         .ok();
     }
 
+    // Token accounting columns: cache_read_tokens, cache_creation_tokens, reasoning_tokens.
+    for col in ["cache_read_tokens", "cache_creation_tokens", "reasoning_tokens"] {
+        let has_col: bool = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='{col}'"
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap_or(false);
+        if !has_col {
+            conn.execute_batch(&format!(
+                "ALTER TABLE sessions ADD COLUMN {col} INTEGER DEFAULT 0;"
+            ))
+            .ok();
+        }
+    }
+
     conn.execute_batch(DB_SCHEMA).map_err(map_db_err)?;
     Ok(())
 }

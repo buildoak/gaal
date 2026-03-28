@@ -61,10 +61,16 @@ pub struct ParsedSession {
     pub meta: SessionMeta,
     /// Session facts.
     pub facts: Vec<crate::model::Fact>,
-    /// Aggregate input tokens.
+    /// Aggregate input tokens (non-cached portion only).
     pub total_input_tokens: i64,
     /// Aggregate output tokens.
     pub total_output_tokens: i64,
+    /// Aggregate cache read tokens.
+    pub cache_read_tokens: i64,
+    /// Aggregate cache creation tokens.
+    pub cache_creation_tokens: i64,
+    /// Aggregate reasoning tokens (Codex reasoning_output_tokens, future Claude).
+    pub reasoning_tokens: i64,
     /// Maximum input tokens seen in any single API turn (peak context window usage).
     pub peak_context: i64,
     /// Total tool calls seen.

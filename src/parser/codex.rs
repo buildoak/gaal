@@ -188,17 +188,30 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                             .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)))
                             .map(|n| format!("codex_tc_{n}"));
 
+                        let raw_input = as_i64(
+                            record.pointer("/payload/info/last_token_usage/input_tokens"),
+                        );
+                        // Codex uses `cached_input_tokens` (input_tokens includes cached).
+                        // Take max of both field names for robustness.
+                        let cached = std::cmp::max(
+                            as_i64(record.pointer("/payload/info/last_token_usage/cached_input_tokens")),
+                            as_i64(record.pointer("/payload/info/last_token_usage/cache_read_input_tokens")),
+                        );
+                        let reasoning = as_i64(
+                            record.pointer("/payload/info/last_token_usage/reasoning_output_tokens"),
+                        );
+
                         events.push(SessionEvent {
                             timestamp: ts.clone(),
                             kind: EventKind::Usage {
-                                input_tokens: as_i64(
-                                    record.pointer("/payload/info/last_token_usage/input_tokens"),
-                                ),
+                                // Subtract cached from raw to avoid double-counting.
+                                input_tokens: (raw_input - cached).max(0),
                                 output_tokens: as_i64(
                                     record.pointer("/payload/info/last_token_usage/output_tokens"),
                                 ),
-                                cache_read_input_tokens: 0,
+                                cache_read_input_tokens: cached,
                                 cache_creation_input_tokens: 0,
+                                reasoning_tokens: reasoning,
                                 dedup_key,
                             },
                         });
@@ -319,11 +332,18 @@ fn extract_response_item_usage_event(record: &Value) -> Option<EventKind> {
     if usage.is_null() {
         return None;
     }
+    let raw_input = as_i64(usage.get("input_tokens"));
+    let cached = std::cmp::max(
+        as_i64(usage.get("cached_input_tokens")),
+        as_i64(usage.get("cache_read_input_tokens")),
+    );
+    let reasoning = as_i64(usage.get("reasoning_output_tokens"));
     Some(EventKind::Usage {
-        input_tokens: as_i64(record.pointer("/payload/usage/input_tokens")),
-        output_tokens: as_i64(record.pointer("/payload/usage/output_tokens")),
-        cache_read_input_tokens: 0,
+        input_tokens: (raw_input - cached).max(0),
+        output_tokens: as_i64(usage.get("output_tokens")),
+        cache_read_input_tokens: cached,
         cache_creation_input_tokens: 0,
+        reasoning_tokens: reasoning,
         dedup_key: record
             .pointer("/payload/id")
             .or_else(|| record.pointer("/payload/call_id"))

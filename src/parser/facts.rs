@@ -72,6 +72,9 @@ pub fn extract_parsed_session(
     // -- Counters --
     let mut total_input_tokens = 0i64;
     let mut total_output_tokens = 0i64;
+    let mut cache_read_tokens = 0i64;
+    let mut cache_creation_tokens = 0i64;
+    let mut reasoning_tokens = 0i64;
     let mut peak_context = 0i64;
     let mut total_tools = 0i32;
     let mut total_turns = 0i32;
@@ -118,8 +121,10 @@ pub fn extract_parsed_session(
             EventKind::Usage {
                 input_tokens,
                 output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                reasoning_tokens: evt_reasoning,
                 dedup_key,
-                ..
             } => {
                 let should_count = dedup_key
                     .as_ref()
@@ -128,9 +133,13 @@ pub fn extract_parsed_session(
                 if should_count {
                     total_input_tokens += input_tokens;
                     total_output_tokens += output_tokens;
-                    // Track peak context: the maximum input_tokens in any single turn.
-                    if *input_tokens > peak_context {
-                        peak_context = *input_tokens;
+                    cache_read_tokens += cache_read_input_tokens;
+                    cache_creation_tokens += cache_creation_input_tokens;
+                    reasoning_tokens += evt_reasoning;
+                    // Track peak context: full input for the turn (non-cached + cache_read + cache_creation).
+                    let full_input = input_tokens + cache_read_input_tokens + cache_creation_input_tokens;
+                    if full_input > peak_context {
+                        peak_context = full_input;
                     }
                 }
             }
@@ -342,6 +351,9 @@ pub fn extract_parsed_session(
         facts,
         total_input_tokens,
         total_output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+        reasoning_tokens,
         peak_context,
         total_tools,
         total_turns,
@@ -425,6 +437,7 @@ mod tests {
                 output_tokens: output,
                 cache_read_input_tokens: 0,
                 cache_creation_input_tokens: 0,
+                reasoning_tokens: 0,
                 dedup_key: Some(key.to_string()),
             },
         }
@@ -770,6 +783,7 @@ mod tests {
                     output_tokens: 200,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    reasoning_tokens: 0,
                     dedup_key: None,
                 },
             },
@@ -780,6 +794,7 @@ mod tests {
                     output_tokens: 100,
                     cache_read_input_tokens: 0,
                     cache_creation_input_tokens: 0,
+                    reasoning_tokens: 0,
                     dedup_key: None,
                 },
             },
