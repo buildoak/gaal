@@ -1,5 +1,7 @@
 //! `gaal index` — build, manage, and inspect the session index.
 
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -352,9 +354,18 @@ pub(crate) fn index_discovered_session(
         .as_ref()
         .map(|row| row.peak_context > SUSPICIOUS_PEAK_CONTEXT_THRESHOLD)
         .unwrap_or(false);
+    let existing_needs_full_reparse = existing
+        .as_ref()
+        .map(|row| session_needs_full_reparse(conn, discovered, row))
+        .transpose()?
+        .unwrap_or(false);
 
     if let Some(row) = existing.as_ref() {
-        if !force && !existing_peak_context_suspicious && row.last_indexed_offset == file_size_i64 {
+        if !force
+            && !existing_peak_context_suspicious
+            && !existing_needs_full_reparse
+            && row.last_indexed_offset == file_size_i64
+        {
             return Ok(IndexOutcome::Skipped);
         }
     }
@@ -363,6 +374,7 @@ pub(crate) fn index_discovered_session(
         .as_ref()
         .map(|row| {
             !force
+                && !existing_needs_full_reparse
                 && row.peak_context <= SUSPICIOUS_PEAK_CONTEXT_THRESHOLD
                 && row.last_indexed_offset >= 0
                 && (row.last_indexed_offset as u64) < discovered.file_size
@@ -390,7 +402,9 @@ pub(crate) fn index_discovered_session(
         // acquisition cycles under parallel load.  Savepoints nest safely,
         // unlike unchecked_transaction() which crashes with "nested transaction"
         // when init_db leaves a phantom transaction open (I16/I17).
-        let tx = conn.savepoint_with_name("index_session").map_err(GaalError::from)?;
+        let tx = conn
+            .savepoint_with_name("index_session")
+            .map_err(GaalError::from)?;
         upsert_session(&tx, &merged_row)?;
         if !normalized_facts.is_empty() {
             insert_facts_batch(&tx, &normalized_facts)?;
@@ -416,8 +430,7 @@ pub(crate) fn index_discovered_session(
         .as_ref()
         .map(|row| row.id.as_str())
         .unwrap_or(&discovered.id);
-    let mut session_row =
-        build_full_session_row(&parsed, &discovered.path, file_size_i64);
+    let mut session_row = build_full_session_row(&parsed, &discovered.path, file_size_i64);
     session_row.id = target_id.to_string();
     if let Some(row) = existing.as_ref() {
         session_row.session_type = row.session_type.clone();
@@ -429,7 +442,9 @@ pub(crate) fn index_discovered_session(
     // Savepoints nest safely, unlike unchecked_transaction() which crashes
     // with "nested transaction" when init_db leaves a phantom transaction
     // open (I16/I17).
-    let tx = conn.savepoint_with_name("index_full").map_err(GaalError::from)?;
+    let tx = conn
+        .savepoint_with_name("index_full")
+        .map_err(GaalError::from)?;
     if let Some(row) = existing.as_ref() {
         tx.execute(
             "DELETE FROM facts WHERE session_id = :session_id",
@@ -444,6 +459,75 @@ pub(crate) fn index_discovered_session(
     }
     tx.commit().map_err(GaalError::from)?;
     Ok(IndexOutcome::Indexed)
+}
+
+fn session_needs_full_reparse(
+    conn: &rusqlite::Connection,
+    discovered: &DiscoveredSession,
+    row: &SessionRow,
+) -> Result<bool, GaalError> {
+    if discovered.engine == Engine::Claude
+        && row.total_tools == 0
+        && claude_jsonl_contains_inline_tool_use(&discovered.path)?
+    {
+        return Ok(true);
+    }
+
+    let has_invalid_codex_error_rows = discovered.engine == Engine::Codex
+        && session_has_codex_error_rows_with_zero_exit_code(conn, &row.id)?;
+
+    Ok(has_invalid_codex_error_rows)
+}
+
+fn claude_jsonl_contains_inline_tool_use(path: &Path) -> Result<bool, GaalError> {
+    let file = File::open(path).map_err(GaalError::Io)?;
+    let reader = BufReader::new(file);
+
+    for line_result in reader.lines() {
+        let line = line_result.map_err(GaalError::Io)?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(record) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        if record.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+
+        let Some(items) = record.pointer("/message/content").and_then(Value::as_array) else {
+            continue;
+        };
+        if items
+            .iter()
+            .any(|item| item.get("type").and_then(Value::as_str) == Some("tool_use"))
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn session_has_codex_error_rows_with_zero_exit_code(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<bool, GaalError> {
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM facts
+            WHERE session_id = :session_id
+              AND fact_type = 'error'
+              AND exit_code = 0
+        )",
+        named_params! { ":session_id": session_id },
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists > 0)
+    .map_err(GaalError::from)
 }
 
 fn build_full_session_row(
@@ -944,4 +1028,51 @@ fn first_string_vec(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Vec<
         }
     }
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("gaal-index-{unique}-{name}.jsonl"))
+    }
+
+    #[test]
+    fn detects_inline_claude_tool_use_in_assistant_messages() {
+        let path = temp_path("claude-tools");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{\"file_path\":\"/tmp/a\"}}]}}\n",
+                "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}\n"
+            ),
+        )
+        .unwrap();
+
+        let contains_tools = claude_jsonl_contains_inline_tool_use(&path).unwrap();
+        let _ = fs::remove_file(&path);
+
+        assert!(contains_tools);
+    }
+
+    #[test]
+    fn ignores_claude_assistant_messages_without_tool_use_blocks() {
+        let path = temp_path("claude-no-tools");
+        fs::write(
+            &path,
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
+        )
+        .unwrap();
+
+        let contains_tools = claude_jsonl_contains_inline_tool_use(&path).unwrap();
+        let _ = fs::remove_file(&path);
+
+        assert!(!contains_tools);
+    }
 }
