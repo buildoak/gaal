@@ -22,6 +22,10 @@ format = "eywa"
 [agent-mux]
 # Binary name or absolute path to agent-mux
 path = "agent-mux"
+# role = "researcher"
+# variant = ""
+timeout_secs = 120
+# effort = "high"
 
 [stuck]
 # Seconds of silence before a session is considered stuck

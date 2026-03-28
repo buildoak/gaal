@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::commands::index::{index_discovered_session, IndexOutcome};
-use crate::config::{gaal_home, load_config, GaalConfig};
+use crate::config::{gaal_home, load_config, AgentMuxConfig, GaalConfig};
 use crate::db::open_db;
 use crate::db::queries::{get_facts, get_session, upsert_handoff, SessionRow};
 use crate::discovery::DiscoveredSession;
@@ -470,15 +470,19 @@ fn process_session_handoff(
     let max_attempts = 2;
     let mut response = String::new();
     let mut extracted = ExtractedMetadata::default();
+    let timeout_secs = config
+        .agent_mux
+        .timeout_secs
+        .unwrap_or(config.llm.timeout_secs);
     for attempt in 1..=max_attempts {
         response = invoke_agent_mux(
-            &config.agent_mux.path,
+            &config.agent_mux,
             engine,
             model,
             session.cwd.as_deref().unwrap_or("."),
             prompt,
             &context,
-            config.llm.timeout_secs,
+            timeout_secs,
         )?;
         extracted = extract_metadata(&response);
         match validate_handoff_metadata(
@@ -511,6 +515,7 @@ fn process_session_handoff(
         build_handoff_frontmatter(session, &extracted, session_engine, session_model);
     let full_content = format!("{}{}", frontmatter, response);
     let handoff_path = write_handoff_markdown(session, &full_content)?;
+    let generated_by = build_generated_by_label(&config.agent_mux, engine, model);
 
     let record = HandoffRecord {
         session_id: session.id.clone(),
@@ -520,7 +525,7 @@ fn process_session_handoff(
         substance: extracted.substance,
         duration_minutes: duration_minutes(session),
         generated_at: Some(Utc::now().to_rfc3339()),
-        generated_by: Some(format!("{engine}/{model}")),
+        generated_by: Some(generated_by),
         content_path: Some(handoff_path.to_string_lossy().to_string()),
     };
     upsert_handoff(conn, &record)?;
@@ -1229,7 +1234,7 @@ fn bullet_lines(values: &[String], max: usize) -> String {
 }
 
 fn invoke_agent_mux(
-    binary: &str,
+    mux_config: &AgentMuxConfig,
     engine: &str,
     model: &str,
     cwd: &str,
@@ -1238,20 +1243,41 @@ fn invoke_agent_mux(
     timeout_secs: u64,
 ) -> Result<String, GaalError> {
     let request = format!("{prompt}\n\n---\n\nSession context:\n{context}");
-    let mux_timeout_ms = timeout_secs
-        .saturating_sub(5)
-        .saturating_mul(1_000)
-        .max(10_000);
+    let mux_timeout_secs = timeout_secs.saturating_sub(5).max(10);
+    let role = mux_config.role.as_deref().map(str::trim).filter(|role| !role.is_empty());
+    let variant = mux_config
+        .variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|variant| !variant.is_empty());
+    let effort = mux_config
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty());
 
-    let child = Command::new(binary)
-        .arg("--engine")
-        .arg(engine)
-        .arg("--model")
-        .arg(model)
+    let mut command = Command::new(&mux_config.path);
+    if let Some(role) = role {
+        command.arg("-R").arg(role);
+        if let Some(variant) = variant {
+            command.arg("--variant").arg(variant);
+        }
+        if let Some(effort) = effort {
+            command.arg("--effort").arg(effort);
+        }
+    } else {
+        command
+            .arg("--engine")
+            .arg(engine)
+            .arg("--model")
+            .arg(model);
+    }
+
+    let child = command
+        .arg("--timeout")
+        .arg(mux_timeout_secs.to_string())
         .arg("--cwd")
         .arg(cwd)
-        .arg("--timeout")
-        .arg(mux_timeout_ms.to_string())
         .arg(request)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1378,13 +1404,67 @@ fn parse_agent_mux_response(stdout: &str) -> Result<String, GaalError> {
 }
 
 fn value_to_response(value: Value) -> Result<String, GaalError> {
+    if value.get("schema_version").is_some() {
+        return match value.get("status").and_then(Value::as_str) {
+            Some("completed") => extract_agent_mux_response(&value).ok_or_else(|| {
+                GaalError::ParseError("agent-mux JSON output missing `response` field".to_string())
+            }),
+            Some("timed_out") => {
+                let mut message = "agent-mux timed out".to_string();
+                if let Some(partial) = value.get("partial").and_then(Value::as_bool) {
+                    message.push_str(&format!("; partial={partial}"));
+                }
+                if let Some(recoverable) = value.get("recoverable").and_then(Value::as_bool) {
+                    message.push_str(&format!("; recoverable={recoverable}"));
+                }
+                if let Some(response) = extract_agent_mux_response(&value) {
+                    message.push_str(&format!("; partial response: {response}"));
+                }
+                Err(GaalError::Other(anyhow!(message)))
+            }
+            Some("failed") => {
+                let error = extract_agent_mux_error(&value)
+                    .unwrap_or_else(|| "agent-mux reported failure".to_string());
+                Err(GaalError::Other(anyhow!(error)))
+            }
+            Some(status) => Err(GaalError::ParseError(format!(
+                "agent-mux returned unknown status `{status}`"
+            ))),
+            None => Err(GaalError::ParseError(
+                "agent-mux JSON output missing `status` field".to_string(),
+            )),
+        };
+    }
+
+    if value.get("timed_out").and_then(Value::as_bool) == Some(true) {
+        let mut message = "agent-mux timed out".to_string();
+        if let Some(response) = extract_agent_mux_response(&value) {
+            message.push_str(&format!("; partial response: {response}"));
+        }
+        return Err(GaalError::Other(anyhow!(message)));
+    }
+
+    if value.get("completed").and_then(Value::as_bool) == Some(false) {
+        let mut message = "agent-mux did not complete".to_string();
+        if let Some(error) = extract_agent_mux_error(&value) {
+            message.push_str(&format!("; {error}"));
+        }
+        return Err(GaalError::Other(anyhow!(message)));
+    }
+
     if value.get("success").and_then(Value::as_bool) == Some(false) {
         let error = extract_agent_mux_error(&value)
             .unwrap_or_else(|| "agent-mux reported failure".to_string());
         return Err(GaalError::Other(anyhow!(error)));
     }
 
-    let response = value
+    extract_agent_mux_response(&value).ok_or_else(|| {
+        GaalError::ParseError("agent-mux JSON output missing `response` field".to_string())
+    })
+}
+
+fn extract_agent_mux_response(value: &Value) -> Option<String> {
+    value
         .get("response")
         .and_then(Value::as_str)
         .map(str::to_string)
@@ -1399,14 +1479,38 @@ fn value_to_response(value: Value) -> Result<String, GaalError> {
                 .get("content")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-        });
-
-    response.ok_or_else(|| {
-        GaalError::ParseError("agent-mux JSON output missing `response` field".to_string())
-    })
+        })
 }
 
 fn extract_agent_mux_error(value: &Value) -> Option<String> {
+    if value.get("schema_version").is_some() {
+        if value.get("status").and_then(Value::as_str) != Some("failed")
+            && value.get("status").and_then(Value::as_str) != Some("timed_out")
+        {
+            return None;
+        }
+
+        let message = value
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .map(str::to_string);
+        let suggestion = value
+            .pointer("/error/suggestion")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|suggestion| !suggestion.is_empty())
+            .map(str::to_string);
+
+        return match (message, suggestion) {
+            (Some(message), Some(suggestion)) => Some(format!("{message} Suggestion: {suggestion}")),
+            (Some(message), None) => Some(message),
+            (None, Some(suggestion)) => Some(format!("Suggestion: {suggestion}")),
+            (None, None) => None,
+        };
+    }
+
     if value.get("success").and_then(Value::as_bool) != Some(false) {
         return None;
     }
@@ -1418,6 +1522,43 @@ fn extract_agent_mux_error(value: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|error| !error.is_empty())
         .map(str::to_string)
+}
+
+fn build_generated_by_label(mux_config: &AgentMuxConfig, engine: &str, model: &str) -> String {
+    let role = mux_config
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|role| !role.is_empty());
+    let variant = mux_config
+        .variant
+        .as_deref()
+        .map(str::trim)
+        .filter(|variant| !variant.is_empty());
+    let effort = mux_config
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty());
+
+    if let Some(role) = role {
+        let mut label = format!("agent-mux-v2 -R={role}");
+        if let Some(variant) = variant {
+            label.push_str(&format!(" --variant={variant}"));
+        }
+        if let Some(effort) = effort {
+            label.push_str(&format!(" --effort={effort}"));
+        }
+
+        let resolved = match effort {
+            Some(effort) => format!("{engine}/{model}/{effort}"),
+            None => format!("{engine}/{model}"),
+        };
+        label.push_str(&format!(" ({resolved})"));
+        return label;
+    }
+
+    format!("{engine}/{model}")
 }
 
 /// Build YAML frontmatter for handoff markdown files.

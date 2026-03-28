@@ -67,12 +67,24 @@ impl Default for HandoffConfig {
 pub struct AgentMuxConfig {
     /// Binary name or path for agent-mux dispatch.
     pub path: String,
+    /// Default role for handoff dispatch.
+    pub role: Option<String>,
+    /// Default variant for role-based dispatch.
+    pub variant: Option<String>,
+    /// Timeout override for agent-mux invocations (in seconds).
+    pub timeout_secs: Option<u64>,
+    /// Default effort level for dispatch.
+    pub effort: Option<String>,
 }
 
 impl Default for AgentMuxConfig {
     fn default() -> Self {
         Self {
             path: "agent-mux".to_string(),
+            role: None,
+            variant: None,
+            timeout_secs: None,
+            effort: None,
         }
     }
 }
