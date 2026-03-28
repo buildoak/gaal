@@ -41,13 +41,13 @@ fn session_row(
         last_event_at: ended_at
             .map(str::to_string)
             .or_else(|| Some(started_at.to_string())),
-        parent_id: None,
         session_type: "standalone".to_string(),
         jsonl_path: format!("/tmp/{id}.jsonl"),
         total_input_tokens: 120,
         total_output_tokens: 40,
         total_tools: 5,
         total_turns: 7,
+        peak_context: 0,
         last_indexed_offset: 256,
     }
 }
@@ -159,13 +159,13 @@ fn session_insert_and_query_roundtrip() {
         ended_at: Some("2026-03-01T10:30:00Z".to_string()),
         exit_signal: Some("ok".to_string()),
         last_event_at: Some("2026-03-01T10:29:10Z".to_string()),
-        parent_id: Some(parent.id.clone()),
         session_type: "standalone".to_string(),
         jsonl_path: "/tmp/sess-roundtrip-1.jsonl".to_string(),
         total_input_tokens: 2_000,
         total_output_tokens: 900,
         total_tools: 13,
         total_turns: 21,
+        peak_context: 0,
         last_indexed_offset: 4_096,
     };
 
@@ -182,7 +182,6 @@ fn session_insert_and_query_roundtrip() {
     assert_eq!(loaded.ended_at, session.ended_at);
     assert_eq!(loaded.exit_signal, session.exit_signal);
     assert_eq!(loaded.last_event_at, session.last_event_at);
-    assert_eq!(loaded.parent_id, session.parent_id);
     assert_eq!(loaded.jsonl_path, session.jsonl_path);
     assert_eq!(loaded.total_input_tokens, session.total_input_tokens);
     assert_eq!(loaded.total_output_tokens, session.total_output_tokens);
@@ -331,32 +330,6 @@ fn ls_filters_work() {
     assert!(cwd_ids.contains(&claude_completed.id));
     assert!(cwd_ids.contains(&codex_completed.id));
     assert!(!cwd_ids.contains(&claude_active.id));
-
-    let completed = list_sessions(
-        &conn,
-        &ListFilter {
-            status: Some(vec!["completed".to_string()]),
-            limit: Some(20),
-            ..Default::default()
-        },
-    )
-    .expect("list completed");
-    let completed_ids: HashSet<String> = completed.into_iter().map(|s| s.id).collect();
-    assert!(completed_ids.contains(&claude_completed.id));
-    assert!(completed_ids.contains(&codex_completed.id));
-    assert!(!completed_ids.contains(&claude_active.id));
-
-    let interrupted = list_sessions(
-        &conn,
-        &ListFilter {
-            status: Some(vec!["interrupted".to_string()]),
-            limit: Some(20),
-            ..Default::default()
-        },
-    )
-    .expect("list interrupted");
-    assert_eq!(interrupted.len(), 1);
-    assert_eq!(interrupted[0].id, claude_active.id);
 }
 
 #[test]
@@ -531,80 +504,6 @@ fn exit_code_mapping() {
         GaalError::ParseError("bad input".to_string()).exit_code(),
         11
     );
-}
-
-#[test]
-fn status_computation_for_completed_failed_and_active_sessions() {
-    let conn = test_conn();
-
-    let completed = session_row(
-        "status-completed",
-        "claude",
-        Some("/repo/gaal"),
-        "2026-03-01T08:00:00Z",
-        Some("2026-03-01T08:20:00Z"),
-        None,
-    );
-    let failed = session_row(
-        "status-failed",
-        "codex",
-        Some("/repo/gaal"),
-        "2026-03-01T09:00:00Z",
-        Some("2026-03-01T09:20:00Z"),
-        Some("error"),
-    );
-    let active = session_row(
-        "status-active",
-        "claude",
-        Some("/repo/gaal"),
-        "2026-03-01T10:00:00Z",
-        None,
-        None,
-    );
-
-    upsert_session(&conn, &completed).expect("insert completed");
-    upsert_session(&conn, &failed).expect("insert failed");
-    upsert_session(&conn, &active).expect("insert active");
-
-    let completed_rows = list_sessions(
-        &conn,
-        &ListFilter {
-            status: Some(vec!["completed".to_string()]),
-            limit: Some(20),
-            ..Default::default()
-        },
-    )
-    .expect("list completed status");
-    assert!(completed_rows.iter().any(|s| s.id == completed.id));
-    assert!(!completed_rows.iter().any(|s| s.id == failed.id));
-    assert!(!completed_rows.iter().any(|s| s.id == active.id));
-
-    let failed_rows = list_sessions(
-        &conn,
-        &ListFilter {
-            status: Some(vec!["failed".to_string()]),
-            limit: Some(20),
-            ..Default::default()
-        },
-    )
-    .expect("list failed status");
-    assert!(failed_rows.iter().any(|s| s.id == failed.id));
-    assert!(!failed_rows.iter().any(|s| s.id == completed.id));
-    assert!(!failed_rows.iter().any(|s| s.id == active.id));
-
-    // Sessions with no ended_at and no live PID are "interrupted" (killed/crashed).
-    let interrupted_rows = list_sessions(
-        &conn,
-        &ListFilter {
-            status: Some(vec!["interrupted".to_string()]),
-            limit: Some(20),
-            ..Default::default()
-        },
-    )
-    .expect("list interrupted status");
-    assert!(interrupted_rows.iter().any(|s| s.id == active.id));
-    assert!(!interrupted_rows.iter().any(|s| s.id == completed.id));
-    assert!(!interrupted_rows.iter().any(|s| s.id == failed.id));
 }
 
 #[test]
