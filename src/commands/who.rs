@@ -124,8 +124,7 @@ struct WhoOutput<T: Serialize> {
 pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     let verb_raw = args.verb.trim();
     if verb_raw.is_empty() {
-        print_no_args_help();
-        return Ok(());
+        return Err(GaalError::ParseError("who requires a verb".to_string()));
     }
     let verb = verb_raw.to_ascii_lowercase();
     let spec = verb_spec(&verb)?;
@@ -177,18 +176,7 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
         .map(WhoRow::from)
         .collect();
     if matches.is_empty() {
-        if args.human {
-            eprintln!("No results found.");
-        } else {
-            let empty_output = serde_json::json!({
-                "query_window": query_window,
-                "shown": 0,
-                "total": 0,
-                "sessions": []
-            });
-            print_json(&empty_output).map_err(GaalError::from)?;
-        }
-        return Ok(());
+        return Err(GaalError::NoResults);
     }
     let was_truncated = matches.len() < total_matches;
 
@@ -303,38 +291,6 @@ fn verb_spec(verb: &str) -> Result<VerbSpec, GaalError> {
     Ok(spec)
 }
 
-fn print_no_args_help() {
-    eprintln!("gaal who — Attribution queries: find which sessions touched a file, ran a command, or produced errors");
-    eprintln!();
-    eprintln!("Usage: gaal who <verb> [target] [flags]");
-    eprintln!();
-    eprintln!("Verbs:");
-    eprintln!("  read       Files opened with the Read tool");
-    eprintln!("  wrote      Files created/modified with Write or Edit tool");
-    eprintln!("  ran        Commands executed via Bash tool (matches program names)");
-    eprintln!("  touched    Any file interaction (read + wrote combined)");
-    eprintln!("  changed    Files modified (wrote + edited, excludes read-only)");
-    eprintln!("  deleted    File deletions (rm commands and file removals)");
-    eprintln!();
-    eprintln!("Flags:");
-    eprintln!("  --since <time>    Lower time bound (default: 7d). Duration like 1h/3d/2w, date, or RFC3339");
-    eprintln!("  --before <time>   Upper time bound (date or RFC3339)");
-    eprintln!("  --cwd <path>      Restrict to sessions where cwd contains this value");
-    eprintln!("  --engine <engine> Restrict to one engine (claude or codex)");
-    eprintln!("  --tag <tag>       Restrict to one session tag");
-    eprintln!("  --failed          Only show failed facts (exit_code != 0)");
-    eprintln!("  --limit <n>       Maximum number of results (default: 10)");
-    eprintln!("  -F, --full        Show full per-fact output including detail fields");
-    eprintln!("  -H                Print human-readable table output");
-    eprintln!();
-    eprintln!("Examples:");
-    eprintln!("  gaal who read src/main.rs");
-    eprintln!("  gaal who ran cargo --since 3d -H");
-    eprintln!("  gaal who wrote /Users/me/project/ --engine claude");
-    eprintln!();
-    eprintln!("Note: --since defaults to 7d. Use --since 30d or --since 2026-01-01 for wider searches.");
-}
-
 /// Return a one-line disclaimer about what the verb covers (and what it misses).
 fn verb_note(verb: &str) -> &'static str {
     match verb {
@@ -354,11 +310,41 @@ fn format_since_label(since_raw: &str) -> String {
     let (number, unit) = value.split_at(value.len().saturating_sub(1));
     if let Ok(amount) = number.parse::<i64>() {
         let unit_word = match unit {
-            "s" => if amount == 1 { "second" } else { "seconds" },
-            "m" => if amount == 1 { "minute" } else { "minutes" },
-            "h" => if amount == 1 { "hour" } else { "hours" },
-            "d" => if amount == 1 { "day" } else { "days" },
-            "w" => if amount == 1 { "week" } else { "weeks" },
+            "s" => {
+                if amount == 1 {
+                    "second"
+                } else {
+                    "seconds"
+                }
+            }
+            "m" => {
+                if amount == 1 {
+                    "minute"
+                } else {
+                    "minutes"
+                }
+            }
+            "h" => {
+                if amount == 1 {
+                    "hour"
+                } else {
+                    "hours"
+                }
+            }
+            "d" => {
+                if amount == 1 {
+                    "day"
+                } else {
+                    "days"
+                }
+            }
+            "w" => {
+                if amount == 1 {
+                    "week"
+                } else {
+                    "weeks"
+                }
+            }
             _ => return format!("since {value}"),
         };
         return format!("last {amount} {unit_word}");
@@ -628,18 +614,12 @@ fn group_by_session(rows: &[WhoRow]) -> Vec<WhoSummaryRow> {
             entry.headline = row.session_headline.clone();
         }
     }
-    order
-        .into_iter()
-        .filter_map(|id| map.remove(&id))
-        .collect()
+    order.into_iter().filter_map(|id| map.remove(&id)).collect()
 }
 
 /// Extract just the filename from a full path.
 fn truncate_to_filename(path: &str) -> String {
-    path.rsplit('/')
-        .next()
-        .unwrap_or(path)
-        .to_string()
+    path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
 fn print_human_full(rows: &[WhoRow]) {
@@ -670,7 +650,10 @@ fn print_human_full(rows: &[WhoRow]) {
                 row.fact_type.clone(),
                 row.subject.as_deref().unwrap_or("-").replace('\n', " "),
                 row.detail.as_deref().unwrap_or("-").replace('\n', " "),
-                row.session_headline.as_deref().unwrap_or("-").replace('\n', " "),
+                row.session_headline
+                    .as_deref()
+                    .unwrap_or("-")
+                    .replace('\n', " "),
             ]
         })
         .collect();
@@ -712,7 +695,6 @@ fn print_human_brief(rows: &[WhoSummaryRow]) {
         .collect();
     print_table_with_kinds(&headers, &table_rows, &col_kinds);
 }
-
 
 fn normalize_since(raw: &str) -> Result<String, GaalError> {
     normalize_bound(raw, BoundKind::Since)
@@ -839,4 +821,3 @@ fn extract_date(value: &str) -> Option<String> {
 
     None
 }
-

@@ -16,8 +16,7 @@ pub struct FindArgs {
 /// Find the first JSONL session file containing the provided salt token (`find-salt` command).
 pub fn run(args: FindArgs) -> Result<(), GaalError> {
     let Some(home) = dirs::home_dir() else {
-        eprintln!("{}", json!({ "error": "salt not found" }));
-        return Err(GaalError::NotFound("salt not found".to_string()));
+        return Err(GaalError::NotFound(args.salt));
     };
 
     let roots = [home.join(".claude").join("projects"), home.join(".codex")];
@@ -46,8 +45,7 @@ pub fn run(args: FindArgs) -> Result<(), GaalError> {
         return Ok(());
     }
 
-    eprintln!("{}", json!({ "error": "salt not found" }));
-    Err(GaalError::NotFound("salt not found".to_string()))
+    Err(GaalError::NotFound(args.salt))
 }
 
 fn find_matching_jsonl(root: &Path, salt: &str) -> Result<Option<PathBuf>, GaalError> {

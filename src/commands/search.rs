@@ -117,8 +117,9 @@ struct SearchIndexFields {
 /// Executes `gaal search`.
 pub fn run(args: SearchArgs) -> Result<(), GaalError> {
     if args.query.trim().is_empty() {
-        print_search_help();
-        return Ok(());
+        return Err(GaalError::ParseError(
+            "search query cannot be empty".to_string(),
+        ));
     }
 
     let conn = open_db_readonly()?;
@@ -325,26 +326,6 @@ fn combine_query_with_fact_filter(
         (Occur::Must, base_query),
         (Occur::Must, fact_type_query),
     ]))
-}
-
-fn print_search_help() {
-    eprintln!("gaal search — BM25 full-text search over indexed session facts");
-    eprintln!();
-    eprintln!("Usage: gaal search <query> [flags]");
-    eprintln!();
-    eprintln!("Flags:");
-    eprintln!("  --since <time>     Lower time bound (default: 30d). Duration, date, or RFC3339");
-    eprintln!("  --cwd <path>       Restrict to sessions whose CWD contains this substring");
-    eprintln!("  --engine <engine>  Restrict to one engine (claude or codex)");
-    eprintln!("  --field <field>    Restrict to a content field: prompts, replies, commands, errors, files, all (default: all)");
-    eprintln!("  --context <n>      Context lines around each match (default: 2)");
-    eprintln!("  --limit <n>        Maximum number of results (default: 20)");
-    eprintln!("  -H, --human        Human-readable output");
-    eprintln!();
-    eprintln!("Examples:");
-    eprintln!("  gaal search \"database migration\"");
-    eprintln!("  gaal search --limit 5 \"auth bug\"");
-    eprintln!("  gaal search --field commands \"cargo build\" -H");
 }
 
 fn print_search_human(results: &[SearchResult]) {

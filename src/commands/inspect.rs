@@ -14,8 +14,8 @@ use crate::model::{
     CommandEntry, ErrorEntry, Fact, FactType, FileOps, GitOp, SessionRecord, TokenUsage,
 };
 use crate::output::human::{format_cwd, format_tokens};
-use crate::parser::event::EventKind;
 use crate::output::json::print_json;
+use crate::parser::event::EventKind;
 
 /// File-operation output mode for `gaal inspect --files`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -112,10 +112,10 @@ struct InspectData {
 
 /// Execute the `gaal inspect` command.
 pub fn run(args: InspectArgs) -> Result<(), GaalError> {
-    // No-args behavior: show help menu
     if args.id.is_none() && args.ids.is_none() && args.tag.is_none() {
-        print_inspect_help();
-        return Ok(());
+        return Err(GaalError::ParseError(
+            "inspect requires a session id, `latest`, --ids, or --tag".to_string(),
+        ));
     }
 
     let conn = open_db_readonly()?;
@@ -364,11 +364,12 @@ fn build_inspect_data(
     let token_breakdown = if args.tokens {
         // Prefer DB-stored cache tokens; fall back to re-parsing JSONL if DB has zeros
         // (handles sessions indexed before the schema migration).
-        let (cache_read, cache_creation) = if row.cache_read_tokens > 0 || row.cache_creation_tokens > 0 {
-            (row.cache_read_tokens, row.cache_creation_tokens)
-        } else {
-            extract_cache_tokens(row)
-        };
+        let (cache_read, cache_creation) =
+            if row.cache_read_tokens > 0 || row.cache_creation_tokens > 0 {
+                (row.cache_read_tokens, row.cache_creation_tokens)
+            } else {
+                extract_cache_tokens(row)
+            };
         Some(TokenBreakdown {
             input_total: record.tokens.input,
             output_total: record.tokens.output,
@@ -546,7 +547,8 @@ fn collect_commands(facts: &[Fact]) -> Vec<CommandEntry> {
 
 fn collect_errors(facts: &[Fact]) -> Vec<ErrorEntry> {
     let mut out = Vec::new();
-    let mut seen: std::collections::HashMap<(String, i32), usize> = std::collections::HashMap::new();
+    let mut seen: std::collections::HashMap<(String, i32), usize> =
+        std::collections::HashMap::new();
 
     for fact in facts {
         if matches!(fact.fact_type, FactType::Error) {
@@ -885,7 +887,9 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
             if let Some(tokens) = &data.token_breakdown {
                 println!(
                     "Token breakdown: turns={} avg_in/turn={} avg_out/turn={} cost=${:.2}",
-                    tokens.turns, tokens.avg_input_per_turn, tokens.avg_output_per_turn,
+                    tokens.turns,
+                    tokens.avg_input_per_turn,
+                    tokens.avg_output_per_turn,
                     tokens.estimated_cost_usd,
                 );
                 if tokens.cache_read_input_tokens > 0 || tokens.cache_creation_input_tokens > 0 {
@@ -896,10 +900,7 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
                     );
                 }
                 if tokens.reasoning_tokens > 0 {
-                    println!(
-                        "  Reasoning: {}",
-                        format_tokens(tokens.reasoning_tokens),
-                    );
+                    println!("  Reasoning: {}", format_tokens(tokens.reasoning_tokens),);
                 }
             }
         }
@@ -942,31 +943,4 @@ fn truncate(value: &str, max: usize) -> String {
 /// Format peak context for human display.
 fn format_peak_context(peak: u64) -> String {
     format!("{} peak", format_tokens(peak as i64))
-}
-
-fn print_inspect_help() {
-    eprintln!("gaal inspect — Session detail view with files, commands, timeline, and git ops");
-    eprintln!();
-    eprintln!("Usage: gaal inspect <session-id> [flags]");
-    eprintln!();
-    eprintln!("Arguments:");
-    eprintln!("  <session-id>    Session ID, ID prefix, or `latest`");
-    eprintln!();
-    eprintln!("Flags:");
-    eprintln!("  --files [mode]  Include file operations (read, write, or all; default: all)");
-    eprintln!("  --errors        Include errors and non-zero exits");
-    eprintln!("  --commands      Include command execution entries");
-    eprintln!("  --git           Include git operations");
-    eprintln!("  --tokens        Include token usage breakdown");
-    eprintln!("  --trace         Include full fact timeline");
-    eprintln!("  --source        Include source JSONL path");
-    eprintln!("  -F, --full      Include all arrays and fields (full output)");
-    eprintln!("  -H, --human     Render human-readable output");
-    eprintln!("  --ids <list>    Batch mode: comma-separated session ID prefixes");
-    eprintln!("  --tag <tag>     Batch mode: filter by tag");
-    eprintln!();
-    eprintln!("Examples:");
-    eprintln!("  gaal inspect abc123 -H");
-    eprintln!("  gaal inspect latest --files --errors");
-    eprintln!("  gaal inspect abc123 -F --tokens");
 }
