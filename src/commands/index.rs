@@ -544,6 +544,7 @@ fn build_full_session_row(
         ended_at: parsed.ended_at.clone(),
         exit_signal: parsed.exit_signal.clone(),
         last_event_at: parsed.last_event_at.clone(),
+        parent_id: None,
         session_type: "standalone".to_string(),
         jsonl_path: path.to_string_lossy().to_string(),
         total_input_tokens: parsed.total_input_tokens,
@@ -590,6 +591,7 @@ fn build_incremental_session_row(
             .last_event_at
             .clone()
             .or_else(|| existing.last_event_at.clone()),
+        parent_id: existing.parent_id.clone(),
         session_type: existing.session_type.clone(),
         jsonl_path: path.to_string_lossy().to_string(),
         total_input_tokens: existing.total_input_tokens + parsed_delta.total_input_tokens,
@@ -865,6 +867,7 @@ fn build_eywa_session_stub(entry: &EywaEntry) -> SessionRow {
         ended_at: Some(started_at.clone()),
         exit_signal: None,
         last_event_at: Some(started_at),
+        parent_id: None,
         session_type: "standalone".to_string(),
         jsonl_path: entry
             .content_path

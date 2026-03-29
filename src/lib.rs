@@ -7,4 +7,5 @@ pub mod model;
 pub mod output;
 pub mod parser;
 pub mod render;
+pub mod subagent;
 pub mod util;

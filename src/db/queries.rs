@@ -18,6 +18,7 @@ pub struct SessionRow {
     pub ended_at: Option<String>,
     pub exit_signal: Option<String>,
     pub last_event_at: Option<String>,
+    pub parent_id: Option<String>,
     pub session_type: String,
     pub jsonl_path: String,
     pub total_input_tokens: i64,
@@ -132,13 +133,13 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
         r#"
         INSERT INTO sessions (
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            session_type, jsonl_path, total_input_tokens, total_output_tokens,
+            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
             cache_read_tokens, cache_creation_tokens, reasoning_tokens,
             total_tools, total_turns, peak_context, last_indexed_offset
         )
         VALUES (
             :id, :engine, :model, :cwd, :started_at, :ended_at, :exit_signal, :last_event_at,
-            :session_type, :jsonl_path, :total_input_tokens, :total_output_tokens,
+            :parent_id, :session_type, :jsonl_path, :total_input_tokens, :total_output_tokens,
             :cache_read_tokens, :cache_creation_tokens, :reasoning_tokens,
             :total_tools, :total_turns, :peak_context, :last_indexed_offset
         )
@@ -150,6 +151,7 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             ended_at = excluded.ended_at,
             exit_signal = excluded.exit_signal,
             last_event_at = excluded.last_event_at,
+            parent_id = excluded.parent_id,
             session_type = excluded.session_type,
             jsonl_path = excluded.jsonl_path,
             total_input_tokens = excluded.total_input_tokens,
@@ -171,6 +173,7 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             ":ended_at": &session.ended_at,
             ":exit_signal": &session.exit_signal,
             ":last_event_at": &session.last_event_at,
+            ":parent_id": &session.parent_id,
             ":session_type": &session.session_type,
             ":jsonl_path": &session.jsonl_path,
             ":total_input_tokens": session.total_input_tokens,
@@ -344,7 +347,7 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<SessionRow>, Ga
         r#"
         SELECT
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            session_type, jsonl_path, total_input_tokens, total_output_tokens,
+            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
             cache_read_tokens, cache_creation_tokens, reasoning_tokens,
             total_tools, total_turns, peak_context, last_indexed_offset
         FROM sessions
@@ -379,7 +382,7 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
         r#"
         SELECT
             s.id, s.engine, s.model, s.cwd, s.started_at, s.ended_at, s.exit_signal, s.last_event_at,
-            s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens,
+            s.parent_id, s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens,
             s.cache_read_tokens, s.cache_creation_tokens, s.reasoning_tokens,
             s.total_tools, s.total_turns, s.peak_context, s.last_indexed_offset
         FROM sessions s
@@ -831,6 +834,7 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         ended_at: row.get("ended_at")?,
         exit_signal: row.get("exit_signal")?,
         last_event_at: row.get("last_event_at")?,
+        parent_id: row.get("parent_id")?,
         session_type: row
             .get::<_, Option<String>>("session_type")?
             .unwrap_or_else(|| "standalone".to_string()),
