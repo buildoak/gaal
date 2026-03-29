@@ -23,6 +23,9 @@ pub struct LsArgs {
     /// Filter by engine name.
     #[arg(long, value_enum)]
     pub engine: Option<LsEngine>,
+    /// Filter by session type.
+    #[arg(long)]
+    pub session_type: Option<String>,
     /// Lower time bound (`1h`, `3d`, `2w`, `today`, `YYYY-MM-DD`, RFC3339).
     #[arg(long)]
     pub since: Option<String>,
@@ -319,6 +322,7 @@ fn build_filter(args: &LsArgs) -> Result<ListFilter, GaalError> {
         sort_by: args.sort.map(|sort| sort.as_str().to_string()),
         limit,
         include_subagents: args.include_subagents || !args.skip_subagents,
+        session_type: args.session_type.clone(),
     })
 }
 
@@ -886,6 +890,7 @@ mod tests {
     fn build_filter_includes_subagents_by_default() {
         let args = LsArgs {
             engine: None,
+            session_type: None,
             since: None,
             before: None,
             cwd: None,
@@ -907,6 +912,7 @@ mod tests {
     fn build_filter_excludes_subagents_when_requested() {
         let args = LsArgs {
             engine: None,
+            session_type: None,
             since: None,
             before: None,
             cwd: None,
@@ -922,6 +928,28 @@ mod tests {
 
         let filter = build_filter(&args).expect("build filter");
         assert!(!filter.include_subagents);
+    }
+
+    #[test]
+    fn build_filter_passes_session_type() {
+        let args = LsArgs {
+            engine: None,
+            session_type: Some("coordinator".to_string()),
+            since: None,
+            before: None,
+            cwd: None,
+            tag: Vec::new(),
+            sort: None,
+            limit: 10,
+            aggregate: false,
+            human_readable: false,
+            all: false,
+            include_subagents: false,
+            skip_subagents: false,
+        };
+
+        let filter = build_filter(&args).expect("build filter");
+        assert_eq!(filter.session_type.as_deref(), Some("coordinator"));
     }
 
     #[test]

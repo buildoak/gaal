@@ -21,6 +21,9 @@ enum Commands {
         /// Filter by engine.
         #[arg(long)]
         engine: Option<Engine>,
+        /// Filter by session type.
+        #[arg(long, value_enum)]
+        session_type: Option<SessionTypeFilter>,
         /// Lower bound: duration/date (for example: 1d, 2026-03-01).
         #[arg(long)]
         since: Option<String>,
@@ -345,6 +348,14 @@ enum Provider {
     Openrouter,
 }
 
+#[derive(Clone, Debug, ValueEnum)]
+#[value(rename_all = "lower")]
+enum SessionTypeFilter {
+    Coordinator,
+    Standalone,
+    Subagent,
+}
+
 fn main() {
     let cli = Cli::parse();
     let human = cli.human;
@@ -362,6 +373,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
     match command {
         Commands::Ls {
             engine,
+            session_type,
             since,
             before,
             cwd,
@@ -375,6 +387,11 @@ fn run(cli: Cli) -> Result<(), GaalError> {
         } => {
             let args = gaal::commands::ls::LsArgs {
                 engine: engine.map(convert_ls_engine),
+                session_type: session_type.map(|st| match st {
+                    SessionTypeFilter::Coordinator => "coordinator".to_string(),
+                    SessionTypeFilter::Standalone => "standalone".to_string(),
+                    SessionTypeFilter::Subagent => "subagent".to_string(),
+                }),
                 since,
                 before,
                 cwd,

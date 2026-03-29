@@ -36,6 +36,7 @@ pub struct SessionRow {
 #[derive(Debug, Clone, Default)]
 pub struct ListFilter {
     pub engine: Option<String>,
+    pub session_type: Option<String>,
     pub since: Option<String>,
     pub before: Option<String>,
     pub cwd: Option<String>,
@@ -390,6 +391,7 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
             s.total_tools, s.total_turns, s.peak_context, s.last_indexed_offset
         FROM sessions s
         WHERE (:engine IS NULL OR s.engine = :engine)
+          AND (:session_type IS NULL OR s.session_type = :session_type)
           AND (:since IS NULL OR s.started_at >= :since)
           AND (:before IS NULL OR s.started_at <= :before)
           AND (:cwd_like IS NULL OR s.cwd LIKE :cwd_like)
@@ -409,6 +411,7 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
     let mut rows = stmt
         .query(named_params! {
             ":engine": filter.engine.as_deref(),
+            ":session_type": filter.session_type.as_deref(),
             ":since": filter.since.as_deref(),
             ":before": filter.before.as_deref(),
             ":cwd_like": cwd_like.as_deref(),
@@ -434,6 +437,7 @@ pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, Gaa
         SELECT COUNT(*)
         FROM sessions s
         WHERE (:engine IS NULL OR s.engine = :engine)
+          AND (:session_type IS NULL OR s.session_type = :session_type)
           AND (:since IS NULL OR s.started_at >= :since)
           AND (:before IS NULL OR s.started_at <= :before)
           AND (:cwd_like IS NULL OR s.cwd LIKE :cwd_like)
@@ -451,6 +455,7 @@ pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, Gaa
             sql,
             named_params! {
                 ":engine": filter.engine.as_deref(),
+                ":session_type": filter.session_type.as_deref(),
                 ":since": filter.since.as_deref(),
                 ":before": filter.before.as_deref(),
                 ":cwd_like": cwd_like.as_deref(),
