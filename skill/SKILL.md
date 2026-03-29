@@ -195,7 +195,7 @@ Human `ls` output uses a `Task` column for the session headline and shows subage
 
 | Command | What |
 |---------|------|
-| `gaal search "<query>"` | Full-text search over indexed facts. Flags: `--since` default `30d`, `--cwd`, `--engine`, `--field` default `all`, `--context` default `2`, `--limit` default `20`, `-H`. |
+| `gaal search "<query>"` | Full-text search over indexed facts. Flags: `--since` default `30d`, `--cwd`, `--engine`, `--field` default `all`, `--context` default `2`, `--limit` default `20`. |
 | `gaal recall [query]` | Semantic session retrieval. Flags: `--days-back` default `14`, `--limit` default `3`, `--format` default `brief`, `--substance` default `1`, `-H`. |
 
 ### LLM-Powered
