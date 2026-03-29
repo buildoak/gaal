@@ -619,6 +619,10 @@ fn parse_since_filter(since: &str) -> String {
 }
 
 fn resolve_sessions(conn: &Connection, id_or_today: &str) -> Result<Vec<SessionRow>, GaalError> {
+    if id_or_today.eq_ignore_ascii_case("latest") {
+        return Ok(vec![crate::commands::inspect::resolve_one(conn, "latest")?]);
+    }
+
     if id_or_today.eq_ignore_ascii_case("today") {
         return resolve_today_sessions(conn);
     }
