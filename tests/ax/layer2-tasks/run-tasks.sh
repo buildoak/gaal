@@ -2,7 +2,7 @@
 # run-tasks.sh — Dispatch first-attempt agent tasks and collect results
 #
 # For each task in tasks.toml, dispatches N Codex gpt-5.4-mini-high workers
-# with ONLY skill/SKILL.md and DOCS.md as context. Collects results, traces,
+# with ONLY skill/SKILL.md and docs/ as context. Collects results, traces,
 # and session metadata via gaal.
 #
 # Usage:
@@ -38,7 +38,7 @@ if [[ ! -f "$TASKS_FILE" ]]; then
 fi
 
 SYSTEM_PROMPT=$(cat <<'SYSPROMPT_EOF'
-You are a software engineer using the gaal CLI for the first time. You have access to the gaal skill file (SKILL.md) and documentation (DOCS.md) as context.
+You are a software engineer using the gaal CLI for the first time. You have access to the gaal skill file (SKILL.md) and documentation (docs/) as context.
 
 Your job is to accomplish the task given to you by running gaal commands. Think step by step:
 1. Read the skill file and docs to understand what commands are available
@@ -141,7 +141,7 @@ while IFS=$'\t' read -r name prompt expected_pattern agents category; do
             --sandbox workspace-write \
             --cwd "$GAAL_ROOT" \
             --context-file "${GAAL_ROOT}/skill/SKILL.md" \
-            --context-file "${GAAL_ROOT}/DOCS.md" \
+            --context-file "${GAAL_ROOT}/docs/README.md" \
             --system-prompt "$SYSTEM_PROMPT" \
             "$prompt" 2>/dev/null)
         dispatch_exit=$?

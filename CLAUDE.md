@@ -169,7 +169,7 @@ If you find yourself re-adding any of these: stop, re-read this section, and ask
 1. **Dump real data first.** `grep`, `jq`, `head` on actual JSONL files. See real field names, real structures, real edge cases.
 2. **Never reason about what JSONL "should" contain.** Claude and Codex schemas are undocumented and change without notice. The only source of truth is the bytes on disk.
 3. **Test your assumptions.** If you think a field is called `content`, grep for it. If you think events have a `type` field, prove it.
-4. **Read DOCS.md** for the command you are modifying. It is the canonical reference for flags, output shapes, and behavior.
+4. **Read `docs/`** for the command you are modifying. It is the canonical reference for flags, output shapes, and behavior.
 5. **Check BACKLOG.md** for context on the item you are working on. It records what shipped, what's open, and what's a dead end.
 
 ### While writing code
@@ -314,7 +314,7 @@ Do not add new dependencies without justification. No async runtime — gaal is 
 | Path | What |
 |------|------|
 | `CLAUDE.md` | This file. Worker orientation. |
-| `DOCS.md` | Canonical user documentation. Command reference with real examples. |
+| `docs/` | Canonical user documentation. Per-module pages, command reference with real examples. |
 | `BACKLOG.md` | Open items, shipped items, design notes. Check before starting work. |
 | `skill/SKILL.md` | What calling agents see. The external contract. |
 | `Cargo.toml` | Version 0.1.0. Dependencies. |
@@ -332,7 +332,7 @@ Do not add new dependencies without justification. No async runtime — gaal is 
 ## What Workers Must Do Before Writing Code
 
 1. **Read this CLAUDE.md.** You are doing this now. Good.
-2. **Read DOCS.md** for the command you are modifying. It has the exact flags, output shapes, and real examples.
+2. **Read `docs/`** for the command you are modifying. It has the exact flags, output shapes, and real examples.
 3. **Run the command manually** to see current behavior. Use `gaal <cmd> --help` and then run it against live data.
 4. **Check BACKLOG.md** for context on the item you are working on. It records what shipped, what failed, and what's a dead end.
 5. **Grep real JSONL** before assuming field names or event structures. Evidence first.

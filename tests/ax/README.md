@@ -29,7 +29,7 @@ Triggers every known gaal error path and evaluates message quality.
 
 ### Layer 2: First-Attempt Agent Tasks (`layer2-tasks/`)
 
-Tests whether agents can accomplish real gaal tasks on their first attempt with only SKILL.md and DOCS.md.
+Tests whether agents can accomplish real gaal tasks on their first attempt with only SKILL.md and docs/.
 
 - **`tasks.toml`** — Declarative task definitions with prompts, expected command patterns, and agent count per task.
 - **`run-tasks.sh`** — Dispatches agents via agent-mux, collects responses and session metadata.

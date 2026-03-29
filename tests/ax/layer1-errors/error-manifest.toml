@@ -4,7 +4,7 @@
 # When a developer adds a new command or flag to gaal, they MUST add error
 # entries here covering the new error paths.
 #
-# Exit codes (from DOCS.md):
+# Exit codes (from docs/getting-started.md):
 #   0  = success
 #   1  = no results
 #   2  = ambiguous ID
