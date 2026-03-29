@@ -1101,9 +1101,10 @@ fn load_subagent_deltas_from_db(
     ) in child_rows
     {
         let (files_read, files_written, commands) = load_child_facts(conn, &child_id)?;
+        let prompt = load_first_user_prompt(conn, &child_id).unwrap_or_default();
         deltas.push(SubagentDelta {
             agent_id: child_id,
-            prompt: String::new(),
+            prompt,
             files_read,
             files_written,
             commands,
@@ -1116,6 +1117,29 @@ fn load_subagent_deltas_from_db(
     }
 
     Some(deltas)
+}
+
+/// Load the first user_prompt fact's detail text for a subagent session.
+/// Returns a truncated version suitable for the Task column in transcripts.
+fn load_first_user_prompt(conn: &Connection, session_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT detail FROM facts
+         WHERE session_id = :sid AND fact_type = 'user_prompt'
+         ORDER BY turn_number ASC, ts ASC
+         LIMIT 1",
+        named_params! { ":sid": session_id },
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .ok()?
+    .map(|text| {
+        let trimmed = text.trim().replace('\n', " ");
+        if trimmed.len() > 80 {
+            let truncated: String = trimmed.chars().take(80).collect();
+            format!("{truncated}...")
+        } else {
+            trimmed
+        }
+    })
 }
 
 fn load_child_sessions(

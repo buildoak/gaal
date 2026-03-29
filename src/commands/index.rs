@@ -643,6 +643,16 @@ fn resolve_subagent_session_id(
             Some(existing) if existing.parent_id.as_deref() == Some(parent_session_id) => {
                 return Ok(Some(candidate));
             }
+            // Orphaned subagent row (parent_id = NULL) — claim it for this parent
+            // instead of falling through to create a 12-char duplicate.
+            // The subsequent upsert_session will set the correct parent_id.
+            Some(existing)
+                if existing.parent_id.is_none()
+                    && existing.session_type == "subagent"
+                    && agent_id.starts_with(&candidate) =>
+            {
+                return Ok(Some(candidate));
+            }
             Some(_) => continue,
         }
     }
