@@ -1,0 +1,311 @@
+{
+  "meta": {
+    "timestamp": "2026-03-29T13:55:01Z",
+    "manifest": "/Users/otonashi/thinking/building/gaal/tests/ax/layer1-errors/error-manifest.toml",
+    "total": 30,
+    "pass": 29,
+    "fail": 1
+  },
+  "errors": [
+    {
+      "name": "inspect-nonexistent",
+      "command": "gaal inspect nonexistent123",
+      "description": "Unknown session ID passed to inspect",
+      "expected_exit": 3,
+      "actual_exit": 3,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"not found: nonexistent123\",\"exit_code\":3,\"ok\":false}"
+    },
+    {
+      "name": "inspect-nonexistent-human",
+      "command": "gaal inspect nonexistent123 -H",
+      "description": "Unknown session ID passed to inspect (human mode)",
+      "expected_exit": 3,
+      "actual_exit": 3,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "What went wrong: Session `nonexistent123` was not found.\nExample: gaal inspect latest -H\nHint: List recent sessions with `gaal ls --since 7d -H`, then rerun `gaal inspect` with a valid 8-character ID prefix."
+    },
+    {
+      "name": "transcript-nonexistent",
+      "command": "gaal transcript nonexistent123",
+      "description": "Unknown session ID passed to transcript",
+      "expected_exit": 3,
+      "actual_exit": 3,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"not found: nonexistent123; hint: run 'gaal ls' to see available sessions\",\"exit_code\":3,\"ok\":false}"
+    },
+    {
+      "name": "transcript-nonexistent-human",
+      "command": "gaal transcript nonexistent123 -H",
+      "description": "Unknown session ID passed to transcript (human mode)",
+      "expected_exit": 3,
+      "actual_exit": 3,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "What went wrong: Session `nonexistent123; hint: run 'gaal ls' to see available sessions` was not found, so no transcript could be generated.\nExample: gaal transcript latest -H\nHint: List recent sessions with `gaal ls --since 7d -H`, then rerun `gaal transcript` with a valid session ID."
+    },
+    {
+      "name": "find-salt-nonexistent",
+      "command": "gaal find-salt XNOSALT_9f8e7d6c5b4a3210_XNOSALT",
+      "description": "Salt token not in any JSONL — BUG: currently always matches (should be exit 3)",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "exit_match": true,
+      "stdout": "{\"engine\":\"claude\",\"jsonl_path\":\"/Users/otonashi/.claude/projects/-Users-otonashi-thinking-pratchett-os-coordinator/66ce8874-115e-45d9-b2d5-bca0a9521e37/subagents/agent-a59071cf7fe000747.jsonl\",\"session_id\":\"agent-a59071cf7fe000747\"}",
+      "stderr": ""
+    },
+    {
+      "name": "find-salt-nonexistent-human",
+      "command": "gaal find-salt XNOSALT_9f8e7d6c5b4a3210_XNOSALT -H",
+      "description": "Salt token not found human mode — BUG: currently always matches (should be exit 3)",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "exit_match": true,
+      "stdout": "{\"engine\":\"claude\",\"jsonl_path\":\"/Users/otonashi/.claude/projects/-Users-otonashi-thinking-pratchett-os-coordinator/66ce8874-115e-45d9-b2d5-bca0a9521e37/subagents/agent-a59071cf7fe000747.jsonl\",\"session_id\":\"agent-a59071cf7fe000747\"}",
+      "stderr": ""
+    },
+    {
+      "name": "tag-nonexistent-session",
+      "command": "gaal tag nonexistent123 mytag",
+      "description": "Tagging a nonexistent session",
+      "expected_exit": 3,
+      "actual_exit": 3,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"not found: nonexistent123\",\"exit_code\":3,\"ok\":false}"
+    },
+    {
+      "name": "index-reindex-nonexistent",
+      "command": "gaal index reindex nonexistent123",
+      "description": "Reindexing a nonexistent session",
+      "expected_exit": 3,
+      "actual_exit": 3,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"not found: nonexistent123\",\"exit_code\":3,\"ok\":false}"
+    },
+    {
+      "name": "create-handoff-nonexistent",
+      "command": "gaal create-handoff nonexistent123",
+      "description": "Handoff for a nonexistent session",
+      "expected_exit": 3,
+      "actual_exit": 3,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"not found: nonexistent123\",\"exit_code\":3,\"ok\":false}"
+    },
+    {
+      "name": "inspect-ambiguous",
+      "command": "gaal inspect a",
+      "description": "Single-char ID prefix matches multiple sessions",
+      "expected_exit": 2,
+      "actual_exit": 2,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"ambiguous id: a\",\"exit_code\":2,\"ok\":false}"
+    },
+    {
+      "name": "transcript-ambiguous",
+      "command": "gaal transcript a",
+      "description": "Ambiguous prefix for transcript",
+      "expected_exit": 2,
+      "actual_exit": 2,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"ambiguous id: a\",\"exit_code\":2,\"ok\":false}"
+    },
+    {
+      "name": "who-no-verb",
+      "command": "gaal who DOCS.md",
+      "description": "Missing verb in who command — target without action",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"parse error: invalid who verb: docs.md (expected: read|wrote|ran|touched|changed|deleted)\",\"exit_code\":11,\"ok\":false}"
+    },
+    {
+      "name": "who-no-verb-human",
+      "command": "gaal who DOCS.md -H",
+      "description": "Missing verb in who command (human mode)",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "What went wrong: The `who` command needs a verb such as `read`, `wrote`, or `ran`.\nExample: gaal who ran cargo --since 7d -H\nHint: Choose one supported verb, then provide an optional target to narrow the match."
+    },
+    {
+      "name": "who-invalid-verb",
+      "command": "gaal who ate DOCS.md",
+      "description": "Invalid verb in who command",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"parse error: invalid who verb: ate (expected: read|wrote|ran|touched|changed|deleted)\",\"exit_code\":11,\"ok\":false}"
+    },
+    {
+      "name": "search-empty",
+      "command": "gaal search ''",
+      "description": "Empty search query",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"parse error: search query cannot be empty\",\"exit_code\":11,\"ok\":false}"
+    },
+    {
+      "name": "find-salt-no-arg",
+      "command": "gaal find-salt",
+      "description": "find-salt with no salt token argument",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"parse error: find-salt requires a salt token\",\"exit_code\":11,\"ok\":false}"
+    },
+    {
+      "name": "tag-no-args",
+      "command": "gaal tag",
+      "description": "tag with no arguments at all",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"parse error: tag requires a session id or `ls`\",\"exit_code\":11,\"ok\":false}"
+    },
+    {
+      "name": "ls-since-garbage",
+      "command": "gaal ls --since garbage",
+      "description": "Invalid date format in --since",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"parse error: invalid time bound `garbage` (expected duration like 1h, date, or RFC3339)\",\"exit_code\":11,\"ok\":false}"
+    },
+    {
+      "name": "who-since-garbage",
+      "command": "gaal who wrote DOCS.md --since garbage",
+      "description": "Invalid date in --since for who",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"parse error: invalid time value: garbage (use 7d, 24h, today, YYYY-MM-DD, or RFC3339)\",\"exit_code\":11,\"ok\":false}"
+    },
+    {
+      "name": "inspect-no-selector",
+      "command": "gaal inspect",
+      "description": "Inspect with no ID, no --ids, no --tag",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"parse error: inspect requires a session id, `latest`, --ids, or --tag\",\"exit_code\":11,\"ok\":false}"
+    },
+    {
+      "name": "transcript-no-id",
+      "command": "gaal transcript",
+      "description": "Transcript with no ID prints help (exits 0)",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "gaal transcript — Get session transcript markdown (replaces inspect --markdown)\n\nUsage: gaal transcript <session-id> [flags]\n\nArguments:\n  <session-id>    Session ID, ID prefix, or `latest`\n\nFlags:\n  --force         Re-render even if cached markdown exists\n  --stdout        Print markdown to stdout (no JSON wrapper)\n  -H, --human     Print a human-readable summary instead of JSON\n\nExamples:\n  gaal transcript latest\n  gaal transcript 249aad1e\n  gaal transcript latest --stdout\n  gaal transcript latest --force\n  gaal ls    # if session resolution fails"
+    },
+    {
+      "name": "ls-no-results",
+      "command": "gaal ls --since 2020-01-01 --before 2020-01-02",
+      "description": "ls with a window that has zero sessions",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"no results\",\"exit_code\":1,\"ok\":false}"
+    },
+    {
+      "name": "search-no-results",
+      "command": "gaal search 'xyzzy_nonexistent_impossible_term_999'",
+      "description": "Search for a term that matches nothing",
+      "expected_exit": 1,
+      "actual_exit": 0,
+      "exit_match": false,
+      "stdout": "{\n  \"query_window\": {\n    \"from\": \"2026-02-27\",\n    \"to\": \"2026-03-29\"\n  },\n  \"shown\": 2,\n  \"total\": 2,\n  \"results\": [\n    {\n      \"session_id\": \"a59071cf\",\n      \"engine\": \"claude\",\n      \"turn\": 25,\n      \"fact_type\": \"file_write\",\n      \"subject\": \"/Users/otonashi/thinking/building/gaal/tests/ax/layer1-errors/error-manifest.toml\",\n      \"snippet\": \"{\\\"file_path\\\":\\\"/Users/otonashi/thinking/building/gaal/tests/ax/layer1-errors/error-manifest.toml\\\",\\\"new_string\\\":\\\"[[errors]]\\\\nname = \\\\\\\"recall-fuzzy-match\\\\\\\"\\\\ncommand = \\\\\\\"gaal recall 'xyzzy_nonexistent_impossible_term_999'\\\\\\\"\\\\nexpected_exit = 0\\\\ndescription = \\\\\\\"Recall with gibberish\",\n      \"ts\": \"2026-03-29T13:44:31.260Z\",\n      \"score\": 57.6856,\n      \"session_headline\": \"\",\n      \"session_type\": \"subagent\",\n      \"parent_id\": \"66ce8874\"\n    },\n    {\n      \"session_id\": \"a59071cf\",\n      \"engine\": \"claude\",\n      \"turn\": 14,\n      \"fact_type\": \"file_write\",\n      \"subject\": \"/Users/otonashi/thinking/building/gaal/tests/ax/layer1-errors/error-manifest.toml\",\n      \"snippet\": \"ncommand = \\\\\\\"gaal ls --since 2020-01-01 --before 2020-01-02\\\\\\\"\\\\nexpected_exit = 1\\\\ndescription = \\\\\\\"ls with a window that has zero sessions\\\\\\\"\\\\n\\\\n[[errors]]\\\\nname = \\\\\\\"search-no-results\\\\\\\"\\\\ncommand = \\\\\\\"gaal search 'xyzzy_nonexistent_impossible_term_999'\\\\\\\"\\\\nexpected_exit = 1\",\n      \"ts\": \"2026-03-29T13:41:06.333Z\",\n      \"score\": 19.763006,\n      \"session_headline\": \"\",\n      \"session_type\": \"subagent\",\n      \"parent_id\": \"66ce8874\"\n    }\n  ]\n}",
+      "stderr": ""
+    },
+    {
+      "name": "who-no-results",
+      "command": "gaal who wrote 'NONEXISTENT_FILE_xyzzy_999.rs' --since 1d",
+      "description": "who query that matches no sessions",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"no results\",\"exit_code\":1,\"ok\":false}"
+    },
+    {
+      "name": "recall-fuzzy-match",
+      "command": "gaal recall 'xyzzy_nonexistent_impossible_term_999'",
+      "description": "Recall with gibberish still fuzzy-matches — returns low-score results (exit 0)",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "exit_match": true,
+      "stdout": "[\n  \"session: 5c2cc93f\\ndate: 2026-03-29\\nheadline: Booted Jenkins and discussed the longer-term AgentMUX coordinator model, including centralized dispatch and worker lifecycle management.\\nprojects: coordinator, pratchett-os\\nkeywords: AgentMUX, Claude Code, subagents, orchestration, research\\nsubstance: 1 duration_minutes: 16 score: 43.475\"\n]",
+      "stderr": ""
+    },
+    {
+      "name": "recall-no-args",
+      "command": "gaal recall",
+      "description": "recall with no args prints help and exits 0",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "gaal recall — Ranked session retrieval for continuity and context\n\nUsage: gaal recall <query> [flags]\n\nFlags:\n  --days-back <n>    Recency window in days (default: 14)\n  --limit <n>        Max number of sessions to return (default: 3)\n  --format <fmt>     Output format: summary, brief, handoff, full, eywa (default: brief)\n  --substance <n>    Minimum substance score (default: 1)\n  -H                 Human-readable output\n\nExamples:\n  gaal recall \"gaussian moat\" -H\n  gaal recall \"auth migration\" --days-back 30 --limit 5\n  gaal recall \"deploy\" --format handoff"
+    },
+    {
+      "name": "salt-generate",
+      "command": "gaal salt",
+      "description": "salt generation always succeeds — baseline control",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "exit_match": true,
+      "stdout": "GAAL_SALT_4fc66b1defc5e701",
+      "stderr": ""
+    },
+    {
+      "name": "tag-ls",
+      "command": "gaal tag ls",
+      "description": "tag ls lists all tags — baseline control",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "exit_match": true,
+      "stdout": "[\n  \"bot\",\n  \"build-gaal\",\n  \"coordinator\",\n  \"legacy\",\n  \"test-tag\",\n  \"worker\"\n]",
+      "stderr": ""
+    },
+    {
+      "name": "index-status",
+      "command": "gaal index status",
+      "description": "index status — baseline control for healthy index",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "exit_match": true,
+      "stdout": "{\n  \"db_path\": \"/Users/otonashi/.gaal/index.db\",\n  \"db_size_bytes\": 387366912,\n  \"facts_total\": 251011,\n  \"handoffs_total\": 876,\n  \"last_indexed_at\": \"2026-03-29T13:53:57.589Z\",\n  \"newest_session\": \"2026-03-29T13:40:22.743Z\",\n  \"oldest_session\": \"2026-01-08\",\n  \"sessions_by_engine\": {\n    \"claude\": 4295,\n    \"codex\": 2955\n  },\n  \"sessions_total\": 7250\n}",
+      "stderr": ""
+    },
+    {
+      "name": "ls-default",
+      "command": "gaal ls --limit 1",
+      "description": "ls with minimal output — baseline control",
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "exit_match": true,
+      "stdout": "{\n  \"query_window\": {\n    \"from\": \"2026-01-08\",\n    \"to\": \"2026-03-29T13:55:01Z\"\n  },\n  \"filter\": \"hiding sessions with 0 tool calls and <30s duration\",\n  \"shown\": 1,\n  \"total\": 1,\n  \"total_unfiltered\": 7250,\n  \"sessions\": [\n    {\n      \"id\": \"a845050f\",\n      \"engine\": \"claude\",\n      \"model\": \"claude-opus-4-6\",\n      \"cwd\": \"coordinator\",\n      \"started_at\": \"2026-03-29T13:40:22.743Z\",\n      \"ended_at\": \"2026-03-29T13:44:56.444Z\",\n      \"duration_secs\": 273,\n      \"tokens\": {\n        \"input\": 9,\n        \"output\": 5338\n      },\n      \"peak_context\": 73894,\n      \"tools_used\": 22,\n      \"headline\": \"You are an Opus 4.6 architect. Rewrite the gaal CLAUDE.md...\",\n      \"session_type\": \"subagent\",\n      \"parent_id\": \"66ce8874\"\n    }\n  ]\n}",
+      "stderr": "Showing 1 of 7250 sessions — use --limit N for more"
+    }
+  ]
+}

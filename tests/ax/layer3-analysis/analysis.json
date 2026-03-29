@@ -1,0 +1,474 @@
+{
+  "convergence": {
+    "high_convergence_tasks": [
+      "token-cost-inspection",
+      "transcript-retrieval",
+      "self-identification",
+      "recall-context",
+      "subagent-inspection"
+    ],
+    "low_convergence_tasks": [
+      "handoff-creation",
+      "content-search",
+      "list-recent-coordinators",
+      "find-file-author",
+      "tag-and-filter"
+    ],
+    "details": [
+      {
+        "task": "token-cost-inspection",
+        "convergence_score": 1.0,
+        "dominant_approach": "Run `gaal inspect latest --tokens` directly and report the returned token fields.",
+        "variants": [
+          "All three agents used `gaal inspect latest --tokens`; only the resolved session differed because they ran at different times."
+        ]
+      },
+      {
+        "task": "transcript-retrieval",
+        "convergence_score": 1.0,
+        "dominant_approach": "Use `gaal transcript latest --stdout` to render the transcript body, not just metadata.",
+        "variants": [
+          "One agent also tried `--force --stdout` and hit a write-permission failure in `~/.gaal`.",
+          "One agent resolved `latest` via `gaal ls` first and wrote stdout to an artifact file."
+        ]
+      },
+      {
+        "task": "self-identification",
+        "convergence_score": 1.0,
+        "dominant_approach": "Follow the documented salt flow: `gaal salt` then `gaal find-salt <token>`.",
+        "variants": [
+          "One agent persisted the salt in an artifact file to make the two-step flow explicit."
+        ]
+      },
+      {
+        "task": "recall-context",
+        "convergence_score": 1.0,
+        "dominant_approach": "Use `gaal recall \"gaussian moat\"` to pick the best prior session, then inspect that session for resume details.",
+        "variants": [
+          "All three converged on session `f1eed35c` as the best resume point.",
+          "Two agents also tried `gaal search` for corroboration and hit lockfile-permission failures."
+        ]
+      },
+      {
+        "task": "subagent-inspection",
+        "convergence_score": 1.0,
+        "dominant_approach": "Find a recent coordinator with `gaal ls --skip-subagents`, then inspect that coordinator for subagent detail.",
+        "variants": [
+          "All three selected coordinator `781575ac`."
+        ]
+      },
+      {
+        "task": "multi-session-compare",
+        "convergence_score": 0.9,
+        "dominant_approach": "List the last five sessions with `gaal ls`, then compare token totals (`input + output`).",
+        "variants": [
+          "Two agents explicitly sorted by end time before comparing.",
+          "One agent used the default last-five ordering from `gaal ls --limit 5`."
+        ]
+      },
+      {
+        "task": "error-recovery-flow",
+        "convergence_score": 0.67,
+        "dominant_approach": "Recover from `inspect` not-found by running `gaal ls` to get valid IDs, then rerun `gaal inspect <id>` or `gaal inspect latest`.",
+        "variants": [
+          "Two agents gave the same recovery path.",
+          "One dispatch froze before running any `gaal` command."
+        ]
+      },
+      {
+        "task": "find-file-author",
+        "convergence_score": 0.67,
+        "dominant_approach": "Use `gaal who changed|wrote <path> --full` and then post-filter exact path matches in JSON.",
+        "variants": [
+          "Two agents independently used `who` plus `jq` to isolate exact subject matches.",
+          "One dispatch froze."
+        ]
+      },
+      {
+        "task": "content-search",
+        "convergence_score": 0.67,
+        "dominant_approach": "Use `gaal search \"database migration\" --since 30d --limit 5`.",
+        "variants": [
+          "Two agents hit a lockfile-permission error first and reran with a writable copy of `~/.gaal` under `HOME`.",
+          "One agent succeeded after the same search but returned self-generated current-session hits in the top 5."
+        ]
+      },
+      {
+        "task": "list-recent-coordinators",
+        "convergence_score": 0.67,
+        "dominant_approach": "Start with `gaal ls --since 3d --sort tokens`, then manually isolate coordinator sessions.",
+        "variants": [
+          "Two agents added `--all` and then filtered `.session_type == \"coordinator\"` in `jq`.",
+          "One agent treated `--skip-subagents` as sufficient and produced a mixed list dominated by standalones."
+        ]
+      },
+      {
+        "task": "tag-and-filter",
+        "convergence_score": 0.67,
+        "dominant_approach": "Find the latest session, tag it with `gaal tag <id> experiment`, then list tagged sessions.",
+        "variants": [
+          "All three had to mirror `~/.gaal` into a writable location before mutating tags.",
+          "Two agents verified via `gaal inspect --tag experiment` after `gaal ls --tag experiment` returned no results."
+        ]
+      },
+      {
+        "task": "handoff-creation",
+        "convergence_score": 0.33,
+        "dominant_approach": "Try `gaal create-handoff` first, then fall back to `inspect` and `transcript` when generation fails.",
+        "variants": [
+          "All three tried `create-handoff latest` or `create-handoff <id>`.",
+          "Two traces hit `create-handoff latest` -> `not found: latest` before switching to a concrete ID.",
+          "All three then hit provider-stream disconnects and manually assembled a fallback handoff artifact."
+        ]
+      }
+    ]
+  },
+  "variance": {
+    "ranked_by_variance": [
+      {
+        "task": "handoff-creation",
+        "variance_score": 0.9,
+        "strategies_seen": [
+          "Direct `create-handoff latest`",
+          "Resolve ID with `inspect latest` or `ls --limit 1` first",
+          "Manual fallback handoff built from `inspect` plus `transcript` after provider failure"
+        ]
+      },
+      {
+        "task": "tag-and-filter",
+        "variance_score": 0.8,
+        "strategies_seen": [
+          "Tag in live HOME first, then copy on failure",
+          "Copy SQLite DB to a writable mirror before tagging",
+          "Verify via `inspect --tag` because `ls --tag` returned no results"
+        ]
+      },
+      {
+        "task": "content-search",
+        "variance_score": 0.75,
+        "strategies_seen": [
+          "Straight `gaal search`",
+          "HOME redirection to a writable mirror after lockfile failure",
+          "Additional source inspection because search results looked self-contaminated"
+        ]
+      },
+      {
+        "task": "list-recent-coordinators",
+        "variance_score": 0.7,
+        "strategies_seen": [
+          "`ls --since 3d --skip-subagents --sort tokens` only",
+          "`ls --all` plus manual `.session_type == \"coordinator\"` filtering",
+          "Different interpretations of whether `--skip-subagents` means 'coordinators only'"
+        ]
+      },
+      {
+        "task": "find-file-author",
+        "variance_score": 0.65,
+        "strategies_seen": [
+          "`who changed` with exact-path `jq` filtering",
+          "`who wrote` and `who changed` cross-check",
+          "Dispatch freeze"
+        ]
+      },
+      {
+        "task": "error-recovery-flow",
+        "variance_score": 0.55,
+        "strategies_seen": [
+          "`gaal ls` then `gaal inspect <id>`",
+          "`gaal inspect latest` as a shortcut",
+          "Dispatch freeze"
+        ]
+      },
+      {
+        "task": "multi-session-compare",
+        "variance_score": 0.35,
+        "strategies_seen": [
+          "`gaal ls --limit 5` and sum tokens",
+          "`gaal ls --limit 5 --sort ended` before summing",
+          "Extra `inspect` call on the highest-token session"
+        ]
+      },
+      {
+        "task": "subagent-inspection",
+        "variance_score": 0.2,
+        "strategies_seen": [
+          "Find coordinator with `ls --skip-subagents`",
+          "Inspect coordinator for subagent summary"
+        ]
+      },
+      {
+        "task": "transcript-retrieval",
+        "variance_score": 0.15,
+        "strategies_seen": [
+          "`transcript latest --stdout` directly",
+          "Resolve `latest` through `ls` first",
+          "Try `--force` and then fall back"
+        ]
+      },
+      {
+        "task": "recall-context",
+        "variance_score": 0.15,
+        "strategies_seen": [
+          "`recall` only",
+          "`recall` plus `inspect`",
+          "`recall` plus a corroborating but failing `search`"
+        ]
+      },
+      {
+        "task": "self-identification",
+        "variance_score": 0.05,
+        "strategies_seen": [
+          "`salt` -> `find-salt`",
+          "Optional artifact-file step to preserve the salt between tool calls"
+        ]
+      },
+      {
+        "task": "token-cost-inspection",
+        "variance_score": 0.0,
+        "strategies_seen": [
+          "`inspect latest --tokens`"
+        ]
+      }
+    ]
+  },
+  "error_recovery": {
+    "recovery_events": [
+      {
+        "task": "content-search",
+        "agent": "content-search-agent1",
+        "error_hit": "Lockfile permission error on `gaal search` in the default HOME.",
+        "recovered": true,
+        "attempts": 2
+      },
+      {
+        "task": "content-search",
+        "agent": "content-search-agent2",
+        "error_hit": "Lockfile permission error on the first `gaal search` attempt.",
+        "recovered": true,
+        "attempts": 2
+      },
+      {
+        "task": "content-search",
+        "agent": "content-search-agent3",
+        "error_hit": "Lockfile permission error on `gaal search`; reran in a temporary writable HOME.",
+        "recovered": true,
+        "attempts": 2
+      },
+      {
+        "task": "recall-context",
+        "agent": "recall-context-agent1",
+        "error_hit": "`gaal search` failed with `Failed to acquire Lockfile ... Operation not permitted`.",
+        "recovered": true,
+        "attempts": 2
+      },
+      {
+        "task": "recall-context",
+        "agent": "recall-context-agent2",
+        "error_hit": "`gaal search` failed with the same lockfile-permission error.",
+        "recovered": true,
+        "attempts": 2
+      },
+      {
+        "task": "recall-context",
+        "agent": "recall-context-agent3",
+        "error_hit": "`gaal search` repeatedly failed with a lockfile-permission error.",
+        "recovered": true,
+        "attempts": 2
+      },
+      {
+        "task": "transcript-retrieval",
+        "agent": "transcript-retrieval-agent1",
+        "error_hit": "`gaal transcript latest --force --stdout` tried to write under `~/.gaal` and hit `Operation not permitted`.",
+        "recovered": true,
+        "attempts": 1
+      },
+      {
+        "task": "handoff-creation",
+        "agent": "handoff-creation-agent1",
+        "error_hit": "`gaal create-handoff` failed twice with provider stream-disconnect errors.",
+        "recovered": true,
+        "attempts": 3
+      },
+      {
+        "task": "handoff-creation",
+        "agent": "handoff-creation-agent2",
+        "error_hit": "`gaal create-handoff latest` returned `not found: latest`, then provider calls disconnected.",
+        "recovered": true,
+        "attempts": 4
+      },
+      {
+        "task": "handoff-creation",
+        "agent": "handoff-creation-agent3",
+        "error_hit": "`gaal create-handoff latest` returned `not found: latest`, then provider calls disconnected.",
+        "recovered": true,
+        "attempts": 4
+      },
+      {
+        "task": "find-file-author",
+        "agent": "find-file-author-agent2",
+        "error_hit": "Dispatch froze with `No harness events for 241s. Likely frozen. Process terminated.`",
+        "recovered": false,
+        "attempts": 0
+      },
+      {
+        "task": "error-recovery-flow",
+        "agent": "error-recovery-flow-agent3",
+        "error_hit": "Dispatch froze with `No harness events for 241s. Likely frozen. Process terminated.`",
+        "recovered": false,
+        "attempts": 0
+      }
+    ],
+    "recovery_rate": 0.83
+  },
+  "implicit_api": {
+    "phantom_commands": [
+      {
+        "command": "gaal help <subcommand>",
+        "frequency": 5,
+        "likely_intent": "Request command-specific help in the common `git help <cmd>` style."
+      }
+    ],
+    "phantom_flags": [
+      {
+        "flag": "--help",
+        "on_command": "ls",
+        "frequency": 6
+      },
+      {
+        "flag": "--help",
+        "on_command": "search",
+        "frequency": 2
+      },
+      {
+        "flag": "--help",
+        "on_command": "recall",
+        "frequency": 2
+      },
+      {
+        "flag": "--help",
+        "on_command": "who",
+        "frequency": 1
+      },
+      {
+        "flag": "--help",
+        "on_command": "create-handoff",
+        "frequency": 1
+      },
+      {
+        "flag": "--help",
+        "on_command": "inspect",
+        "frequency": 1
+      }
+    ]
+  },
+  "cost_efficiency": {
+    "per_task": [
+      {
+        "task": "token-cost-inspection",
+        "avg_tokens": 383,
+        "avg_attempts": 1.0,
+        "success_rate": 1.0
+      },
+      {
+        "task": "error-recovery-flow",
+        "avg_tokens": 449,
+        "avg_attempts": 2.67,
+        "success_rate": 0.67
+      },
+      {
+        "task": "find-file-author",
+        "avg_tokens": 486,
+        "avg_attempts": 5.0,
+        "success_rate": 0.67
+      },
+      {
+        "task": "multi-session-compare",
+        "avg_tokens": 533,
+        "avg_attempts": 2.67,
+        "success_rate": 1.0
+      },
+      {
+        "task": "self-identification",
+        "avg_tokens": 540,
+        "avg_attempts": 1.67,
+        "success_rate": 1.0
+      },
+      {
+        "task": "subagent-inspection",
+        "avg_tokens": 679,
+        "avg_attempts": 7.67,
+        "success_rate": 1.0
+      },
+      {
+        "task": "recall-context",
+        "avg_tokens": 807,
+        "avg_attempts": 5.0,
+        "success_rate": 1.0
+      },
+      {
+        "task": "transcript-retrieval",
+        "avg_tokens": 964,
+        "avg_attempts": 1.33,
+        "success_rate": 1.0
+      },
+      {
+        "task": "handoff-creation",
+        "avg_tokens": 1021,
+        "avg_attempts": 6.67,
+        "success_rate": 1.0
+      },
+      {
+        "task": "tag-and-filter",
+        "avg_tokens": 1177,
+        "avg_attempts": 12.0,
+        "success_rate": 1.0
+      },
+      {
+        "task": "content-search",
+        "avg_tokens": 1286,
+        "avg_attempts": 3.33,
+        "success_rate": 1.0
+      },
+      {
+        "task": "list-recent-coordinators",
+        "avg_tokens": 1385,
+        "avg_attempts": 3.33,
+        "success_rate": 1.0
+      }
+    ],
+    "total_tokens": 29132,
+    "total_cost_estimate_usd": 0.0583
+  },
+  "recommendations": [
+    {
+      "priority": 1,
+      "change": "Make read-only queries truly read-only: stop requiring a writable lockfile for `search`/`recall`-adjacent index reads, or auto-relocate runtime state when HOME is unwritable.",
+      "evidence": "All 3 `content-search` agents and 3 `recall-context` agents reported `Failed to acquire Lockfile ... Operation not permitted` and recovered only by copying `~/.gaal` into a writable HOME mirror.",
+      "expected_impact": "Removes the biggest first-run sandbox failure mode and should materially raise first-attempt success on search-heavy tasks."
+    },
+    {
+      "priority": 2,
+      "change": "Fix `create-handoff` selector semantics and add a local fallback artifact when provider generation fails.",
+      "evidence": "In `handoff-creation`, 2 agents hit `gaal create-handoff latest` -> `not found: latest` despite docs teaching broad `latest` support, and all 3 then hit provider stream disconnects before manually synthesizing handoff files.",
+      "expected_impact": "Turns the highest-variance task into a one-command success path and removes an especially damaging docs/runtime contradiction."
+    },
+    {
+      "priority": 3,
+      "change": "Add an explicit `--session-type coordinator` filter or clarify that `--skip-subagents` does not mean coordinator-only.",
+      "evidence": "In `list-recent-coordinators`, one agent treated `--skip-subagents` as sufficient and returned 100 mixed sessions, while two others had to add manual `.session_type == \"coordinator\"` filtering to get the correct 20-session set.",
+      "expected_impact": "Cuts variance on fleet-view tasks and reduces the amount of `jq` post-processing agents need for basic filtering."
+    },
+    {
+      "priority": 4,
+      "change": "Support `gaal <subcommand> --help` and `gaal help <subcommand>`, or document the supported help pattern much more aggressively.",
+      "evidence": "Agents attempted phantom help interfaces 18 times total: `gaal help <subcommand>` 5 times and `--help` on concrete subcommands 13 times (`ls` 6, `search` 2, `recall` 2, plus `who`, `create-handoff`, and `inspect`).",
+      "expected_impact": "Aligns gaal with a strong default CLI mental model and reduces exploratory dead-ends early in a session."
+    },
+    {
+      "priority": 5,
+      "change": "Tighten path/tag query fidelity: add exact-path matching for `who`, fix `ls --tag`, and consider suppressing the current session from `search` by default.",
+      "evidence": "Two `find-file-author` agents had to pipe `who` results through `jq` to isolate an exact subject path. In `tag-and-filter`, 2 agents reported `ls --tag experiment` returning no results even after the tag was visible via `inspect --tag experiment`. In `content-search`, self-generated current-session command facts appeared in the top 5.",
+      "expected_impact": "Improves trust in query results and reduces manual post-filtering, especially on first contact when agents do not yet know gaal's matching quirks."
+    }
+  ]
+}

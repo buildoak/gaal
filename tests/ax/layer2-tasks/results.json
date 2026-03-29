@@ -1,0 +1,477 @@
+{
+  "meta": {
+    "timestamp": "2026-03-29T14:46:59Z",
+    "tasks_run": 12,
+    "total_dispatches": 36
+  },
+  "tasks": [
+    {
+      "task_name": "find-file-author",
+      "category": "attribution",
+      "prompt": "Find which session last modified the file src/render/session_md.rs. Return the session ID and when it happened.",
+      "expected_pattern": "gaal who (wrote|changed|touched) .*session_md",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "find-file-author-agent1",
+          "task_name": "find-file-author",
+          "dispatch_id": "01KMWYBDSMX449Z8KE40GV6VVN",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 54,
+          "response": "The last modification to `src/render/session_md.rs` was by session `a7af50db` at `2026-03-29T09:27:28.858Z` UTC.\n\nExact commands I ran:\n- `gaal who changed /Users/otonashi/thinking/building/gaal/src/render/session_md.rs --limit 100 -F`\n- `gaal who changed /Users/otonashi/thinking/building/gaal/src/render/session_md.rs --limit 100 -F | jq -r '[.sessions[] | select((.subject // \"\") == \"/Users/otonashi/thinking/building/gaal/src/render/session_md.rs\") | {session_id, ts}] | sort_by(.ts) | reverse | .[0] | [.session_id, .ts] | @tsv'`",
+          "expected_pattern": "gaal who (wrote|changed|touched) .*session_md",
+          "session_data": {}
+        },
+        {
+          "agent_label": "find-file-author-agent2",
+          "task_name": "find-file-author",
+          "dispatch_id": "01KMWYD2NEK4ABFN1WM6NZ2M2M",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 250,
+          "response": "",
+          "expected_pattern": "gaal who (wrote|changed|touched) .*session_md",
+          "session_data": {}
+        },
+        {
+          "agent_label": "find-file-author-agent3",
+          "task_name": "find-file-author",
+          "dispatch_id": "01KMWYMPXZ5DTN8K1KEDQNENM2",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 37,
+          "response": "Session ID: `a7af50db`\n\nWhen it happened: `2026-03-29T09:27:28.858Z`\n\nExact commands run:\n```bash\n./target/release/gaal who wrote src/render/session_md.rs --limit 20\n./target/release/gaal who changed src/render/session_md.rs --limit 20\n./target/release/gaal who changed src/render/session_md.rs --full --limit 100 | jq -r '.sessions[] | select(.subject==\"/Users/otonashi/thinking/building/gaal/src/render/session_md.rs\") | [.session_id, .ts] | @tsv' | sort -k2 | tail -n 1\n./target/release/gaal who wrote src/render/session_md.rs --full --limit 100 | jq -r '.sessions[] | select(.subject==\"/Users/otonashi/thinking/building/gaal/src/render/session_md.rs\") | [.session_id, .ts] | @tsv' | sort -k2 | tail -n 1\n```\n\nBoth `wrote` and `changed` resolved to the same latest modifying session for that file.",
+          "expected_pattern": "gaal who (wrote|changed|touched) .*session_md",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "list-recent-coordinators",
+      "category": "fleet-view",
+      "prompt": "List only coordinator sessions from the last 3 days. I want to see which ones used the most tokens.",
+      "expected_pattern": "gaal ls.*(--skip-subagents|session_type.*coordinator|--sort.*tokens)",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "list-recent-coordinators-agent1",
+          "task_name": "list-recent-coordinators",
+          "dispatch_id": "01KMWYNVD9BKNBMXBWVPG2JN48",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 75,
+          "response": "I pulled the last 3 days with subagents excluded, then ranked the coordinator-workspace sessions by total tokens (`input + output`). The `gaal` result returned 100 sessions in that window.\n\nTop 10 by total tokens:\n\n| Rank | Session | Started | Total tokens | Input | Output | Headline |\n|---|---|---:|---:|---:|---:|---|\n| 1 | `8af1c1bc` | `2026-03-26T14:29:28.172Z` | `9,239,908` | `9,027,680` | `212,228` | `Finished the \\`agent-mux-v2\\` alignment wave, then kicked o...` |\n| 2 | `c1f870b4` | `2026-03-27T09:41:36.845Z` | `7,357,395` | `7,060,380` | `297,015` | `Radiation was turned into a protocol-first seed pipeline ...` |\n| 3 | `f3aa5dcd` | `2026-03-27T04:59:59.275Z` | `6,372,623` | `6,236,797` | `135,826` | `Rebuilt the day-checkout skill into a workday-aware v2 pi...` |\n| 4 | `0024052b` | `2026-03-27T17:14:05.100Z` | `4,986,210` | `4,664,795` | `321,415` | `boot Jenkins` |\n| 5 | `6b595110` | `2026-03-28T18:08:49.045Z` | `3,334,048` | `3,166,530` | `167,518` | `boot Jenkins` |\n| 6 | `2fdeb4b1` | `2026-03-28T18:08:59.435Z` | `3,324,045` | `3,160,794` | `163,251` | `boot Jenkins` |\n| 7 | `44f47b82` | `2026-03-28T18:08:48.865Z` | `3,222,586` | `3,048,602` | `173,984` | `boot Jenkins` |\n| 8 | `e774996a` | `2026-03-28T17:42:14.466Z` | `3,165,317` | `3,006,741` | `158,576` | `boot Jenkins` |\n| 9 | `2035ea99` | `2026-03-26T15:35:56.624Z` | `2,520,439` | `2,478,149` | `42,290` | `Onboarded to the Radiation v3 content-factory spec, patch...` |\n| 10 | `26074c3a` | `2026-03-27T06:01:52.562Z` | `1,500,560` | `1,430,249` | `70,311` | `boot Jenkins` |\n\nExact commands I ran:\n\n```bash\ngaal ls --since 3d --skip-subagents --sort tokens --limit 100 > \"$AGENT_MUX_ARTIFACT_DIR/ls_3d.json\"\njq '.shown, .total, (.sessions|length)' \"$AGENT_MUX_ARTIFACT_DIR/ls_3d.json\"\njq -r '.sessions[] | [.id, .started_at, (.tokens.input + .tokens.output), .tokens.input, .tokens.output, .session_type, .headline] | @tsv' \"$AGENT_MUX_ARTIFACT_DIR/ls_3d.json\" | head -20\n```\n\nIf you want, I can also give you the full 100-session list or reformat this as CSV.",
+          "expected_pattern": "gaal ls.*(--skip-subagents|session_type.*coordinator|--sort.*tokens)",
+          "session_data": {}
+        },
+        {
+          "agent_label": "list-recent-coordinators-agent2",
+          "task_name": "list-recent-coordinators",
+          "dispatch_id": "01KMWYR4AC86Z3TQDWMPNXRMNS",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 118,
+          "response": "Using `gaal`'s 3-day window, I found 20 coordinator sessions and ranked them by total tokens (`input + output`).\n\nQuery window: `2026-03-26T14:08:52Z` to `2026-03-29T14:09:07Z`\n\n| Rank | Session | Total tokens | Input | Output | Started | Headline |\n|---|---:|---:|---:|---:|---|---|\n| 1 | `66ce8874` | 27,620 | 5,490 | 22,130 | 2026-03-29T09:20:45.365Z | `<tg_message_voice from=\"etheac\" ts=\"2026-03-29T09:20:29.0...` |\n| 2 | `acabe588` | 26,192 | 3,579 | 22,613 | 2026-03-28T14:25:56.914Z | `agent-mux was hardened end-to-end: P0 liveness fixes land...` |\n| 3 | `b0d5e116` | 25,354 | 11,400 | 13,954 | 2026-03-27T17:22:28.645Z | `Planned and audited the agent-mux v2 coordinator layout, ...` |\n| 4 | `7fae8db6` | 24,753 | 1,011 | 23,742 | 2026-03-27T00:59:52.008Z | `Strengthened TG session routing rules and landed the Gaus...` |\n| 5 | `ecca0bdb` | 22,523 | 2,161 | 20,362 | 2026-03-28T08:47:11.223Z | `<local-command-caveat>Caveat: The messages below were gen...` |\n| 6 | `7d5d03e4` | 21,005 | 3,730 | 17,275 | 2026-03-28T12:02:22.894Z | `The session hardened gaal across token accounting, transc...` |\n| 7 | `ebe5a619` | 18,059 | 1,589 | 16,470 | 2026-03-29T06:17:07.749Z | `boot Jenkins; we will worj on agent-mux finalization and ...` |\n| 8 | `f1eed35c` | 17,688 | 4,037 | 13,651 | 2026-03-27T08:50:11.376Z | `Implemented and validated the CUDA \\`--b-min\\` fix in \\`gaus...` |\n| 9 | `2b0db33c` | 15,588 | 1,876 | 13,712 | 2026-03-29T04:45:04.423Z | `Implemented and verified gaal subagent support across ind...` |\n| 10 | `68df0352` | 13,968 | 127 | 13,841 | 2026-03-28T09:00:15.130Z | `Handoff written to [handoff.md](/tmp/agent-mux/01KMT6Z00C...` |\n| 11 | `d2bc0287` | 5,708 | 141 | 5,567 | 2026-03-27T09:52:21.166Z | `Built the scaffolding for an English grammar playbook PDF...` |\n| 12 | `93dfae18` | 4,320 | 102 | 4,218 | 2026-03-27T17:17:02.201Z | `Audited coordinator memory, consolidated experiment docs,...` |\n| 13 | `5c2cc93f` | 3,920 | 16 | 3,904 | 2026-03-29T10:57:22.503Z | `Booted Jenkins and discussed the longer-term AgentMUX coo...` |\n| 14 | `bf6a7161` | 3,526 | 1,644 | 1,882 | 2026-03-28T05:35:14.262Z | `Confirmed the 835M angular sweep finished fully blocked a...` |\n| 15 | `b8f03bd3` | 3,292 | 10 | 3,282 | 2026-03-28T08:14:39.021Z | `Trace token: AGENT_MUX_GO_01KMSR4TJQ384SEWWJCY13QQ57 Disp...` |\n| 16 | `5e54db27` | 2,283 | 883 | 1,400 | 2026-03-27T08:12:05.232Z | `Updated the claude-limits-reverse-engineering-skill with ...` |\n| 17 | `3ea44141` | 2,219 | 61 | 2,158 | 2026-03-28T05:33:10.016Z | `Unified the \\`summarize\\` skill into a three-engine content...` |\n| 18 | `98ece453` | 725 | 25 | 700 | 2026-03-28T13:06:30.578Z | `<local-command-caveat>Caveat: The messages below were gen...` |\n| 19 | `1ab21f89` | 339 | 28 | 311 | 2026-03-28T14:38:35.693Z | `Clarified the proof-grade geometry for the upper-bound mo...` |\n| 20 | `781575ac` | 40 | 4 | 36 | 2026-03-29T11:52:03.959Z | `<tg_message_voice from=\"etheac\" ts=\"2026-03-29T11:51:39.0...` |\n\nExact commands I ran:\n```bash\ngaal ls --since 3d --all --skip-subagents --sort tokens --limit 1000 > \"$AGENT_MUX_ARTIFACT_DIR/coordinator_sessions_last_3d_all.json\"\njq -r '\n  .sessions\n  | map(select(.session_type == \"coordinator\"))\n  | sort_by(.tokens.input + .tokens.output)\n  | reverse\n  | ...\n' \"$AGENT_MUX_ARTIFACT_DIR/coordinator_sessions_last_3d_all.json\"\n```\n\nRaw result is here: [coordinator_sessions_last_3d_all.json](/tmp/agent-mux-501/01KMWYR4AC86Z3TQDWMPNXRMNS/coordinator_sessions_last_3d_all.json)",
+          "expected_pattern": "gaal ls.*(--skip-subagents|session_type.*coordinator|--sort.*tokens)",
+          "session_data": {}
+        },
+        {
+          "agent_label": "list-recent-coordinators-agent3",
+          "task_name": "list-recent-coordinators",
+          "dispatch_id": "01KMWYVQMA69QZFYA0GW6P53C8",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 108,
+          "response": "There are 20 coordinator sessions in the last 3 days. I sorted them by total tokens used, highest first.\n\n1. `66ce8874` - `27,620` tokens - started `2026-03-29T09:20:45.365Z`\n2. `acabe588` - `26,192` tokens - started `2026-03-28T14:25:56.914Z`\n3. `b0d5e116` - `25,354` tokens - started `2026-03-27T17:22:28.645Z`\n4. `7fae8db6` - `24,753` tokens - started `2026-03-27T00:59:52.008Z`\n5. `ecca0bdb` - `22,523` tokens - started `2026-03-28T08:47:11.223Z`\n6. `7d5d03e4` - `21,005` tokens - started `2026-03-28T12:02:22.894Z`\n7. `ebe5a619` - `18,059` tokens - started `2026-03-29T06:17:07.749Z`\n8. `f1eed35c` - `17,688` tokens - started `2026-03-27T08:50:11.376Z`\n9. `2b0db33c` - `15,588` tokens - started `2026-03-29T04:45:04.423Z`\n10. `68df0352` - `13,968` tokens - started `2026-03-28T09:00:15.130Z`\n11. `d2bc0287` - `5,708` tokens - started `2026-03-27T09:52:21.166Z`\n12. `93dfae18` - `4,320` tokens - started `2026-03-27T17:17:02.201Z`\n13. `5c2cc93f` - `3,920` tokens - started `2026-03-29T10:57:22.503Z`\n14. `bf6a7161` - `3,526` tokens - started `2026-03-28T05:35:14.262Z`\n15. `b8f03bd3` - `3,292` tokens - started `2026-03-28T08:14:39.021Z`\n16. `5e54db27` - `2,283` tokens - started `2026-03-27T08:12:05.232Z`\n17. `3ea44141` - `2,219` tokens - started `2026-03-28T05:33:10.016Z`\n18. `98ece453` - `725` tokens - started `2026-03-28T13:06:30.578Z`\n19. `1ab21f89` - `339` tokens - started `2026-03-28T14:38:35.693Z`\n20. `781575ac` - `40` tokens - started `2026-03-29T11:52:03.959Z`\n\nThe intermediate JSON is here: [coordinator_sessions_3d.json](/tmp/agent-mux-501/01KMWYVQMA69QZFYA0GW6P53C8/coordinator_sessions_3d.json)\n\nCommands run:\n```bash\ngaal ls --since 3d --skip-subagents --all --sort tokens --limit 1000 | jq '{total: .sessions|length, coordinator: [.sessions[] | select(.session_type==\"coordinator\")] | length, standalone: [.sessions[] | select(.session_type==\"standalone\")] | length, subagent: [.sessions[] | select(.session_type==\"subagent\")] | length}'\ngaal ls --since 3d --skip-subagents --all --sort tokens --limit 1000 | jq '{sessions: [.sessions[] | select(.session_type==\"coordinator\") | {id, engine, model, cwd, started_at, ended_at, headline, tokens, total_tokens: (.tokens.input + .tokens.output)}] | sort_by(.total_tokens) | reverse}' | tee \"$AGENT_MUX_ARTIFACT_DIR/coordinator_sessions_3d.json\"\n```",
+          "expected_pattern": "gaal ls.*(--skip-subagents|session_type.*coordinator|--sort.*tokens)",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "token-cost-inspection",
+      "category": "drill-down",
+      "prompt": "Show me the full token breakdown for the most recent session, including cache read and creation tokens.",
+      "expected_pattern": "gaal inspect (latest|[a-f0-9]+) --tokens",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "token-cost-inspection-agent1",
+          "task_name": "token-cost-inspection",
+          "dispatch_id": "01KMWYZ1FZMNWKP16C79KJMPZ4",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 20,
+          "response": "Most recent session: `da980fc9`\n\nToken breakdown from `gaal inspect latest --tokens`:\n- `input_total`: `32668`\n- `output_total`: `4267`\n- `cache_read_input_tokens`: `285056`\n- `cache_creation_input_tokens`: `0`\n- `reasoning_tokens`: `2660`\n- `avg_input_per_turn`: `32668`\n- `avg_output_per_turn`: `4267`\n- `peak_context`: `36751`\n- `estimated_cost_usd`: `0.01`\n- `turns`: `1`\n\nExact commands I ran:\n1. `sed -n '1,220p' skill/SKILL.md`\n2. `sed -n '1,260p' DOCS.md`\n3. `rg -n \"tokens|cache read|creation\" DOCS.md skill/SKILL.md`\n4. `gaal inspect latest --tokens`\n\nIf you want, I can also format this as raw JSON or compare it against another session.",
+          "expected_pattern": "gaal inspect (latest|[a-f0-9]+) --tokens",
+          "session_data": {}
+        },
+        {
+          "agent_label": "token-cost-inspection-agent2",
+          "task_name": "token-cost-inspection",
+          "dispatch_id": "01KMWYZMQ26TPPRPBQM0XWNT5K",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 31,
+          "response": "Ran:\n\n```bash\ngaal inspect latest --tokens\n```\n\nMost recent session:\n- `id`: `87989355`\n- `ended_at`: `2026-03-29T14:12:00.006Z`\n\nFull token breakdown:\n- `input_total`: `2204`\n- `output_total`: `695`\n- `cache_read_input_tokens`: `15104`\n- `cache_creation_input_tokens`: `0`\n- `reasoning_tokens`: `138`\n- `avg_input_per_turn`: `2204`\n- `avg_output_per_turn`: `695`\n- `turns`: `1`\n- `peak_context`: `9163`\n- `estimated_cost_usd`: `0.0`\n\nNotes from the CLI output:\n- `input_total` is the non-cached input total for the session.\n- `peak_context` is the max single-turn input, including non-cached input plus cache read and cache creation tokens.",
+          "expected_pattern": "gaal inspect (latest|[a-f0-9]+) --tokens",
+          "session_data": {}
+        },
+        {
+          "agent_label": "token-cost-inspection-agent3",
+          "task_name": "token-cost-inspection",
+          "dispatch_id": "01KMWZ0JMG3HS6BD5TBMYZZYM3",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 29,
+          "response": "I used `gaal inspect latest --tokens` and the most recent session is `87989355`.\n\nToken breakdown:\n- `input_total`: `2204`\n- `output_total`: `695`\n- `cache_read_input_tokens`: `15104`\n- `cache_creation_input_tokens`: `0`\n- `reasoning_tokens`: `138`\n- `avg_input_per_turn`: `2204`\n- `avg_output_per_turn`: `695`\n- `turns`: `1`\n- `peak_context`: `9163`\n- `estimated_cost_usd`: `0.0`\n\nFor completeness, the command I ran was:\n```bash\n./target/release/gaal inspect latest --tokens\n```",
+          "expected_pattern": "gaal inspect (latest|[a-f0-9]+) --tokens",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "content-search",
+      "category": "search",
+      "prompt": "Search for sessions that discussed 'database migration' in the last 30 days. Show me the top 5 results.",
+      "expected_pattern": "gaal search.*database.migration.*--limit 5",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "content-search-agent1",
+          "task_name": "content-search",
+          "dispatch_id": "01KMWZ1EQYH449X9QQP4YSMKZQ",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 95,
+          "response": "I ran:\n\n```bash\ngaal search \"database migration\" --since 30d --limit 5\n```\n\nIt failed with a lockfile permission error, so I copied the `.gaal` state into the writable artifact directory and reran with:\n\n```bash\nHOME=\"$AGENT_MUX_ARTIFACT_DIR/gaal-home\" gaal search \"database migration\" --since 30d --limit 5\n```\n\nTop 5 results from the last 30 days:\n\n1. `a999d0ec` | `codex` | `2026-03-26T08:34:59.766Z` | score `20.370892`\n   - `fact_type`: `command`\n   - `subject`: `rg -n \"migration_cache|opencode_json_dir|load_opencode_migration_cache|save_opencode_migration_cache`\n   - `snippet`: `rg -n \"migration_cache|opencode_json_dir|load_opencode_migration_cache|save_opencode_migration_cache|get_json_dir_mtime\" crates/tokscale-core/src/lib.rs crates/tokscale-core/src/scanner.rs crates/tokscale-core/src/sessions/opencode.rs`\n\n2. `8bea878f` | `codex` | `2026-03-04T21:55:46.331Z` | score `18.226624`\n   - `fact_type`: `command`\n   - `subject`: `cat .seed_migration_results.tsv`\n   - `snippet`: `cat .seed_migration_results.tsv`\n\n3. `87acdaca` | `claude` | `2026-03-08T05:36:09.896Z` | score `18.219223`\n   - `fact_type`: `command`\n   - `session_headline`: `This session seeded and composted multiple AI trend captures into research artifacts, fixed skill-loader hygiene in pratchett-os, shipped a public peekaboo skill in fieldwork-skills, and began a follow-up TG bot compaction-blocking investigation.`\n   - `subject`: `cd /Users/otonashi/thinking/pratchett-os && rm -f .seed_migration_errors.log .seed_migration_results`\n\n4. `a2d8add4` | `claude` | `2026-03-14T09:18:42.686Z` | score `17.888533`\n   - `fact_type`: `command`\n   - `session_type`: `subagent`\n   - `parent_id`: `16384136`\n   - `subject`: `curl -sL \"https://raw.githubusercontent.com/Tennismylife/TML-Database/master/ATP_Database.csv\" -o /U`\n\n5. `a2d8add4` | `claude` | `2026-03-14T09:18:36.187Z` | score `17.753620`\n   - `fact_type`: `command`\n   - `session_type`: `subagent`\n   - `parent_id`: `16384136`\n   - `subject`: `curl -sL \"https://raw.githubusercontent.com/Tennismylife/TML-Database/master/ATP_Database.csv\" | hea`\n\nQuery window returned by `gaal`:\n- from `2026-02-27`\n- to `2026-03-29`\n\nTotal matches: `46`",
+          "expected_pattern": "gaal search.*database.migration.*--limit 5",
+          "session_data": {}
+        },
+        {
+          "agent_label": "content-search-agent2",
+          "task_name": "content-search",
+          "dispatch_id": "01KMWZ4BNWEX0KGH3S5AMXAPA0",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 96,
+          "response": "I searched the last 30 days with:\n\n1. `./target/release/gaal search \"database migration\" --limit 5`\n2. `mkdir -p \"$AGENT_MUX_ARTIFACT_DIR/home\" && cp -R ~/.gaal \"$AGENT_MUX_ARTIFACT_DIR/home/\"`\n3. `HOME=\"$AGENT_MUX_ARTIFACT_DIR/home\" ./target/release/gaal search \"database migration\" --limit 5`\n4. `HOME=\"$AGENT_MUX_ARTIFACT_DIR/home\" ./target/release/gaal search \"database migration\" --limit 5 > \"$AGENT_MUX_ARTIFACT_DIR/database-migration-search.json\"`\n\nThe first run failed because `gaal` could not acquire its lockfile in the default home. Rerunning with `HOME` pointed at a writable temp copy of `~/.gaal` worked.\n\nTop 5 results from the successful search:\n\n| Rank | session_id | engine | type | ts | match |\n|---|---|---|---|---|---|\n| 1 | `ab754333` | `codex` | `standalone` | `2026-03-29T14:13:19.583Z` | `gaal search \"database migration\" --since 30d --limit 5` |\n| 2 | `a999d0ec` | `codex` | `standalone` | `2026-03-26T08:34:59.766Z` | `rg -n \"migration_cache|opencode_json_dir|load_opencode_migration_cache|save_opencode_migration_cache|get_json_dir_mtime\" ...` |\n| 3 | `8bea878f` | `codex` | `standalone` | `2026-03-04T21:55:46.331Z` | `cat .seed_migration_results.tsv` |\n| 4 | `87acdaca` | `claude` | `coordinator` | `2026-03-08T05:36:09.896Z` | session headline about seeding and composting AI trend captures; snippet shows `.seed_migration_results.tsv` cleanup |\n| 5 | `a2d8add4` | `claude` | `subagent` | `2026-03-14T09:18:42.686Z` | `curl ... ATP_Database.csv ...` |\n\nThe JSON result was saved at `/tmp/agent-mux-501/01KMWZ4BNWEX0KGH3S5AMXAPA0/database-migration-search.json`.",
+          "expected_pattern": "gaal search.*database.migration.*--limit 5",
+          "session_data": {}
+        },
+        {
+          "agent_label": "content-search-agent3",
+          "task_name": "content-search",
+          "dispatch_id": "01KMWZ79A8YAHHDRX4EZPE31RP",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 109,
+          "response": "I searched the last 30 days (`2026-02-27` through `2026-03-29`) for `database migration` and got 46 matching facts. The top 5 results were:\n\n1. `session_id`: `1744ccda`\n   `engine`: `codex`\n   `turn`: `1`\n   `fact_type`: `command`\n   `ts`: `2026-03-29T14:16:28.377Z`\n   `snippet`: `gaal search \"database migration\" --since 30d --limit 5 | tee \"$AGENT_MUX_ARTIFACT_DIR/database_migration_search.json\"`\n\n2. `session_id`: `ab754333`\n   `engine`: `codex`\n   `turn`: `0`\n   `fact_type`: `command`\n   `ts`: `2026-03-29T14:13:19.583Z`\n   `snippet`: `gaal search \"database migration\" --since 30d --limit 5`\n\n3. `session_id`: `6f3af761`\n   `engine`: `codex`\n   `turn`: `1`\n   `fact_type`: `command`\n   `ts`: `2026-03-29T14:14:38.275Z`\n   `snippet`: `./target/release/gaal search \"database migration\" --limit 5`\n\n4. `session_id`: `6f3af761`\n   `engine`: `codex`\n   `turn`: `0`\n   `fact_type`: `command`\n   `ts`: `2026-03-29T14:15:47.805Z`\n   `snippet`: `HOME=\"$AGENT_MUX_ARTIFACT_DIR/home\" ./target/release/gaal search \"database migration\" --limit 5 > ...`\n\n5. `session_id`: `ab754333`\n   `engine`: `codex`\n   `turn`: `0`\n   `fact_type`: `command`\n   `ts`: `2026-03-29T14:14:01.770Z`\n   `snippet`: `HOME=\"$AGENT_MUX_ARTIFACT_DIR/gaal-home\" gaal search \"database migration\" --since 30d --limit 5`\n\nExact commands I ran:\n\n```bash\nsed -n '1,240p' skill/SKILL.md\nsed -n '1,260p' DOCS.md\nsed -n '511,550p' DOCS.md\nsed -n '184,206p' skill/references/verb-reference.md\ngaal search \"database migration\" --since 30d --limit 5 | tee \"$AGENT_MUX_ARTIFACT_DIR/database_migration_search.json\"\ntmp_home=$(mktemp -d /tmp/gaal-home.XXXXXX) && mkdir -p \"$tmp_home/.gaal\" && cp \"$HOME/.gaal/index.db\" \"$tmp_home/.gaal/index.db\" && cp -R \"$HOME/.gaal/tantivy\" \"$tmp_home/.gaal/tantivy\" && HOME=\"$tmp_home\" gaal search \"database migration\" --since 30d --limit 5 | tee \"$AGENT_MUX_ARTIFACT_DIR/database_migration_search.json\"\n```\n\nThe first `gaal search` hit a lockfile permission issue in the default home; I worked around that by copying the index into a writable temp home under `/tmp` and rerunning the search there.",
+          "expected_pattern": "gaal search.*database.migration.*--limit 5",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "transcript-retrieval",
+      "category": "transcript",
+      "prompt": "Get the full transcript of the most recent session. I want to read the actual conversation content, not just metadata.",
+      "expected_pattern": "gaal transcript (latest|[a-f0-9]+) --stdout",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "transcript-retrieval-agent1",
+          "task_name": "transcript-retrieval",
+          "dispatch_id": "01KMWZAM6R9VY7ES5NY2HHKNVD",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 52,
+          "response": "I used these `gaal` commands:\n\n```bash\ngaal transcript latest\ngaal transcript latest --stdout\ngaal transcript latest --force --stdout   # failed: tried to write to /Users/otonashi/.gaal/... and hit \"Operation not permitted\"\n```\n\nLatest session resolved to:\n\n- `session_id`: `156f951c`\n- `date`: `2026-03-29`\n- `model`: `gpt-5.4-mini`\n\nTranscript content from `gaal transcript latest --stdout`:\n\n```md\n---\nsession_id: 156f951c\ndate: 2026-03-29\nstart: 18:17\nend: 18:17\nduration: 0m\nmodel: gpt-5.4-mini\nturns: 1\ntotal_input_tokens: 1113\ntotal_output_tokens: 365\ncache_read_tokens: 7040\ncache_creation_tokens: 0\n---\n\n# Session: You are a software engineer using the gaal CLI ...\n\n## Executive Summary\n\n### Commands Executed\n\n- `pwd && printf '\\n--\\n' && ls -la && printf '\\n--\\n' && find .. -name SKILL.md -o -name DOCS.md -o -name 'AGENTS.md'`\n- `printf 'AGENT_MUX_CONTEXT=%s\\nAGENT_MUX_ARTIFACT_DIR=%s\\n' \"$AGENT_MUX_CONTEXT\" \"$AGENT_MUX_ARTIFACT_DIR\" && printf '...`\n\n---\n\n## Conversation\n\n### [18:17] User\nYou are a software engineer using the gaal CLI for the first time. You have access to the gaal skill file (SKILL.md) and documentation (DOCS.md) as context.\n\nYour job is to accomplish the task given to you by running gaal commands. Think step by step:\n1. Read the skill file and docs to understand what commands are available\n2. Choose the right command and flags\n3. Run the command\n4. Interpret the output\n\nImportant rules:\n- Use gaal commands only — do not grep JSONL files directly\n- Prefer JSON output (default) over human output for machine-readable results\n- If a command fails, read the error message carefully and try to self-correct\n- Report your final answer clearly, including the exact commands you ran\n\nTrace token: AGENT_MUX_GO_01KMWZAM6R9VY7ES5NY2HHKNVD\nDispatch ID: 01KMWZAM6R9VY7ES5NY2HHKNVD\nWrite intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.\n\nRelevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.\nGet the full transcript of the most recent session. I want to read the actual conversation content, not just metadata.\n\n### [18:17] Claude\nI’m going to read the local gaal instructions and the coordinator context first, then I’ll use the gaal CLI to fetch the most recent session transcript and verify the exact command/output path.\n\n-> Bash: `pwd && printf '\\n--\\n' && ls -la && printf '\\n--\\n' && fi...`\n-> Bash: `printf 'AGENT_MUX_CONTEXT=%s\\nAGENT_MUX_ARTIFACT_DIR=%s\\n...`\n```\n\nThe only thing I couldn’t do cleanly was re-run with `--force`, because it tries to write the transcript file under `~/.gaal/`, which is outside the writable workspace here.",
+          "expected_pattern": "gaal transcript (latest|[a-f0-9]+) --stdout",
+          "session_data": {}
+        },
+        {
+          "agent_label": "transcript-retrieval-agent2",
+          "task_name": "transcript-retrieval",
+          "dispatch_id": "01KMWZC6ZY49C1DHPRV44EAQNZ",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 24,
+          "response": "I fetched the most recent session transcript with `gaal transcript latest --stdout`.\n\nThe actual conversation content in that session is:\n\n> **User**  \n> You are a software engineer using the gaal CLI for the first time. You have access to the gaal skill file (SKILL.md) and documentation (DOCS.md) as context.  \n>  \n> Your job is to accomplish the task given to you by running gaal commands. Think step by step:  \n> 1. Read the skill file and docs to understand what commands are available  \n> 2. Choose the right command and flags  \n> 3. Run the command  \n> 4. Interpret the output  \n>  \n> Important rules:  \n> - Use gaal commands only — do not grep JSONL files directly  \n> - Prefer JSON output (default) over human output for machine-readable results  \n> - If a command fails, read the error message carefully and try to self-correct  \n> - Report your final answer clearly, including the exact commands you ran  \n>  \n> Trace token: `AGENT_MUX_GO_01KMWZC6ZY49C1DHPRV44EAQNZ`  \n> Dispatch ID: `01KMWZC6ZY49C1DHPRV44EAQNZ`  \n> Write intermediate artifacts to `$AGENT_MUX_ARTIFACT_DIR`.  \n>  \n> Relevant context from the coordinator is at `$AGENT_MUX_CONTEXT`. Read it before starting.  \n> Get the full transcript of the most recent session. I want to read the actual conversation content, not just metadata.\n>\n> **Claude**  \n> I’m going to read the local gaal instructions and the coordinator context first, then I’ll use the gaal CLI to fetch the most recent session transcript and verify the exact command/output path.\n\nExact command I ran to retrieve it:\n```bash\ngaal transcript latest --stdout\n```\n\nI also read the local instructions first by inspecting `skill/SKILL.md` and `DOCS.md` so I could choose the right command.",
+          "expected_pattern": "gaal transcript (latest|[a-f0-9]+) --stdout",
+          "session_data": {}
+        },
+        {
+          "agent_label": "transcript-retrieval-agent3",
+          "task_name": "transcript-retrieval",
+          "dispatch_id": "01KMWZCYQV4Q0010EBBCDC636X",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 49,
+          "response": "The latest session is `c81251fe`. I rendered the full transcript to `/tmp/agent-mux-501/01KMWZCYQV4Q0010EBBCDC636X/latest-transcript.md` and read it back.\n\nCommands I ran:\n- `gaal ls --limit 5`\n- `gaal transcript c81251fe --stdout > \"$AGENT_MUX_ARTIFACT_DIR/latest-transcript.md\"`\n- `sed -n '1,140p' \"$AGENT_MUX_ARTIFACT_DIR/latest-transcript.md\"`\n\nFull transcript content:\n\n```md\n---\nsession_id: c81251fe\ndate: 2026-03-29\nstart: 18:18\nend: 18:18\nduration: 0m\nmodel: gpt-5.4-mini\nturns: 1\ntotal_input_tokens: 6659\ntotal_output_tokens: 911\ncache_read_tokens: 25216\ncache_creation_tokens: 0\n---\n\n# Session: You are a software engineer using the gaal CLI ...\n\n## Executive Summary\n\n### Commands Executed\n\n- `pwd && printf '\\n---\\n' && rg --files -g 'SKILL.md' -g 'DOCS.md' -g 'docs.md' -g 'skill.md' -g 'README*'`\n- `printf 'AGENT_MUX_CONTEXT=%s\\nAGENT_MUX_ARTIFACT_DIR=%s\\n' \"$AGENT_MUX_CONTEXT\" \"$AGENT_MUX_ARTIFACT_DIR\"; printf '\\n...`\n- `sed -n '1,260p' skill/SKILL.md`\n- `rg -n \"^### transcript|^### ls|^### inspect|^### backfill|^### latest|^### session|^### search\" DOCS.md && printf '\\n...`\n- `gaal transcript latest --stdout`\n\n---\n\n## Conversation\n\n### [18:18] User\nYou are a software engineer using the gaal CLI for the first time. You have access to the gaal skill file (SKILL.md) and documentation (DOCS.md) as context.\n\nYour job is to accomplish the task given to you by running gaal commands. Think step by step:\n1. Read the skill file and docs to understand what commands are available\n2. Choose the right command and flags\n3. Run the command\n4. Interpret the output\n\nImportant rules:\n- Use gaal commands only — do not grep JSONL files directly\n- Prefer JSON output (default) over human output for machine-readable results\n- If a command fails, read the error message carefully and try to self-correct\n- Report your final answer clearly, including the exact commands you ran\n\nTrace token: AGENT_MUX_GO_01KMWZC6ZY49C1DHPRV44EAQNZ\nDispatch ID: 01KMWZC6ZY49C1DHPRV44EAQNZ\nWrite intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.\n\nRelevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.\nGet the full transcript of the most recent session. I want to read the actual conversation content, not just metadata.\n\n### [18:18] Claude\nI’m going to inspect the gaal skill and docs, then read the coordinator context, and use the CLI to fetch the most recent session transcript in JSON so I can extract the actual conversation content.\n\nI have the canonical docs loaded. Next I’m reading the gaal skill instructions and the transcript-related command docs so I can choose the exact CLI invocation instead of guessing.\n\nI’ve got the command surface. The likely path is `gaal transcript latest --stdout`, but I’ll run it and use the output format to see whether it returns the rendered conversation directly or just metadata that I need to follow up on.\n\n-> Bash: `pwd && printf '\\n---\\n' && rg --files -g 'SKILL.md' -g 'D...`\n-> Bash: `printf 'AGENT_MUX_CONTEXT=%s\\nAGENT_MUX_ARTIFACT_DIR=%s\\n...`\n-> Bash: `sed -n '1,260p' skill/SKILL.md`\n-> Bash: `rg -n \"^### transcript|^### ls|^### inspect|^### backfill...`\n-> Bash: `gaal transcript latest --stdout`\n```\n\nIf you want, I can also pull the raw markdown transcript file contents without truncation from the artifact path.",
+          "expected_pattern": "gaal transcript (latest|[a-f0-9]+) --stdout",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "handoff-creation",
+      "category": "handoff",
+      "prompt": "Generate a handoff document for the most recent session so I can continue the work later.",
+      "expected_pattern": "gaal create-handoff (latest|[a-f0-9]+)",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "handoff-creation-agent1",
+          "task_name": "handoff-creation",
+          "dispatch_id": "01KMWZEEAFFFQXAACAPB2D8F5T",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 221,
+          "response": "Created a fallback handoff document here: [d4514c87-handoff.md](/tmp/agent-mux-501/01KMWZEEAFFFQXAACAPB2D8F5T/d4514c87-handoff.md)\n\nCommands run:\n- `gaal inspect latest`\n- `gaal ls --limit 1 --skip-subagents`\n- `gaal create-handoff d4514c87`\n- `gaal create-handoff d4514c87 --provider openrouter`\n- `gaal transcript d4514c87`\n- `gaal inspect d4514c87 --full`\n\nResult:\n- The automatic `create-handoff` flow failed twice with `stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)`.\n- I used the latest substantive session, `d4514c87`, because `gaal inspect latest` pointed at the current CLI session itself, which had no useful work to hand off.\n- The local handoff markdown is in the artifact directory above.",
+          "expected_pattern": "gaal create-handoff (latest|[a-f0-9]+)",
+          "session_data": {}
+        },
+        {
+          "agent_label": "handoff-creation-agent2",
+          "task_name": "handoff-creation",
+          "dispatch_id": "01KMWZN65AVF4WY1936SETVW0S",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 146,
+          "response": "I generated a handoff artifact for the most recent session at [`/tmp/agent-mux-501/01KMWZN65AVF4WY1936SETVW0S/handoff-7e6e35bb.md`](/tmp/agent-mux-501/01KMWZN65AVF4WY1936SETVW0S/handoff-7e6e35bb.md).\n\nWhat happened:\n- `gaal inspect latest` resolved the newest session to `7e6e35bb`\n- `gaal create-handoff latest` failed with `not found: latest`\n- `gaal create-handoff 7e6e35bb` and `gaal create-handoff 7e6e35bb --provider openrouter` both failed because the provider stream disconnected before completion\n\nExact commands I ran:\n```bash\ngaal create-handoff latest\ngaal create-handoff --help\ngaal ls --help\ngaal inspect latest\ngaal create-handoff 7e6e35bb\ngaal create-handoff 7e6e35bb --provider openrouter\ngaal transcript 7e6e35bb --stdout\ngaal inspect 7e6e35bb --commands --errors --files --tokens\n```\n\nThe handoff file in the artifact directory contains the session summary, metadata, attempted commands, and the provider error so you can continue from there.",
+          "expected_pattern": "gaal create-handoff (latest|[a-f0-9]+)",
+          "session_data": {}
+        },
+        {
+          "agent_label": "handoff-creation-agent3",
+          "task_name": "handoff-creation",
+          "dispatch_id": "01KMWZSMZCB7G9R02B7VPMXX0E",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 139,
+          "response": "Generated a handoff draft for the most recent indexed session, `7e6e35bb`, and wrote it to [handoff-7e6e35bb.md](/tmp/agent-mux-501/01KMWZSMZCB7G9R02B7VPMXX0E/handoff-7e6e35bb.md).\n\nWhat happened:\n- `gaal ls --limit 1` identified `7e6e35bb` as the newest session.\n- `gaal create-handoff latest` failed with `not found: latest`.\n- `gaal create-handoff 7e6e35bb` started, but the provider stream disconnected before completion.\n- I used `gaal inspect` and `gaal transcript --stdout` to build a usable markdown handoff artifact in the required artifact directory.\n\nExact commands I ran:\n```bash\ngaal create-handoff latest\ngaal ls --limit 1\ngaal create-handoff 7e6e35bb\ngaal inspect 7e6e35bb\ngaal transcript 7e6e35bb --stdout\n```\n\nI also ran these while debugging the selector/provider behavior:\n```bash\ngaal create-handoff --help\ngaal ls --help\ngaal inspect latest\ngaal create-handoff 7e6e35bb --provider openrouter\ngaal inspect 7e6e35bb --commands --errors --files --tokens\ngaal transcript 7e6e35bb\n```\n\nIf you want, I can next try to get `gaal create-handoff` working end-to-end with a different provider or settings.",
+          "expected_pattern": "gaal create-handoff (latest|[a-f0-9]+)",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "self-identification",
+      "category": "self-id",
+      "prompt": "You are an agent running inside a session. Identify your own session's JSONL file path so you could generate a self-handoff. Describe the exact commands you would run.",
+      "expected_pattern": "gaal salt.*gaal find-salt",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "self-identification-agent1",
+          "task_name": "self-identification",
+          "dispatch_id": "01KMWZXWAWRC889K5K8REGC087",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 28,
+          "response": "I used the documented self-identification flow.\n\nCommands I ran:\n1. `gaal salt`\n2. `gaal find-salt GAAL_SALT_600ddfc7e017b3f7`\n\nResult:\n- Session JSONL path: `/Users/otonashi/.codex/sessions/2026/03/29/rollout-2026-03-29T18-28-22-019d39fe-f1ae-7323-9c84-7a12e1537c19.jsonl`\n- Session ID: `rollout-2026-03-29T18-28-22-019d39fe-f1ae-7323-9c84-7a12e1537c19`\n- Engine: `codex`\n\nExact self-handoff command I would run next:\n```bash\ngaal create-handoff --jsonl /Users/otonashi/.codex/sessions/2026/03/29/rollout-2026-03-29T18-28-22-019d39fe-f1ae-7323-9c84-7a12e1537c19.jsonl\n```\n\nIf you want, I can run that handoff generation now.",
+          "expected_pattern": "gaal salt.*gaal find-salt",
+          "session_data": {}
+        },
+        {
+          "agent_label": "self-identification-agent2",
+          "task_name": "self-identification",
+          "dispatch_id": "01KMWZYQQP08RQKSMR61AR7GSN",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 45,
+          "response": "I identified the current session JSONL path with the standard self-identification flow.\n\nCommands run:\n```bash\nsalt=$(gaal salt)\nprintf '%s\\n' \"$salt\" > \"$AGENT_MUX_ARTIFACT_DIR/salt.txt\"\n\ngaal find-salt \"$(cat \"$AGENT_MUX_ARTIFACT_DIR/salt.txt\")\" | tee \"$AGENT_MUX_ARTIFACT_DIR/find-salt.json\"\n```\n\nResult:\n- `session_id`: `rollout-2026-03-29T18-28-50-019d39ff-5f4c-7db2-b1d7-228a2c9c5698`\n- `engine`: `codex`\n- `jsonl_path`: `[ /Users/otonashi/.codex/sessions/2026/03/29/rollout-2026-03-29T18-28-50-019d39ff-5f4c-7db2-b1d7-228a2c9c5698.jsonl ](/Users/otonashi/.codex/sessions/2026/03/29/rollout-2026-03-29T18-28-50-019d39ff-5f4c-7db2-b1d7-228a2c9c5698.jsonl)`\n\nIf I were generating the self-handoff next, the exact command would be:\n```bash\ngaal create-handoff --jsonl \"/Users/otonashi/.codex/sessions/2026/03/29/rollout-2026-03-29T18-28-50-019d39ff-5f4c-7db2-b1d7-228a2c9c5698.jsonl\"\n```",
+          "expected_pattern": "gaal salt.*gaal find-salt",
+          "session_data": {}
+        },
+        {
+          "agent_label": "self-identification-agent3",
+          "task_name": "self-identification",
+          "dispatch_id": "01KMX003AZ153M8W7R0N09NNS7",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 55,
+          "response": "I used the gaal salt flow to self-identify the current session.\n\nCommands run:\n```bash\ngaal salt\ngaal find-salt \"GAAL_SALT_8699743917db6d39\"\n```\n\nResolved session JSONL path:\n```text\n/Users/otonashi/.codex/sessions/2026/03/29/rollout-2026-03-29T18-29-35-019d3a00-0db6-78c1-ac42-9d86c9b474d3.jsonl\n```\n\nIf I were generating the self-handoff next, the exact command would be:\n```bash\ngaal create-handoff --jsonl \"/Users/otonashi/.codex/sessions/2026/03/29/rollout-2026-03-29T18-29-35-019d3a00-0db6-78c1-ac42-9d86c9b474d3.jsonl\"\n```\n\nI also wrote intermediate artifacts to:\n- `/tmp/agent-mux-501/01KMX003AZ153M8W7R0N09NNS7/salt.txt`\n- `/tmp/agent-mux-501/01KMX003AZ153M8W7R0N09NNS7/find-salt.json`",
+          "expected_pattern": "gaal salt.*gaal find-salt",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "error-recovery-flow",
+      "category": "error-recovery",
+      "prompt": "I ran 'gaal inspect xyz123' and got a 'not found' error. What should I do to find the correct session ID? Show the exact commands.",
+      "expected_pattern": "gaal ls",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "error-recovery-flow-agent1",
+          "task_name": "error-recovery-flow",
+          "dispatch_id": "01KMX01SJYYY0Z2YJG3TMDP4MK",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 41,
+          "response": "Use `gaal ls` to discover a valid session ID, then feed that ID back into `gaal inspect`. `inspect` takes `[ID]`, and `ls` is the fleet view for indexed sessions. See [DOCS.md](/Users/otonashi/thinking/building/gaal/DOCS.md#L250) and [DOCS.md](/Users/otonashi/thinking/building/gaal/DOCS.md#L316).\n\nExact commands:\n\n```bash\ngaal ls --limit 10 -H\ngaal ls --all --limit 20 -H\ngaal inspect <session_id>\n```\n\nIf you just want the newest session, use:\n\n```bash\ngaal inspect latest\n```\n\nIf the session still doesn’t appear in `ls`, check whether the index is stale:\n\n```bash\ngaal index status\ngaal index backfill\n```\n\nI ran these locally to verify the path:\n\n```bash\ngaal ls --limit 5\ngaal ls --limit 5 -H\ngaal index status\n```\n\n`gaal index status` showed the index is current, so in your case the fix is to list sessions, copy a real ID from `gaal ls`, and then run `gaal inspect <that-id>`.",
+          "expected_pattern": "gaal ls",
+          "session_data": {}
+        },
+        {
+          "agent_label": "error-recovery-flow-agent2",
+          "task_name": "error-recovery-flow",
+          "dispatch_id": "01KMX031RYWF7CZWW88K71SXRT",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 40,
+          "response": "Use `gaal ls` to discover real session IDs, then inspect one of those IDs.\n\nExact commands:\n\n```bash\ngaal ls --limit 10\ngaal ls --all --limit 10\ngaal inspect latest\n```\n\nWhat I found:\n- `gaal ls` shows valid IDs in the `id` field.\n- In this workspace, `gaal inspect latest` resolved to session `93ef9b8f`.\n- So a valid next command would be:\n\n```bash\ngaal inspect 93ef9b8f\n```\n\nNotes:\n- `gaal ls --limit 10` shows the recent, non-noisy sessions.\n- `gaal ls --all --limit 10` includes short/noise sessions too.\n- `gaal inspect latest` is the fastest way to inspect the newest session if that’s what you want.\n\nCommands I actually ran:\n- `gaal ls --limit 10`\n- `gaal ls --all --limit 10`\n- `gaal inspect latest`",
+          "expected_pattern": "gaal ls",
+          "session_data": {}
+        },
+        {
+          "agent_label": "error-recovery-flow-agent3",
+          "task_name": "error-recovery-flow",
+          "dispatch_id": "01KMX048EFA1T3QBRXNZS9Z25A",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 245,
+          "response": "",
+          "expected_pattern": "gaal ls",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "tag-and-filter",
+      "category": "tag-management",
+      "prompt": "Tag the most recent session with 'experiment' and then list all sessions that have that tag.",
+      "expected_pattern": "gaal tag.*experiment.*gaal (ls|inspect).*--tag.*experiment",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "tag-and-filter-agent1",
+          "task_name": "tag-and-filter",
+          "dispatch_id": "01KMX0BQSVM27PF002WMF0M7TE",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 89,
+          "response": "Tagged the most recent session in a writable copy of gaal’s home and verified the tag.\n\nResult:\n- Tagged session: `3d233d07`\n- Tag: `experiment`\n- Sessions with that tag: `3d233d07` only\n\nExact commands I ran:\n```bash\ngaal ls --limit 1\n```\n\n```bash\nmkdir -p \"$AGENT_MUX_ARTIFACT_DIR/home/.gaal\" && \\\nsqlite3 ~/.gaal/index.db \".backup '$AGENT_MUX_ARTIFACT_DIR/home/.gaal/index.db'\"\n```\n\n```bash\nHOME=\"$AGENT_MUX_ARTIFACT_DIR/home\" gaal ls --limit 1\n```\n\n```bash\nHOME=\"$AGENT_MUX_ARTIFACT_DIR/home\" gaal tag 3d233d07 experiment\n```\n\n```bash\nHOME=\"$AGENT_MUX_ARTIFACT_DIR/home\" gaal inspect 3d233d07\n```\n\n```bash\nHOME=\"$AGENT_MUX_ARTIFACT_DIR/home\" gaal tag ls\n```\n\n```bash\nHOME=\"$AGENT_MUX_ARTIFACT_DIR/home\" gaal inspect --tag experiment\n```\n\nNotes:\n- I had to use a writable copy of `~/.gaal` under `$AGENT_MUX_ARTIFACT_DIR` because the real gaal database is outside the sandbox’s writable roots.\n- `gaal ls --tag experiment` returned `no results` in this environment, but `gaal inspect --tag experiment` confirmed the tag was applied and listed the session above.",
+          "expected_pattern": "gaal tag.*experiment.*gaal (ls|inspect).*--tag.*experiment",
+          "session_data": {}
+        },
+        {
+          "agent_label": "tag-and-filter-agent2",
+          "task_name": "tag-and-filter",
+          "dispatch_id": "01KMX0EEV7HPQJ91ZEVTMVYFAX",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 124,
+          "response": "Tag added in the writable workspace copy of the gaal database, and the tagged session list contains one session:\n\n- `8272d0d3` `codex` `gpt-5.4-mini` `cwd=gaal` `started_at=2026-03-29T14:37:25.854Z`\n\nI had to work around the sandboxed, read-only `~/.gaal` by using a workspace copy via `HOME=/Users/otonashi/thinking/building/gaal`.\n\nRelevant commands I ran:\n\n```bash\nmkdir -p .gaal && cp -f ~/.gaal/index.db .gaal/index.db && cp -f ~/.gaal/index.db-wal .gaal/index.db-wal && cp -f ~/.gaal/index.db-shm .gaal/index.db-shm\nsqlite3 ~/.gaal/index.db \".backup '/Users/otonashi/thinking/building/gaal/.gaal/index.db'\"\nHOME=/Users/otonashi/thinking/building/gaal gaal ls --limit 1\nHOME=/Users/otonashi/thinking/building/gaal gaal tag 8272d0d3 experiment\nHOME=/Users/otonashi/thinking/building/gaal gaal inspect --tag experiment\n```\n\n`gaal ls --tag experiment` returned no results in this environment, but `gaal inspect --tag experiment` confirmed the tag and listed the session.",
+          "expected_pattern": "gaal tag.*experiment.*gaal (ls|inspect).*--tag.*experiment",
+          "session_data": {}
+        },
+        {
+          "agent_label": "tag-and-filter-agent3",
+          "task_name": "tag-and-filter",
+          "dispatch_id": "01KMX0J7X02WXB2QVEZXH8N9CM",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 71,
+          "response": "Tagged the latest session and verified the tag in a writable mirror of the index.\n\nLatest session found:\n- `8272d0d3`\n\nTagged sessions with `experiment` in the mirror:\n- `8272d0d3`\n\nExact commands I ran:\n```bash\n./target/release/gaal ls --all --limit 1\n./target/release/gaal tag 8272d0d3 experiment\n./target/release/gaal ls --tag experiment\n```\n\nBecause the live SQLite database was read-only in this environment, I switched to a writable mirror under the artifact directory and retried there:\n```bash\nTMPHOME=\"$AGENT_MUX_ARTIFACT_DIR/home\"\nmkdir -p \"$TMPHOME/.gaal\"\ncp /Users/otonashi/.gaal/index.db \"$TMPHOME/.gaal/index.db\"\nHOME=\"$TMPHOME\" ./target/release/gaal tag 8272d0d3 experiment\nHOME=\"$TMPHOME\" ./target/release/gaal ls --tag experiment\nHOME=\"$TMPHOME\" ./target/release/gaal inspect 8272d0d3\n```\n\nThe mirror verification showed `tags: [\"experiment\"]` on `8272d0d3`.\n\nIf you want, I can also summarize the mirror artifacts I wrote under `/tmp/agent-mux-501/01KMX0J7X02WXB2QVEZXH8N9CM/`.",
+          "expected_pattern": "gaal tag.*experiment.*gaal (ls|inspect).*--tag.*experiment",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "recall-context",
+      "category": "recall",
+      "prompt": "I need to continue work on 'gaussian moat' from a previous session. Find the most relevant prior context to resume.",
+      "expected_pattern": "gaal recall.*gaussian.moat",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "recall-context-agent1",
+          "task_name": "recall-context",
+          "dispatch_id": "01KMX0MCSX2E8D0VDGT3W28BM9",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 52,
+          "response": "The most relevant prior context is session `f1eed35c` from `2026-03-27` to `2026-03-28`.\n\nWhy it’s the best resume point:\n- `gaal recall` ranked it highest for “gaussian moat” with score `123.400`.\n- Its headline is: `Implemented and validated the CUDA --b-min fix in gaussian-moat-cuda, then launched tmux-based k²=40 overnight and angular probe campaigns on the 3090.`\n- `gaal inspect` shows it was a long coordinator session: `143` turns, `92` tools, `22` subagents.\n- The session’s recent work was campaign-oriented, not just planning: it launched and monitored overnight k²=40 and angular probe sweeps on the vast.ai 3090, with logs/results being pulled back for analysis.\n\nBest next place to continue:\n- Pick up from the k²=40 campaign results and angular sweep follow-up in `gaussian-moat-cuda`.\n- The session appears to have been focused on validating the `--b-min` fix and then using the resulting GPU campaigns to narrow the moat boundary.\n\nExact commands I ran:\n```bash\nsed -n '1,240p' skill/SKILL.md\nsed -n '1,260p' DOCS.md\nrg -n \"^## `recall`|^## `search`|^### `recall`|^### `search`|--format|--days-back|--limit\" DOCS.md\ngaal --help\nsed -n '467,545p' DOCS.md\nsed -n '910,950p' DOCS.md\ngaal recall \"gaussian moat\" --days-back 365 --limit 5\ngaal inspect f1eed35c --tokens\ngaal inspect f1eed35c\ngaal inspect f1eed35c --commands\ngaal inspect f1eed35c --files read\ngaal inspect f1eed35c --errors\ngaal search \"gaussian moat\" --since 365d --limit 5\n```\n\nNote:\n- `gaal search` failed twice with a lockfile acquisition error: `Failed to acquire Lockfile ... Operation not permitted`.\n- The semantic `gaal recall` result was still enough to identify the correct session and resume point.",
+          "expected_pattern": "gaal recall.*gaussian.moat",
+          "session_data": {}
+        },
+        {
+          "agent_label": "recall-context-agent2",
+          "task_name": "recall-context",
+          "dispatch_id": "01KMX0P07VFA3MZFZ982N3KE2A",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 33,
+          "response": "The most relevant prior context is session `f1eed35c` from `2026-03-27`:\n\n- Headline: `Implemented and validated the CUDA --b-min fix in gaussian-moat-cuda, then launched tmux-based k²=40 overnight and angular probe campaigns on the 3090.`\n- Handoff: [`/Users/otonashi/.gaal/data/claude/handoffs/2026/03/27/f1eed35c.md`](/Users/otonashi/.gaal/data/claude/handoffs/2026/03/27/f1eed35c.md)\n- Core open threads from that session:\n  - wait for the detached `angular` tmux session to finish\n  - pull `/tmp/k40-angular-835M-results.log`\n  - analyze whether `835M-840M` is blocked at all angles up to `10°`\n  - decide the next candidate radius if `835M` is connected, likely `836M`\n  - tighten the “tiled rings going right” upper-bound strategy\n\nCommands I ran:\n- `sed -n '1,220p' skill/SKILL.md`\n- `sed -n '1,260p' DOCS.md`\n- `sed -n '1,220p' \"$AGENT_MUX_CONTEXT\"`\n- `gaal --help`\n- `gaal recall --help`\n- `gaal search --help`\n- `gaal recall 'gaussian moat' --days-back 365 --limit 5 --format eywa`\n- `gaal search 'gaussian moat' --since 365d --limit 10`\n- `gaal recall 'gaussian moat' --days-back 365 --limit 1 --format full`\n- `gaal recall 'gaussian moat' --days-back 365 --limit 1 --format summary`\n\nOne command failed:\n- `gaal search 'gaussian moat' --since 365d --limit 10` hit a local lockfile permission error: `Failed to acquire Lockfile ... Operation not permitted`\n\nIf you want, I can next pull the transcript or inspect the handoff for `f1eed35c` and extract the exact work items to resume.",
+          "expected_pattern": "gaal recall.*gaussian.moat",
+          "session_data": {}
+        },
+        {
+          "agent_label": "recall-context-agent3",
+          "task_name": "recall-context",
+          "dispatch_id": "01KMX0Q0728Y8XSEAH1MHHTFNB",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 41,
+          "response": "The most relevant prior context is session `f1eed35c`:\n\n- Headline: `Implemented and validated the CUDA --b-min fix in gaussian-moat-cuda, then launched tmux-based k²=40 overnight and angular probe campaigns on the 3090.`\n- Why it matters: it is the highest-scoring recall hit for `gaussian moat` and it directly contains the current open work.\n- Open threads from that session:\n  - Wait for the detached `angular` tmux session to finish and pull the results log.\n  - Analyze whether the `835M` to `840M` region is blocked at all angles up to `10°`.\n  - If `835M` is connected, likely test `836M` next.\n  - Continue the “tiled rings going right” upper-bound algorithm discussion.\n\nThe best background predecessor is session `09bd7a9b`:\n\n- Headline: `Built and calibrated multi-metric Gaussian moat analysis, then pivoted into a mathematically grounded tile-composition spec for the k²=40 search.`\n- This is the earlier calibration/methodology context that leads into the `f1eed35c` campaign work.\n\nExact commands I ran:\n\n```bash\nsed -n '1,220p' DOCS.md\nsed -n '1,240p' skill/SKILL.md\nsed -n '1,240p' _archive/SKILL.md\ngaal --help\ngaal recall \"gaussian moat\" --days-back 90 --limit 5 --format full\ngaal ls --limit 10 --sort ended --skip-subagents\ngaal search \"gaussian moat\" --limit 10 --context 2\ngaal inspect f1eed35c\ngaal inspect 09bd7a9b\n```\n\nOne command failed repeatedly:\n\n- `gaal search \"gaussian moat\" --limit 10 --context 2`\n- Error: `Failed to acquire Lockfile: IoError(Os { code: 1, kind: PermissionDenied, message: \"Operation not permitted\" }). None`\n\nIf you want, I can next turn this into a compact resume note for the active work, or pull the specific handoff/transcript for `f1eed35c`.",
+          "expected_pattern": "gaal recall.*gaussian.moat",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "multi-session-compare",
+      "category": "fleet-view",
+      "prompt": "Compare the token usage of the last 5 sessions. Which one was most expensive?",
+      "expected_pattern": "gaal ls.*(--sort.*(tokens|cost)|--limit 5)",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "multi-session-compare-agent1",
+          "task_name": "multi-session-compare",
+          "dispatch_id": "01KMX0R80STAWMG134P1F9023V",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 39,
+          "response": "I compared the last 5 sessions from `gaal ls --limit 5 --sort ended` and treated token usage as `input + output` tokens.\n\nMost expensive: `b30811d9`\n- `63,672` input\n- `4,572` output\n- `68,244` total tokens\n\nThe other four were:\n- `c8511d13` - `5,625`\n- `b3691f43` - `40,048`\n- `0608af6d` - `27,589`\n- `66a1e52a` - `26,875`\n\nExact commands I ran:\n```bash\ngaal ls --limit 5 --sort ended\ngaal inspect b30811d9 --tokens\nprintf 'Command: gaal ls --limit 5 --sort ended\\nMost expensive: b30811d9\\nTotal tokens: 68244 (63672 input + 4572 output)\\n' > \"$AGENT_MUX_ARTIFACT_DIR/token-usage-summary.txt\"\n```\n\nArtifact written to:\n`/tmp/agent-mux-501/01KMX0R80STAWMG134P1F9023V/token-usage-summary.txt`",
+          "expected_pattern": "gaal ls.*(--sort.*(tokens|cost)|--limit 5)",
+          "session_data": {}
+        },
+        {
+          "agent_label": "multi-session-compare-agent2",
+          "task_name": "multi-session-compare",
+          "dispatch_id": "01KMX0SE67XBMGEX4QRWBRQRGR",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 19,
+          "response": "I used `gaal ls --limit 5` and compared `input + output` tokens for each returned session.\n\nResults:\n- `c8511d13`: 4,786 + 839 = 5,625\n- `b3691f43`: 35,846 + 4,202 = 40,048\n- `0608af6d`: 24,132 + 3,457 = 27,589\n- `b30811d9`: 63,672 + 4,572 = 68,244\n- `66a1e52a`: 21,121 + 5,754 = 26,875\n\nMost expensive was `b30811d9` with `68,244` total tokens.\n\nExact command run:\n```bash\ngaal ls --limit 5\n```",
+          "expected_pattern": "gaal ls.*(--sort.*(tokens|cost)|--limit 5)",
+          "session_data": {}
+        },
+        {
+          "agent_label": "multi-session-compare-agent3",
+          "task_name": "multi-session-compare",
+          "dispatch_id": "01KMX0T16GJBFVDPG9E1GXCJ2Y",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 26,
+          "response": "I used `gaal ls --limit 5 --sort ended` to get the latest five sessions and compared `input + output` tokens for each.\n\nLast 5 sessions by end time:\n- `c8511d13` - 5,625 tokens\n- `b3691f43` - 40,048 tokens\n- `0608af6d` - 27,589 tokens\n- `b30811d9` - 68,244 tokens\n- `66a1e52a` - 26,875 tokens\n\nMost expensive:\n- `b30811d9` with 68,244 total tokens (`63,672` input, `4,572` output)\n\nExact commands I ran:\n```bash\ngaal ls --help\ngaal inspect --help\ngaal --help\ngaal ls --limit 5 --sort ended\ngaal ls --limit 5 --sort tokens\n```",
+          "expected_pattern": "gaal ls.*(--sort.*(tokens|cost)|--limit 5)",
+          "session_data": {}
+        }
+      ]
+    },
+    {
+      "task_name": "subagent-inspection",
+      "category": "drill-down",
+      "prompt": "I want to see all the subagents that ran inside a coordinator session. Find a recent coordinator and show its subagent details.",
+      "expected_pattern": "gaal inspect.*(-F|--full|--include-empty)",
+      "agents_dispatched": 3,
+      "agent_results": [
+        {
+          "agent_label": "subagent-inspection-agent1",
+          "task_name": "subagent-inspection",
+          "dispatch_id": "01KMX0TTAHDEN3EXMJ7SQH3NV4",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 71,
+          "response": "I found a recent coordinator session and its subagent details.\n\nCoordinator:\n- `781575ac`\n- `session_type`: `coordinator`\n- `engine`: `claude`\n- `model`: `claude-opus-4-6`\n- `cwd`: `/Users/otonashi/thinking/pratchett-os/coordinator`\n- `started_at`: `2026-03-29T11:52:03.959Z`\n- `ended_at`: `2026-03-29T11:54:50.922Z`\n- `subagents`: `1`\n\nSubagent:\n- `a63f595c`\n- `session_type`: `subagent`\n- `parent_id`: `781575ac`\n- `engine`: `claude`\n- `model`: `claude-opus-4-6`\n- `cwd`: `/Users/otonashi/thinking/pratchett-os/coordinator`\n- `started_at`: `2026-03-29T11:52:22.499Z`\n- `ended_at`: `2026-03-29T11:54:24.987Z`\n- `duration_secs`: `122`\n- `command_count`: `12`\n- `tools_used`: `13`\n- `turns`: `15`\n- `peak_context`: `49706`\n- `tokens`: `5455 in / 2980 out`\n\nSubagent description from the coordinator summary:\n- `Research the viral AI character on TikTok from roughly 2025 - a Yeti character t...`\n\nExact commands I ran:\n```bash\ngaal ls --limit 200 --skip-subagents | jq -r '.sessions[] | select(.session_type==\"coordinator\") | [.id,.started_at,.ended_at,.tools_used,.duration_secs,.headline] | @tsv' | head -n 10\ngaal inspect 781575ac --include-empty\ngaal inspect a63f595c --include-empty\n```\n\nIf you want, I can also pull the full transcript for that coordinator or enumerate every coordinator session in the recent window.",
+          "expected_pattern": "gaal inspect.*(-F|--full|--include-empty)",
+          "session_data": {}
+        },
+        {
+          "agent_label": "subagent-inspection-agent2",
+          "task_name": "subagent-inspection",
+          "dispatch_id": "01KMX0WZY4TK0AMZHDMYARFWA6",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 46,
+          "response": "Found a recent coordinator session and its subagent list.\n\nCoordinator:\n- `781575ac`\n- `claude` / `claude-opus-4-6`\n- started `2026-03-29T11:52:03.959Z`\n- cwd `/Users/otonashi/thinking/pratchett-os/coordinator`\n\nSubagents:\n- `a63f595c` — `claude-opus-4-6`, `8K` tokens, `2m 2s`\n\nExact commands I ran:\n```bash\ngaal ls --skip-subagents --limit 100\ngaal inspect 781575ac -H --include-empty\ngaal inspect 781575ac --source\n```\n\nThe human inspect view is what exposed the subagent table; the JSON source view confirmed this session was a `coordinator` and included the subagent metadata.\n\nIf you want, I can scan for a coordinator session with multiple subagents instead of just one.",
+          "expected_pattern": "gaal inspect.*(-F|--full|--include-empty)",
+          "session_data": {}
+        },
+        {
+          "agent_label": "subagent-inspection-agent3",
+          "task_name": "subagent-inspection",
+          "dispatch_id": "01KMX0YCG8PRGN81D8QQ48Q1NZ",
+          "dispatch_exit": 0,
+          "dispatch_duration_secs": 52,
+          "response": "I found the most recent coordinator session and rendered its subagent summary.\n\nLatest coordinator:\n- `781575ac`\n- Engine: `claude`\n- Model: `claude-opus-4-6`\n- Started: `2026-03-29T11:52:03.959Z`\n- CWD: `/Users/otonashi/thinking/pratchett-os/coordinator`\n\nSubagents:\n- `a63f595c`\n- Model: `claude-opus-4-6`\n- Duration: `2m 2s`\n- Tokens: `8K`\n\nExact commands I ran:\n```bash\ngaal ls --all --skip-subagents --limit 100 | jq -r '.sessions[].id' | paste -sd, -\ngaal inspect --ids \"$IDS\" | jq '.[] | select(.session_type==\"coordinator\")'\ngaal inspect 781575ac -H --include-empty\ngaal inspect 781575ac\n```\n\nIf you want, I can also show the older coordinator I found in the same search, which had 4 subagents.",
+          "expected_pattern": "gaal inspect.*(-F|--full|--include-empty)",
+          "session_data": {}
+        }
+      ]
+    }
+  ]
+}
