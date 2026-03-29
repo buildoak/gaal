@@ -119,8 +119,14 @@ fn render_markdown(session: &SessionRow, conn: Option<&Connection>) -> Result<St
         )));
     }
 
+    // Pass the DB session ID as override — subagent JSONLs contain the parent's
+    // sessionId field, so the JSONL-derived ID would be wrong in frontmatter.
     let rendered = match conn {
-        Some(conn) => crate::render::session_md::render_session_markdown_with_db(jsonl_path, conn),
+        Some(conn) => crate::render::session_md::render_session_markdown_with_db(
+            jsonl_path,
+            conn,
+            Some(&session.id),
+        ),
         None => crate::render::session_md::render_session_markdown(jsonl_path),
     };
 

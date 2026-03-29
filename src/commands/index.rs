@@ -848,8 +848,12 @@ fn generate_session_markdown(
         ));
     }
 
-    let markdown = crate::render::session_md::render_session_markdown_with_db(&discovered.path, conn)
-        .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
+    let markdown = crate::render::session_md::render_session_markdown_with_db(
+        &discovered.path,
+        conn,
+        Some(&discovered.id),
+    )
+    .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
 
     let engine = discovered.engine.to_string();
     let (year, month, day) = extract_date_parts(started_at);
@@ -917,8 +921,12 @@ fn write_session_markdown_to_dir(
         return Ok(WriteOutcome::Skipped);
     }
 
-    let markdown = crate::render::session_md::render_session_markdown_with_db(&discovered.path, conn)
-        .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
+    let markdown = crate::render::session_md::render_session_markdown_with_db(
+        &discovered.path,
+        conn,
+        Some(&discovered.id),
+    )
+    .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
 
     if let Some(parent) = md_path.parent() {
         fs::create_dir_all(parent).map_err(GaalError::from)?;

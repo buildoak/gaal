@@ -120,6 +120,9 @@ struct SubagentInfo {
     #[allow(dead_code)]
     prompt: String,
     model: String,
+    /// The tool_use_id from the Task/Agent tool call, used to link to agent_id
+    /// via tool_result content (which contains agentId).
+    tool_use_id: String,
 }
 
 /// Aggregated stats pulled from subagent tool results.
@@ -150,13 +153,23 @@ pub fn render_session_markdown(path: &Path) -> Result<String> {
 /// Render a JSONL session file to markdown, enriching subagent data from the DB.
 ///
 /// Falls back to the legacy SubagentProgress pipeline when DB data is unavailable.
-pub fn render_session_markdown_with_db(path: &Path, conn: &Connection) -> Result<String> {
+/// When `override_session_id` is provided, it replaces the JSONL-derived session_id
+/// in frontmatter — needed for subagents whose JSONL contains the parent's sessionId.
+pub fn render_session_markdown_with_db(
+    path: &Path,
+    conn: &Connection,
+    override_session_id: Option<&str>,
+) -> Result<String> {
     let engine = detect_engine(path)?;
     let events = match engine {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
     };
     let mut session = events_to_session_data(&events, path);
+
+    if let Some(sid) = override_session_id {
+        session.session_id = sid.to_string();
+    }
 
     if session.subagent_deltas.is_empty() {
         if let Some(db_deltas) = load_subagent_deltas_from_db(conn, &session.session_id) {
@@ -685,7 +698,7 @@ fn collect_subagents(turns: &[Turn]) -> Vec<SubagentInfo> {
     let mut agents = Vec::new();
     for turn in turns {
         for block in &turn.assistant_content {
-            if let ContentBlock::ToolUse { name, input, .. } = block {
+            if let ContentBlock::ToolUse { name, input, id } = block {
                 if name == "Task" || name == "Agent" {
                     let desc = get_str(input, "description").unwrap_or("").to_string();
                     let prompt_raw = get_str(input, "prompt").unwrap_or("");
@@ -695,12 +708,51 @@ fn collect_subagents(turns: &[Turn]) -> Vec<SubagentInfo> {
                         description: desc,
                         prompt,
                         model,
+                        tool_use_id: id.clone(),
                     });
                 }
             }
         }
     }
     agents
+}
+
+/// Build a map from agent_id to model by joining Task tool_use_ids with their
+/// tool_result content (which contains agentId). This replaces fragile positional
+/// indexing between `collect_subagents()` ordering and `subagent_deltas` ordering.
+fn build_agent_model_map(turns: &[Turn]) -> HashMap<String, String> {
+    let task_infos = collect_subagents(turns);
+
+    // Collect tool_result content keyed by tool_use_id from user content blocks.
+    let mut tool_results: HashMap<String, String> = HashMap::new();
+    for turn in turns {
+        for block in &turn.user_content {
+            if let ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+            } = block
+            {
+                if !tool_use_id.is_empty() {
+                    tool_results.insert(tool_use_id.clone(), content.clone());
+                }
+            }
+        }
+    }
+
+    let mut model_map: HashMap<String, String> = HashMap::new();
+    for info in &task_infos {
+        if let Some(result_content) = tool_results.get(&info.tool_use_id) {
+            if let Some(agent_id) = extract_agent_id_from_result(result_content) {
+                // Store both full and 8-char prefix keys: SubagentDelta.agent_id
+                // is the full ID when from JSONL progress events, but the short
+                // 8-char DB ID when loaded via load_subagent_deltas_from_db.
+                let short: String = agent_id.chars().take(8).collect();
+                model_map.insert(agent_id.clone(), info.model.clone());
+                model_map.insert(short, info.model.clone());
+            }
+        }
+    }
+    model_map
 }
 
 // ---------------------------------------------------------------------------
@@ -1778,7 +1830,7 @@ fn render_executive_summary(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -
 
     // Subagents table.
     if !subagent_deltas.is_empty() {
-        let task_models = collect_subagents(turns);
+        let agent_model_map = build_agent_model_map(turns);
 
         lines.push(format!("### Subagents ({})", subagent_deltas.len()));
         lines.push(String::new());
@@ -1789,9 +1841,9 @@ fn render_executive_summary(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -
             "|-------|------|-------|----------|--------|---------------|----------|".to_string(),
         );
 
-        for (i, agent) in subagent_deltas.iter().enumerate() {
-            let short_id: &str = if agent.agent_id.len() > 7 {
-                &agent.agent_id[..7]
+        for agent in subagent_deltas.iter() {
+            let short_id: &str = if agent.agent_id.len() > 8 {
+                &agent.agent_id[..8]
             } else {
                 &agent.agent_id
             };
@@ -1805,11 +1857,10 @@ fn render_executive_summary(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -
             };
             let prompt_escaped = prompt_short.replace('|', "/");
 
-            let model = if i < task_models.len() {
-                fmt_model(&task_models[i].model)
-            } else {
-                "-".to_string()
-            };
+            let model = agent_model_map
+                .get(&agent.agent_id)
+                .map(|m| fmt_model(m))
+                .unwrap_or_else(|| "-".to_string());
 
             let duration_str = match agent.total_duration_ms {
                 Some(ms) => {
@@ -1876,12 +1927,10 @@ fn render_open_threads(turns: &[Turn]) -> String {
 }
 
 /// Render detailed Subagent Activity section at end of document.
-fn render_subagent_activity(subagent_deltas: &[SubagentDelta], turns: &[Turn]) -> String {
+fn render_subagent_activity(subagent_deltas: &[SubagentDelta], _turns: &[Turn]) -> String {
     if subagent_deltas.is_empty() {
         return String::new();
     }
-
-    let _task_models = collect_subagents(turns);
 
     let mut lines = vec![
         "---".to_string(),
