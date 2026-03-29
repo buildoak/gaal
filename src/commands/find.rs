@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
+use serde_json::Value;
 
 use crate::error::GaalError;
 
@@ -92,10 +93,56 @@ fn file_contains_salt(path: &Path, salt: &str) -> Result<bool, GaalError> {
         if bytes_read == 0 {
             return Ok(false);
         }
-        if line.contains(salt) {
+        if line_contains_salt_output(&line, salt) {
             return Ok(true);
         }
     }
+}
+
+fn line_contains_salt_output(line: &str, salt: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+
+    claude_salt_match(&value, salt) || codex_salt_match(&value, salt)
+}
+
+fn claude_salt_match(value: &Value, salt: &str) -> bool {
+    if value
+        .get("toolUseResult")
+        .and_then(|result| result.get("stdout"))
+        .and_then(Value::as_str)
+        .is_some_and(|stdout| stdout.trim() == salt)
+    {
+        return true;
+    }
+
+    value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(Value::as_str) == Some("tool_result")
+                    && item
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .is_some_and(|content| content.trim() == salt)
+            })
+        })
+}
+
+fn codex_salt_match(value: &Value, salt: &str) -> bool {
+    let payload = match value.get("payload") {
+        Some(payload) => payload,
+        None => return false,
+    };
+
+    payload.get("type").and_then(Value::as_str) == Some("exec_command_end")
+        && payload
+            .get("aggregated_output")
+            .and_then(Value::as_str)
+            .is_some_and(|output| output.trim() == salt)
 }
 
 fn is_jsonl(path: &Path) -> bool {
