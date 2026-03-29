@@ -346,7 +346,7 @@ fn fmt_tool_annotation(name: &str, input: &Value, tool_id: &str) -> Option<ToolA
             Some(ToolAnnotation::Simple(format!("-> Bash: `{display}`")))
         }
         "apply_patch" => Some(ToolAnnotation::Simple("-> Patch (apply_patch)".to_string())),
-        "Task" => {
+        "Task" | "Agent" => {
             let desc = get_str(&inp, "description").unwrap_or("").to_string();
             let prompt = get_str(&inp, "prompt").unwrap_or("").to_string();
             let model = get_str(&inp, "model").unwrap_or("sonnet").to_string();
@@ -665,7 +665,7 @@ fn collect_subagents(turns: &[Turn]) -> Vec<SubagentInfo> {
     for turn in turns {
         for block in &turn.assistant_content {
             if let ContentBlock::ToolUse { name, input, .. } = block {
-                if name == "Task" {
+                if name == "Task" || name == "Agent" {
                     let desc = get_str(input, "description").unwrap_or("").to_string();
                     let prompt_raw = get_str(input, "prompt").unwrap_or("");
                     let prompt: String = prompt_raw.chars().take(100).collect();
