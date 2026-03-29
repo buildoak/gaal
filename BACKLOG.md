@@ -150,8 +150,8 @@ The core tokscale pattern (`SourceFingerprint` + `sha256_prefix` check before tr
 
 ### Open Issues (2026-03-29)
 
-- Duplicate entries: 2,253 8-char orphans + 12-char linked pairs (fix in progress)
-- Transcript Task column blank for v2.1.86+ sessions (prompt not pulled from facts)
+- ~~Duplicate entries: 2,253 8-char orphans + 12-char linked pairs~~ **RESOLVED** (commit 9133f0d)
+- Transcript Task column blank for v2.1.86+ sessions — **PARTIALLY FIXED** (shows first user_prompt, not description from parent)
 - `ls` output missing `session_type` field
 - `who` output missing parent→subagent attribution format
 - Positional model mapping in transcript (fragile, should match by `agent_id`)
@@ -279,6 +279,52 @@ Data comes from parent's `toolUseResult` blocks — no subagent JSONL read neede
 
 ---
 
+## AX Polish — Subagent Integration
+
+**Priority:** P1
+**Date:** 2026-03-29
+
+### `who` — parent→subagent attribution (P0)
+
+The killer feature display layer. `who` returns subagent IDs but has zero `session_type`, `parent_id`, or parent attribution in output. Target:
+
+```
+  7d5d03e4  2026-03-28  claude-opus-4-6     → a59e6762 (Fix Agent rendering)
+```
+
+Should include subagents by default (they do the actual work). ~2-3 hours.
+
+### `ls` — session_type in output (P1)
+
+JSON output lacks `session_type` and `parent_id` fields. Consumers can't distinguish standalone/coordinator/subagent. Add to `SessionSummary` struct. ~30 min.
+
+### `ls` — noise filter + limit bug (P1)
+
+`gaal ls --since 2026-03-28 --limit 3` returns "no results" while `--limit 20` returns 16. Noise filter runs AFTER SQL limit — can remove ALL returned rows. Fix: apply noise filter in SQL WHERE clause, or overfetch then post-filter. ~1 hour.
+
+### `search` — session_type in results (P1)
+
+Search results lack `session_type` and `parent_id`. Can't tell if result is from subagent. ~1 hour.
+
+### Transcript frontmatter — subagent shows parent's ID (P1)
+
+`gaal transcript <subagent-id>` outputs `session_id: <parent-uuid>` instead of the subagent's own ID. ~30 min.
+
+### `ls` — human mode subagent differentiation (P2)
+
+`-H` output shows no visual difference for subagent sessions. Add Type column or `[sub]`/`[coord]` badge. ~1 hour.
+
+### Flag Strategy
+
+Different defaults per command based on intent:
+
+- `ls`: exclude subagents by default (fleet overview)
+- `who`: INCLUDE subagents by default (they do the work)
+- `search`: include subagents by default (already in Tantivy)
+- Add `--type <standalone|coordinator|subagent|all>` across session-returning commands for precise filtering
+
+---
+
 ## CC Session Cleanup Mitigation
 
 **Priority:** P1
@@ -294,7 +340,6 @@ CC's `cleanupPeriodDays` was set to 30 by default. On 2026-03-29, verified that 
 
 ### Remaining Work
 
-- **Daily `gaal index backfill` cron** (P1): Backfill must run before any future pruning window expires. A day-old session that hasn't been indexed yet is recoverable; a session pruned before indexing is gone. Add cron or LaunchAgent to run `gaal index backfill` nightly.
 - **Orphan recovery for existing 4,051 files** (P2): Subagent files that still exist on disk but whose parent JSONL is gone can be indexed independently using the internal `parentUuid` field embedded in each subagent JSONL. Parse `parentUuid` from the subagent file itself to reconstruct the link. This recovers file_read/file_write/command facts and makes the subagent searchable, but fleet-level metadata (totalTokens, totalDurationMs, status, prompt) is lost.
 
 ---
