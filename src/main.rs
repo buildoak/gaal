@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use gaal::error::GaalError;
-use serde_json::json;
 
 #[derive(Debug, Parser)]
 #[command(name = "gaal", version, about = "Agent session observability CLI")]
@@ -698,15 +697,11 @@ fn emit_error(err: &GaalError, human: bool, command: &str) {
     if human {
         eprintln!("{}", err.format_human(command));
     } else {
-        emit_json_error(err);
+        emit_json_error(err, command);
     }
 }
 
-fn emit_json_error(err: &GaalError) {
-    let payload = json!({
-        "ok": false,
-        "error": err.to_string(),
-        "exit_code": err.exit_code()
-    });
+fn emit_json_error(err: &GaalError, command: &str) {
+    let payload = err.format_json(command);
     eprintln!("{payload}");
 }

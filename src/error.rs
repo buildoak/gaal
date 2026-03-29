@@ -48,9 +48,8 @@ impl GaalError {
         }
     }
 
-    /// Render an AX-compliant human-readable error for the active command.
-    pub fn format_human(&self, command: &str) -> String {
-        let (what, example, hint) = match self {
+    fn fields(&self, command: &str) -> (String, String, String) {
+        match self {
             Self::NoResults => no_results_message(command),
             Self::AmbiguousId(id) => (
                 format!("Multiple sessions match `{id}`."),
@@ -89,9 +88,25 @@ impl GaalError {
                 command_example(command),
                 "Retry with `-H` for readable output or inspect the index and session inputs that this command depends on.".to_string(),
             ),
-        };
+        }
+    }
+
+    /// Render an AX-compliant human-readable error for the active command.
+    pub fn format_human(&self, command: &str) -> String {
+        let (what, example, hint) = self.fields(command);
 
         format!("What went wrong: {what}\nExample: {example}\nHint: {hint}")
+    }
+
+    pub fn format_json(&self, command: &str) -> serde_json::Value {
+        let (what, example, hint) = self.fields(command);
+        serde_json::json!({
+            "ok": false,
+            "error": what,
+            "hint": hint,
+            "example": example,
+            "exit_code": self.exit_code()
+        })
     }
 }
 
