@@ -160,15 +160,15 @@ description = "ls with a window that has zero sessions"
 
 [[errors]]
 name = "search-no-results"
-command = "gaal search 'xyzzy_nonexistent_impossible_term_999'"
+command = "gaal search 'xyzzy' --since 1s"
 expected_exit = 1
-description = "Search for a term that matches nothing"
+description = "Search for a term with 1-second time window guarantees no results"
 
 [[errors]]
 name = "search-empty"
-command = "gaal search AX_EMPTY_PROBE_ZZZZZZZ"
+command = "gaal search 'hello' --since 1s"
 expected_exit = 1
-description = "search returns NoResults for unmatched query"
+description = "search with 1-second window returns NoResults"
 
 [[errors]]
 name = "who-no-results"
