@@ -8,4 +8,5 @@ pub mod runtime;
 pub mod salt;
 pub mod search;
 pub mod tag;
+pub mod transcript;
 pub mod who;

@@ -7,7 +7,7 @@
 | 2 | Ambiguous | ID prefix matches 2+ sessions | Provide more characters of the session ID, or use `gaal ls` to find the exact ID |
 | 3 | NotFound | Session ID does not exist in index | Verify ID is correct. May need `gaal index backfill` if session is recent |
 | 10 | NoIndex | `~/.gaal/index.db` does not exist or has no schema | Run `gaal index backfill` to create and populate the index |
-| 11 | ParseError | Invalid input (bad verb, malformed flag, unparseable date) | Fix the command. Check verb spelling (`who` verbs: read, wrote, ran, touched, installed, changed, deleted) |
+| 11 | ParseError | Invalid input (bad verb, malformed flag, unparseable date) | Fix the command. Check verb spelling (`who` verbs: read, wrote, ran, touched, changed, deleted) |
 
 ## Stderr Format
 

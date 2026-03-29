@@ -51,19 +51,19 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
         .unwrap_or(false);
 
     if !has_peak_context {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN peak_context INTEGER DEFAULT 0;",
-        )
-        .ok();
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN peak_context INTEGER DEFAULT 0;")
+            .ok();
     }
 
     // Token accounting columns: cache_read_tokens, cache_creation_tokens, reasoning_tokens.
-    for col in ["cache_read_tokens", "cache_creation_tokens", "reasoning_tokens"] {
+    for col in [
+        "cache_read_tokens",
+        "cache_creation_tokens",
+        "reasoning_tokens",
+    ] {
         let has_col: bool = conn
             .query_row(
-                &format!(
-                    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='{col}'"
-                ),
+                &format!("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='{col}'"),
                 [],
                 |row| row.get::<_, i64>(0),
             )

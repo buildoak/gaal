@@ -838,7 +838,9 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         total_input_tokens: row.get("total_input_tokens")?,
         total_output_tokens: row.get("total_output_tokens")?,
         cache_read_tokens: row.get::<_, Option<i64>>("cache_read_tokens")?.unwrap_or(0),
-        cache_creation_tokens: row.get::<_, Option<i64>>("cache_creation_tokens")?.unwrap_or(0),
+        cache_creation_tokens: row
+            .get::<_, Option<i64>>("cache_creation_tokens")?
+            .unwrap_or(0),
         reasoning_tokens: row.get::<_, Option<i64>>("reasoning_tokens")?.unwrap_or(0),
         total_tools: row.get("total_tools")?,
         total_turns: row.get("total_turns")?,

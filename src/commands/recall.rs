@@ -682,7 +682,9 @@ fn print_recall_help() {
     eprintln!("Flags:");
     eprintln!("  --days-back <n>    Recency window in days (default: 14)");
     eprintln!("  --limit <n>        Max number of sessions to return (default: 3)");
-    eprintln!("  --format <fmt>     Output format: summary, brief, handoff, full, eywa (default: brief)");
+    eprintln!(
+        "  --format <fmt>     Output format: summary, brief, handoff, full, eywa (default: brief)"
+    );
     eprintln!("  --substance <n>    Minimum substance score (default: 1)");
     eprintln!("  -H                 Human-readable output");
     eprintln!();

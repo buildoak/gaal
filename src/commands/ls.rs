@@ -207,7 +207,10 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
 
         // Note goes to stderr, not stdout
         if shown < total_unfiltered {
-            eprintln!("Showing {} of {} sessions — use --limit N for more", shown, total_unfiltered);
+            eprintln!(
+                "Showing {} of {} sessions — use --limit N for more",
+                shown, total_unfiltered
+            );
         }
     }
 
@@ -517,10 +520,9 @@ fn build_query_window(conn: &Connection, filter: &ListFilter) -> Result<QueryWin
 
 /// Get the earliest session date from the database
 fn get_earliest_session_date(conn: &Connection) -> Result<Option<String>, GaalError> {
-    let mut stmt = conn.prepare("SELECT started_at FROM sessions ORDER BY started_at ASC LIMIT 1")?;
-    let mut rows = stmt.query_map([], |row| {
-        Ok(row.get::<_, String>("started_at")?)
-    })?;
+    let mut stmt =
+        conn.prepare("SELECT started_at FROM sessions ORDER BY started_at ASC LIMIT 1")?;
+    let mut rows = stmt.query_map([], |row| Ok(row.get::<_, String>("started_at")?))?;
 
     if let Some(row) = rows.next() {
         Ok(Some(row?))
@@ -537,8 +539,7 @@ impl HumanReadable for Vec<SessionSummary> {
         }
 
         let headers = [
-            "ID", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools", "Model",
-            "CWD",
+            "ID", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools", "Model", "CWD",
         ];
         let col_kinds = [
             ColumnKind::Fixed,    // ID
@@ -561,7 +562,8 @@ impl HumanReadable for Vec<SessionSummary> {
                     format_tokens(u64_to_i64_saturating(session.tokens.output))
                 );
                 let peak = if session.peak_context > 0 {
-                    format!("{}",
+                    format!(
+                        "{}",
                         format_tokens(u64_to_i64_saturating(session.peak_context))
                     )
                 } else {

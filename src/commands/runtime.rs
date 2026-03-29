@@ -212,13 +212,11 @@ fn extract_usage_sample(record: &Value, engine: Engine) -> Option<UsageSample> {
             let payload_type = record.pointer("/payload/type").and_then(Value::as_str);
             if payload_type == Some("token_count") {
                 // Use last_token_usage which represents the most recent turn's context usage
-                let input =
-                    as_i64(record.pointer("/payload/info/last_token_usage/input_tokens"));
+                let input = as_i64(record.pointer("/payload/info/last_token_usage/input_tokens"));
                 let cached =
                     as_i64(record.pointer("/payload/info/last_token_usage/cached_input_tokens"));
                 let total_input = input + cached;
-                let output =
-                    as_i64(record.pointer("/payload/info/last_token_usage/output_tokens"));
+                let output = as_i64(record.pointer("/payload/info/last_token_usage/output_tokens"));
                 (total_input, total_input + output)
             } else {
                 // Skip non-token_count records to avoid cumulative values
@@ -312,11 +310,7 @@ fn extract_codex_actions(record: &Value, ts: Option<String>) -> Vec<ActionEvent>
     let subject = extract_action_subject(&input);
     let summary = extract_action_summary(&kind, &input, subject.as_deref());
 
-    vec![ActionEvent {
-        ts,
-        kind,
-        summary,
-    }]
+    vec![ActionEvent { ts, kind, summary }]
 }
 
 fn parse_json_or_null(raw: Option<&str>) -> Value {

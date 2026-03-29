@@ -511,8 +511,7 @@ fn process_session_handoff(
     // not the extraction LLM engine/model.
     let session_engine = &session.engine;
     let session_model = session.model.as_deref().unwrap_or("unknown");
-    let frontmatter =
-        build_handoff_frontmatter(session, &extracted, session_engine, session_model);
+    let frontmatter = build_handoff_frontmatter(session, &extracted, session_engine, session_model);
     let full_content = format!("{}{}", frontmatter, response);
     let handoff_path = write_handoff_markdown(session, &full_content)?;
     let generated_by = build_generated_by_label(&config.agent_mux, engine, model);
@@ -955,7 +954,10 @@ fn extract_session_id_from_jsonl(path: &Path, engine: &str) -> Option<String> {
 /// where the cron indexer hasn't picked up the session yet.
 ///
 /// Returns the short ID stored in the DB (for retry lookup).
-fn index_single_jsonl(conn: &mut Connection, detected: &DetectedSession) -> Result<String, GaalError> {
+fn index_single_jsonl(
+    conn: &mut Connection,
+    detected: &DetectedSession,
+) -> Result<String, GaalError> {
     let meta = fs::metadata(&detected.jsonl_path).map_err(GaalError::from)?;
     let engine = Engine::from_str(&detected.engine)?;
     let short_id = truncate_session_id(&detected.session_id, &engine);
@@ -1063,7 +1065,10 @@ fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Opti
     if jsonl_path.exists() {
         match crate::render::session_md::render_session_markdown(jsonl_path) {
             Ok(content) if !content.trim().is_empty() => {
-                eprintln!("  -> transcript source: rendered from {}", jsonl_path.display());
+                eprintln!(
+                    "  -> transcript source: rendered from {}",
+                    jsonl_path.display()
+                );
                 return Some(content);
             }
             Ok(_) => {}
@@ -1247,7 +1252,11 @@ fn invoke_agent_mux(
 ) -> Result<String, GaalError> {
     let request = format!("{prompt}\n\n---\n\nSession context:\n{context}");
     let mux_timeout_secs = timeout_secs.saturating_sub(5).max(10);
-    let role = mux_config.role.as_deref().map(str::trim).filter(|role| !role.is_empty());
+    let role = mux_config
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|role| !role.is_empty());
     let variant = mux_config
         .variant
         .as_deref()
@@ -1525,7 +1534,9 @@ fn extract_agent_mux_error(value: &Value) -> Option<String> {
             .map(str::to_string);
 
         return match (message, suggestion) {
-            (Some(message), Some(suggestion)) => Some(format!("{message} Suggestion: {suggestion}")),
+            (Some(message), Some(suggestion)) => {
+                Some(format!("{message} Suggestion: {suggestion}"))
+            }
             (Some(message), None) => Some(message),
             (None, Some(suggestion)) => Some(format!("Suggestion: {suggestion}")),
             (None, None) => None,

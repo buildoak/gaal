@@ -48,7 +48,6 @@ enum Commands {
         all: bool,
     },
 
-
     /// Session details with optional focused views (formerly show).
     Inspect {
         /// Session ID or ID prefix. Use `latest` to resolve the newest session.
@@ -77,15 +76,27 @@ enum Commands {
         /// Raw JSONL source path.
         #[arg(long)]
         source: bool,
-        /// Render as session markdown (full conversation flow).
-        #[arg(long)]
-        markdown: bool,
         /// Batch IDs in comma-delimited form.
         #[arg(long, value_delimiter = ',')]
         ids: Vec<String>,
         /// Batch filter by tag.
         #[arg(long)]
         tag: Vec<String>,
+    },
+
+    /// Get session transcript markdown (replaces inspect --markdown).
+    #[command(
+        after_long_help = "Examples:\n  gaal transcript latest\n  gaal transcript 249aad1e\n  gaal transcript latest --stdout\n  gaal transcript latest --force"
+    )]
+    Transcript {
+        /// Session ID or ID prefix. Use `latest` for newest session.
+        id: Option<String>,
+        /// Re-render even if cached file exists.
+        #[arg(long)]
+        force: bool,
+        /// Dump markdown to stdout instead of returning file path as JSON.
+        #[arg(long)]
+        stdout: bool,
     },
 
     /// Inverted query: which session did X to Y.
@@ -376,7 +387,6 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             tokens,
             trace,
             source,
-            markdown,
             ids,
             tag,
         } => {
@@ -390,12 +400,20 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 tokens,
                 trace,
                 source,
-                markdown,
                 ids: csv_or_none(ids),
                 tag: single_or_none("--tag", tag)?,
                 human,
             };
             gaal::commands::inspect::run(args)
+        }
+        Commands::Transcript { id, force, stdout } => {
+            let args = gaal::commands::transcript::TranscriptArgs {
+                id,
+                force,
+                stdout,
+                human,
+            };
+            gaal::commands::transcript::run(args)
         }
         Commands::Who {
             verb,

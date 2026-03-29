@@ -62,11 +62,7 @@ mod ffi {
 
     extern "C" {
         pub fn proc_listallpids(buffer: *mut c_int, buffersize: c_int) -> c_int;
-        pub fn proc_pidpath(
-            pid: c_int,
-            buffer: *mut c_char,
-            buffersize: u32,
-        ) -> c_int;
+        pub fn proc_pidpath(pid: c_int, buffer: *mut c_char, buffersize: u32) -> c_int;
         pub fn proc_pidinfo(
             pid: c_int,
             flavor: c_int,
@@ -251,15 +247,18 @@ fn find_active_sessions_macos() -> Result<Vec<ActiveSession>> {
         // Classify engine from binary path (+ argv for interpreter processes)
         let engine = classify_engine(pid, binary_path.as_deref());
 
-        tree.insert(pid, ProcessNode {
+        tree.insert(
             pid,
-            ppid: bsd.pbi_ppid,
-            binary_path,
-            engine,
-            cwd: None, // deferred — only resolved for agent PIDs
-            start_tvsec: bsd.pbi_start_tvsec,
-            children: Vec::new(),
-        });
+            ProcessNode {
+                pid,
+                ppid: bsd.pbi_ppid,
+                binary_path,
+                engine,
+                cwd: None, // deferred — only resolved for agent PIDs
+                start_tvsec: bsd.pbi_start_tvsec,
+                children: Vec::new(),
+            },
+        );
     }
 
     // --- Phase 3: Wire up children ---
@@ -314,14 +313,11 @@ fn find_active_sessions_macos() -> Result<Vec<ActiveSession>> {
 
         // Resolve session ID: lsof tasks-dir takes priority (structural),
         // fall back to JSONL head scan (CWD-based heuristic).
-        let id = tasks_dir_ids
-            .get(&pid)
-            .cloned()
-            .or_else(|| {
-                jsonl_path
-                    .as_ref()
-                    .and_then(|path| extract_session_id_from_jsonl(path, &engine))
-            });
+        let id = tasks_dir_ids.get(&pid).cloned().or_else(|| {
+            jsonl_path
+                .as_ref()
+                .and_then(|path| extract_session_id_from_jsonl(path, &engine))
+        });
 
         // Find tmux session by walking up the tree
         let tmux_session = find_tmux_session_from_tree(pid, &tree, &tmux_map);
@@ -455,8 +451,12 @@ fn find_active_sessions_linux() -> Result<Vec<ActiveSession>> {
 
     for entry in proc_dir.flatten() {
         let file_name = entry.file_name();
-        let Some(pid_str) = file_name.to_str() else { continue };
-        let Ok(pid) = pid_str.parse::<u32>() else { continue };
+        let Some(pid_str) = file_name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
         if pid == self_pid {
             continue;
         }
@@ -471,15 +471,18 @@ fn find_active_sessions_linux() -> Result<Vec<ActiveSession>> {
 
         let engine = classify_engine(pid, binary_path.as_deref());
 
-        tree.insert(pid, ProcessNode {
+        tree.insert(
             pid,
-            ppid,
-            binary_path,
-            engine,
-            cwd: None,
-            start_tvsec: 0,
-            children: Vec::new(),
-        });
+            ProcessNode {
+                pid,
+                ppid,
+                binary_path,
+                engine,
+                cwd: None,
+                start_tvsec: 0,
+                children: Vec::new(),
+            },
+        );
     }
 
     // Wire up children
@@ -524,14 +527,11 @@ fn find_active_sessions_linux() -> Result<Vec<ActiveSession>> {
         // Each PID is exactly one row — no collapsing.
         let all_pids = vec![pid];
         let jsonl_path = map_cwd_to_jsonl(&engine, &cwd, pid);
-        let id = tasks_dir_ids
-            .get(&pid)
-            .cloned()
-            .or_else(|| {
-                jsonl_path
-                    .as_ref()
-                    .and_then(|path| extract_session_id_from_jsonl(path, &engine))
-            });
+        let id = tasks_dir_ids.get(&pid).cloned().or_else(|| {
+            jsonl_path
+                .as_ref()
+                .and_then(|path| extract_session_id_from_jsonl(path, &engine))
+        });
         let tmux_session = find_tmux_session_from_tree(pid, &tree, &tmux_map);
         let process = probe_pid(pid).unwrap_or(ProcessInfo {
             pid,
@@ -870,8 +870,12 @@ fn collect_tmux_pane_map() -> HashMap<u32, String> {
 
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let mut parts = line.split('\t');
-        let Some(session) = parts.next() else { continue };
-        let Some(pid_str) = parts.next() else { continue };
+        let Some(session) = parts.next() else {
+            continue;
+        };
+        let Some(pid_str) = parts.next() else {
+            continue;
+        };
         let Ok(pane_pid) = pid_str.trim().parse::<u32>() else {
             continue;
         };
@@ -994,7 +998,9 @@ pub fn resolve_session_ids_from_tasks_dir_batch(pids: &[u32]) -> HashMap<u32, St
         let mut cols = line.split_whitespace();
         let _cmd = cols.next();
         let Some(pid_str) = cols.next() else { continue };
-        let Ok(pid) = pid_str.parse::<u32>() else { continue };
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
         if map.contains_key(&pid) {
             continue;
         }
@@ -1052,7 +1058,11 @@ fn map_claude_cwd_to_jsonl(cwd: &str, pid: u32) -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let projects_root = home.join(".claude").join("projects");
 
-    let pid_start = if pid > 0 { get_pid_start_time(pid) } else { None };
+    let pid_start = if pid > 0 {
+        get_pid_start_time(pid)
+    } else {
+        None
+    };
 
     let encoded = encode_claude_project_dir(cwd);
     let dir = projects_root.join(&encoded);
@@ -1212,17 +1222,13 @@ fn get_pid_start_time(pid: u32) -> Option<std::time::SystemTime> {
     if trimmed.is_empty() {
         return None;
     }
-    let naive =
-        chrono::NaiveDateTime::parse_from_str(trimmed, "%a %b %e %H:%M:%S %Y").ok()?;
+    let naive = chrono::NaiveDateTime::parse_from_str(trimmed, "%a %b %e %H:%M:%S %Y").ok()?;
     let dt = naive.and_local_timezone(chrono::Local).single()?;
     let unix_secs = dt.timestamp();
     if unix_secs <= 0 {
         return None;
     }
-    Some(
-        std::time::SystemTime::UNIX_EPOCH
-            + std::time::Duration::from_secs(unix_secs as u64),
-    )
+    Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(unix_secs as u64))
 }
 
 #[cfg(not(unix))]
@@ -1296,11 +1302,7 @@ fn extract_summary(
     }
 
     // 3. Fallback: CWD project name (last path component).
-    let project = cwd
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(cwd);
+    let project = cwd.trim_end_matches('/').rsplit('/').next().unwrap_or(cwd);
     if !project.is_empty() && project != "." {
         return Some(project.to_string());
     }
@@ -1464,11 +1466,7 @@ fn discover_api_active_codex_sessions(
 
             let session_id = id.map(|raw| truncate_codex_id(&raw));
             let cwd_str = cwd.unwrap_or_else(|| "unknown".to_string());
-            let summary = extract_summary(
-                session_id.as_deref(),
-                Some(path.as_path()),
-                &cwd_str,
-            );
+            let summary = extract_summary(session_id.as_deref(), Some(path.as_path()), &cwd_str);
 
             results.push(ActiveSession {
                 id: session_id,
@@ -1552,9 +1550,7 @@ fn is_last_event_stale(path: &Path, threshold: std::time::Duration) -> bool {
     }
 }
 
-fn parse_codex_api_head(
-    lines: &[String],
-) -> (Option<String>, Option<String>, Option<String>) {
+fn parse_codex_api_head(lines: &[String]) -> (Option<String>, Option<String>, Option<String>) {
     let mut id: Option<String> = None;
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;

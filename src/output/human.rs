@@ -104,11 +104,7 @@ pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
 }
 
 /// Print a table with explicit column kind hints for terminal-aware layout.
-pub fn print_table_with_kinds(
-    headers: &[&str],
-    rows: &[Vec<String>],
-    col_kinds: &[ColumnKind],
-) {
+pub fn print_table_with_kinds(headers: &[&str], rows: &[Vec<String>], col_kinds: &[ColumnKind]) {
     if headers.is_empty() {
         return;
     }
@@ -126,12 +122,7 @@ pub fn print_table_with_kinds(
 
     // Determine effective kind per column.
     let kinds: Vec<ColumnKind> = (0..cols)
-        .map(|i| {
-            col_kinds
-                .get(i)
-                .copied()
-                .unwrap_or(ColumnKind::Fixed)
-        })
+        .map(|i| col_kinds.get(i).copied().unwrap_or(ColumnKind::Fixed))
         .collect();
 
     // Compute allocated widths.
@@ -163,7 +154,13 @@ pub fn print_table_with_kinds(
         let mut leftover = remaining % var_count;
 
         for &idx in &variable_indices {
-            let alloc = per_var + if leftover > 0 { leftover = leftover.saturating_sub(1); 1 } else { 0 };
+            let alloc = per_var
+                + if leftover > 0 {
+                    leftover = leftover.saturating_sub(1);
+                    1
+                } else {
+                    0
+                };
             // Don't expand beyond natural width, only cap.
             widths[idx] = natural[idx].min(alloc.max(6)); // minimum 6 chars per variable column
         }
@@ -253,7 +250,9 @@ impl HumanReadable for Vec<SessionRecord> {
             return;
         }
 
-        let headers = ["ID", "Engine", "Started", "Duration", "Tokens", "Model", "CWD"];
+        let headers = [
+            "ID", "Engine", "Started", "Duration", "Tokens", "Model", "CWD",
+        ];
         let col_kinds = [
             ColumnKind::Fixed,    // ID
             ColumnKind::Fixed,    // Engine
