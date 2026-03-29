@@ -175,6 +175,29 @@ pub fn extract_parsed_session(
                         success: None,
                     });
                 }
+
+                // Process tool results embedded in user messages (subagent JSONL format)
+                // for exit-code backfill on pending tool-call facts.
+                for block in content {
+                    if let ContentBlock::ToolResult {
+                        tool_use_id,
+                        content: output_text,
+                    } = block
+                    {
+                        let exit_code = parse_exit_code(output_text);
+                        if let Some(state) = tool_state_by_id.get(tool_use_id) {
+                            let tool_name = state.tool_name.as_str();
+                            if is_shell_tool(tool_name) {
+                                if let Some(fact_idx) = state.fact_index {
+                                    if let Some(fact) = facts.get_mut(fact_idx) {
+                                        fact.exit_code = exit_code;
+                                        fact.success = Some(exit_code.unwrap_or(0) == 0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ── Assistant message ─────────────────────────────────
@@ -213,8 +236,55 @@ pub fn extract_parsed_session(
                                 });
                             }
                         }
-                        ContentBlock::ToolUse(_) => {
+                        ContentBlock::ToolUse(tool_use) => {
+                            // Tool calls embedded in assistant messages (subagent JSONL format)
+                            // must produce facts identical to standalone ToolUse events.
                             total_tools += 1;
+
+                            let fact = tool_call_fact(
+                                &tool_use.name,
+                                &tool_use.input,
+                                ts_str.clone(),
+                                turn_number,
+                            );
+
+                            let mut state = ToolCallState {
+                                tool_name: tool_use.name.clone(),
+                                fact_index: None,
+                                subject: None,
+                                detail: None,
+                            };
+
+                            if let Some(mut call_fact) = fact {
+                                // Git-op detection.
+                                if matches!(&call_fact.fact_type, FactType::Command) {
+                                    if let Some(cmd) = call_fact.detail.clone() {
+                                        if is_git_command(&cmd) {
+                                            facts.push(Fact {
+                                                id: None,
+                                                session_id: String::new(),
+                                                ts: ts_str.clone(),
+                                                turn_number,
+                                                fact_type: FactType::GitOp,
+                                                subject: Some(truncate(&cmd, 100)),
+                                                detail: Some(cmd),
+                                                exit_code: None,
+                                                success: None,
+                                            });
+                                        }
+                                    }
+                                }
+
+                                state.subject = call_fact.subject.clone();
+                                state.detail = call_fact.detail.clone();
+                                state.fact_index = Some(facts.len());
+                                call_fact.session_id = String::new();
+                                facts.push(call_fact);
+                            }
+
+                            if !tool_use.id.is_empty() {
+                                tool_state_by_id.insert(tool_use.id.clone(), state);
+                            }
                         }
                         _ => {}
                     }
@@ -336,17 +406,18 @@ pub fn extract_parsed_session(
                             ts: ts_str.clone(),
                             turn_number,
                             fact_type: FactType::Error,
-                            subject: state
-                                .as_ref()
-                                .and_then(|s| s.subject.clone())
-                                .or_else(|| {
-                                    fallback_tool_fact.as_ref().and_then(|fact| fact.subject.clone())
-                                }),
+                            subject: state.as_ref().and_then(|s| s.subject.clone()).or_else(|| {
+                                fallback_tool_fact
+                                    .as_ref()
+                                    .and_then(|fact| fact.subject.clone())
+                            }),
                             detail: output_text
                                 .clone()
                                 .or_else(|| state.as_ref().and_then(|s| s.detail.clone()))
                                 .or_else(|| {
-                                    fallback_tool_fact.as_ref().and_then(|fact| fact.detail.clone())
+                                    fallback_tool_fact
+                                        .as_ref()
+                                        .and_then(|fact| fact.detail.clone())
                                 }),
                             exit_code,
                             success: Some(false),
@@ -1123,5 +1194,139 @@ mod tests {
         let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
         assert_eq!(result.total_tools, 1); // Still counted
         assert_eq!(result.facts.len(), 0); // But no fact created for unknown tools
+    }
+
+    // ── Subagent JSONL embedded-tool-use tests ─────────────────────────────
+    // Subagent JSONL files use the format:
+    //   { "type": "assistant", "message": { "content": [{"type":"tool_use",...}] } }
+    //   { "type": "user", "message": { "content": [{"type":"tool_result",...}] } }
+    // i.e., tool calls are embedded as ContentBlock::ToolUse inside AssistantMessage,
+    // not emitted as standalone EventKind::ToolUse events.
+
+    #[test]
+    fn inline_assistant_read_creates_file_read_fact() {
+        let events = vec![assistant_msg_with_tool_use(
+            "2026-03-07T10:00:00Z",
+            "toolu_1",
+            "Read",
+            json!({"file_path": "/src/render/session_md.rs"}),
+        )];
+        let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
+        assert_eq!(result.total_tools, 1);
+        let read_facts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "file_read")
+            .collect();
+        assert_eq!(
+            read_facts.len(),
+            1,
+            "inline Read must produce a file_read fact"
+        );
+        assert_eq!(
+            read_facts[0].subject,
+            Some("/src/render/session_md.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn inline_assistant_write_creates_file_write_fact() {
+        let events = vec![assistant_msg_with_tool_use(
+            "2026-03-07T10:00:00Z",
+            "toolu_2",
+            "Write",
+            json!({"file_path": "/src/output.rs", "content": "..."}),
+        )];
+        let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
+        let write_facts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "file_write")
+            .collect();
+        assert_eq!(
+            write_facts.len(),
+            1,
+            "inline Write must produce a file_write fact"
+        );
+        assert_eq!(write_facts[0].subject, Some("/src/output.rs".to_string()));
+    }
+
+    #[test]
+    fn inline_assistant_bash_creates_command_fact() {
+        let events = vec![assistant_msg_with_tool_use(
+            "2026-03-07T10:00:00Z",
+            "toolu_3",
+            "Bash",
+            json!({"command": "cargo test"}),
+        )];
+        let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
+        let cmd_facts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "command")
+            .collect();
+        assert_eq!(
+            cmd_facts.len(),
+            1,
+            "inline Bash must produce a command fact"
+        );
+        assert_eq!(cmd_facts[0].detail, Some("cargo test".to_string()));
+    }
+
+    #[test]
+    fn inline_assistant_bash_exit_code_backfilled_from_user_tool_result() {
+        // Simulates subagent JSONL: assistant message with Bash tool use,
+        // followed by user message with tool_result containing exit code.
+        let events = vec![
+            user_msg("2026-03-07T10:00:00Z", "run tests"),
+            SessionEvent {
+                timestamp: Some("2026-03-07T10:01:00Z".to_string()),
+                kind: EventKind::AssistantMessage {
+                    content: vec![ContentBlock::ToolUse(ToolUseEvent {
+                        id: "toolu_bash".to_string(),
+                        name: "Bash".to_string(),
+                        input: json!({"command": "cargo test"}),
+                    })],
+                    model: None,
+                    stop_reason: None,
+                },
+            },
+            SessionEvent {
+                timestamp: Some("2026-03-07T10:01:00Z".to_string()),
+                kind: EventKind::UserMessage {
+                    content: vec![ContentBlock::ToolResult {
+                        tool_use_id: "toolu_bash".to_string(),
+                        content: "Process exited with code 0".to_string(),
+                    }],
+                },
+            },
+        ];
+        let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
+        let cmd_facts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "command")
+            .collect();
+        assert_eq!(cmd_facts.len(), 1);
+        assert_eq!(cmd_facts[0].exit_code, Some(0));
+        assert_eq!(cmd_facts[0].success, Some(true));
+    }
+
+    #[test]
+    fn inline_assistant_git_bash_creates_git_op_fact() {
+        let events = vec![assistant_msg_with_tool_use(
+            "2026-03-07T10:00:00Z",
+            "toolu_git",
+            "Bash",
+            json!({"command": "git commit -m 'fix: bug'"}),
+        )];
+        let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
+        assert!(
+            result
+                .facts
+                .iter()
+                .any(|f| f.fact_type.as_str() == "git_op"),
+            "inline git Bash must produce a git_op fact"
+        );
     }
 }

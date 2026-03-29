@@ -1118,10 +1118,7 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
     }
 }
 
-fn load_subagent_deltas_from_db(
-    conn: &Connection,
-    session_id: &str,
-) -> Option<Vec<SubagentDelta>> {
+fn load_subagent_deltas_from_db(conn: &Connection, session_id: &str) -> Option<Vec<SubagentDelta>> {
     // Try full session_id first, then fall back to the 8-char short prefix.
     // Note: load_child_sessions returns Some(vec![]) (not None) when no rows
     // match — so we must check for empty vecs, not just None, before falling back.
@@ -1143,15 +1140,7 @@ fn load_subagent_deltas_from_db(
     };
 
     let mut deltas = Vec::with_capacity(child_rows.len());
-    for (
-        child_id,
-        input_tokens,
-        output_tokens,
-        tool_count,
-        started_at,
-        ended_at,
-    ) in child_rows
-    {
+    for (child_id, input_tokens, output_tokens, tool_count, started_at, ended_at) in child_rows {
         let (files_read, files_written, commands) = load_child_facts(conn, &child_id)?;
         let prompt = load_first_user_prompt(conn, &child_id).unwrap_or_default();
         deltas.push(SubagentDelta {
@@ -2050,7 +2039,8 @@ fn get_first_user_prompt(turns: &[Turn]) -> Option<String> {
     for turn in turns {
         let text = extract_text_from_blocks(&turn.user_content);
         if !text.is_empty() {
-            let clean = text.trim().replace('\n', " ");
+            // Strip XML before truncation so tags cannot leak into the title.
+            let clean = strip_xml_tags(&text).trim().replace('\n', " ");
             let truncated: String = if clean.len() > 50 {
                 let prefix: String = clean.chars().take(47).collect();
                 format!("{prefix}...")
@@ -2176,6 +2166,26 @@ mod tests {
     }
 
     #[test]
+    fn test_get_first_user_prompt_strips_xml_before_truncation() {
+        let turns = vec![Turn {
+            turn_number: 1,
+            user_content: vec![ContentBlock::Text {
+                text: "<environment_context>Caveat: The messages below include <b>XML</b> tags and more context than fits in the title.</environment_context>"
+                    .to_string(),
+            }],
+            assistant_content: vec![],
+            timestamp_start: None,
+            timestamp_end: None,
+            model: None,
+        }];
+
+        assert_eq!(
+            get_first_user_prompt(&turns),
+            Some("Caveat: The messages below include XML tags and...".to_string())
+        );
+    }
+
+    #[test]
     fn test_tool_annotation_read() {
         let input = serde_json::json!({"file_path": "/src/main.rs"});
         let ann = fmt_tool_annotation("Read", &input, "id1");
@@ -2285,5 +2295,82 @@ mod tests {
         assert_eq!(delta.total_tokens, Some(1200));
         assert_eq!(delta.total_duration_ms, Some(3000));
         assert_eq!(delta.total_tool_use_count, Some(4));
+    }
+
+    #[test]
+    fn test_subagent_table_model_lookup_uses_agent_id_not_position() {
+        let turns = vec![Turn {
+            turn_number: 1,
+            user_content: vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "tool_a".to_string(),
+                    content: "agentId: agenta\nresult".to_string(),
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "tool_b".to_string(),
+                    content: "agentId: agentb\nresult".to_string(),
+                },
+            ],
+            assistant_content: vec![
+                ContentBlock::ToolUse {
+                    name: "Agent".to_string(),
+                    input: serde_json::json!({
+                        "description": "Investigate A",
+                        "prompt": "Prompt A",
+                        "model": "claude-opus-4-20250514",
+                    }),
+                    id: "tool_a".to_string(),
+                },
+                ContentBlock::ToolUse {
+                    name: "Agent".to_string(),
+                    input: serde_json::json!({
+                        "description": "Investigate B",
+                        "prompt": "Prompt B",
+                        "model": "claude-sonnet-4-20250514",
+                    }),
+                    id: "tool_b".to_string(),
+                },
+            ],
+            timestamp_start: None,
+            timestamp_end: None,
+            model: None,
+        }];
+
+        let subagent_deltas = vec![
+            SubagentDelta {
+                agent_id: "agentb".to_string(),
+                prompt: "Prompt B".to_string(),
+                files_read: vec![],
+                files_written: vec![],
+                commands: vec![],
+                tool_counts: HashMap::new(),
+                timestamps: vec![],
+                total_tokens: Some(20),
+                total_duration_ms: Some(2000),
+                total_tool_use_count: Some(2),
+            },
+            SubagentDelta {
+                agent_id: "agenta".to_string(),
+                prompt: "Prompt A".to_string(),
+                files_read: vec![],
+                files_written: vec![],
+                commands: vec![],
+                tool_counts: HashMap::new(),
+                timestamps: vec![],
+                total_tokens: Some(10),
+                total_duration_ms: Some(1000),
+                total_tool_use_count: Some(1),
+            },
+        ];
+
+        let summary = render_executive_summary(&turns, &subagent_deltas);
+        assert!(
+            summary.contains("| agentb | Prompt B | Sonnet | 2s | 20 | - | - |"),
+            "agent-b should keep its own model even when deltas are reordered"
+        );
+        assert!(
+            summary.contains("| agenta | Prompt A | Opus | 1s | 10 | - | - |"),
+            "agent-a should keep its own model even when deltas are reordered"
+        );
     }
 }

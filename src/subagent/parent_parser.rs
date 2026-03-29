@@ -65,7 +65,13 @@ pub fn extract_subagent_summaries(parent_jsonl: &Path) -> Result<Vec<SubagentMet
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
 
-        let description = derive_description(&prompt);
+        let description = tool_result
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| truncate_description(text, 80))
+            .unwrap_or_else(|| derive_description(&prompt));
 
         by_agent_id.insert(
             agent_id.to_string(),
@@ -85,14 +91,81 @@ pub fn extract_subagent_summaries(parent_jsonl: &Path) -> Result<Vec<SubagentMet
 }
 
 fn derive_description(prompt: &str) -> String {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return "subagent task".to_string();
+    }
+
     let first_line = prompt
         .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or("subagent task");
-    let truncated: String = first_line.chars().take(80).collect();
-    if first_line.chars().count() > 80 {
-        format!("{truncated}...")
-    } else {
-        truncated
+    truncate_description(first_line, 80)
+}
+
+fn truncate_description(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim().replace('\n', " ");
+    if trimmed.chars().count() <= max_chars {
+        return trimmed;
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut truncated: String = trimmed.chars().take(keep).collect();
+    truncated.push_str("...");
+    truncated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn prefers_description_field_when_present() {
+        let dir = std::env::temp_dir().join(format!(
+            "gaal-parent-parser-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("parent.jsonl");
+        fs::write(
+            &path,
+            r#"{"toolUseResult":{"agentId":"agent-1","description":"Short description","prompt":"prompt fallback","status":"completed","totalTokens":1,"totalDurationMs":2,"totalToolUseCount":3,"usage":{}}}
+"#,
+        )
+        .expect("write jsonl");
+
+        let summaries = extract_subagent_summaries(&path).expect("parse");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].description, "Short description");
+    }
+
+    #[test]
+    fn falls_back_to_prompt_when_description_missing() {
+        let dir = std::env::temp_dir().join(format!(
+            "gaal-parent-parser-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("parent.jsonl");
+        fs::write(
+            &path,
+            r#"{"toolUseResult":{"agentId":"agent-2","prompt":"Investigate the API failure in detail","status":"completed","totalTokens":1,"totalDurationMs":2,"totalToolUseCount":3,"usage":{}}}
+"#,
+        )
+        .expect("write jsonl");
+
+        let summaries = extract_subagent_summaries(&path).expect("parse");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(
+            summaries[0].description,
+            "Investigate the API failure in detail"
+        );
     }
 }

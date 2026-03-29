@@ -1,8 +1,8 @@
 //! `gaal index` — build, manage, and inspect the session index.
 
+use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -516,17 +516,17 @@ fn index_subagents(
             continue;
         };
 
-        let child_id = match resolve_subagent_session_id(conn, &summary.meta.agent_id, parent_session_id)?
-        {
-            Some(id) => id,
-            None => {
-                eprintln!(
-                    "  -> subagent indexing warning: id collision for agent {} under parent {}",
-                    summary.meta.agent_id, parent_session_id
-                );
-                continue;
-            }
-        };
+        let child_id =
+            match resolve_subagent_session_id(conn, &summary.meta.agent_id, parent_session_id)? {
+                Some(id) => id,
+                None => {
+                    eprintln!(
+                        "  -> subagent indexing warning: id collision for agent {} under parent {}",
+                        summary.meta.agent_id, parent_session_id
+                    );
+                    continue;
+                }
+            };
 
         let parsed = match parse_session(jsonl_path) {
             Ok(parsed) => parsed,

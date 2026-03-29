@@ -412,7 +412,8 @@ fn build_inspect_data(
             cache_read_input_tokens: cache_read,
             cache_creation_input_tokens: cache_creation,
             peak_context: record.peak_context,
-            peak_context_note: "max single-turn input = non-cached input + cache read + cache creation",
+            peak_context_note:
+                "max single-turn input = non-cached input + cache read + cache creation",
             reasoning_tokens: row.reasoning_tokens,
             estimated_cost_usd: crate::db::queries::estimate_session_cost(row),
             turns: record.turns,
@@ -471,9 +472,8 @@ fn to_json_value(data: InspectData, args: &InspectArgs) -> Result<Value, GaalErr
     if session_type == "coordinator" {
         map.insert(
             "subagents".to_string(),
-            serde_json::to_value(subagents).map_err(|e| {
-                GaalError::Internal(format!("failed to serialize subagents: {e}"))
-            })?,
+            serde_json::to_value(subagents)
+                .map_err(|e| GaalError::Internal(format!("failed to serialize subagents: {e}")))?,
         );
     }
 
@@ -800,16 +800,17 @@ fn duration_secs(row: &SessionRow) -> u64 {
 }
 
 fn get_child_sessions(conn: &Connection, parent_id: &str) -> Result<Vec<SessionRow>, GaalError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
          parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
          cache_read_tokens, cache_creation_tokens, reasoning_tokens,
          total_tools, total_turns, peak_context, last_indexed_offset
-         FROM sessions WHERE parent_id = :parent_id ORDER BY started_at ASC"
-    ).map_err(GaalError::from)?;
-    let rows = stmt.query_map(
-        named_params! { ":parent_id": parent_id },
-        |row| {
+         FROM sessions WHERE parent_id = :parent_id ORDER BY started_at ASC",
+        )
+        .map_err(GaalError::from)?;
+    let rows = stmt
+        .query_map(named_params! { ":parent_id": parent_id }, |row| {
             Ok(SessionRow {
                 id: row.get("id")?,
                 engine: row.get("engine")?,
@@ -836,8 +837,8 @@ fn get_child_sessions(conn: &Connection, parent_id: &str) -> Result<Vec<SessionR
                 peak_context: row.get::<_, Option<i64>>("peak_context")?.unwrap_or(0),
                 last_indexed_offset: row.get("last_indexed_offset")?,
             })
-        }
-    ).map_err(GaalError::from)?;
+        })
+        .map_err(GaalError::from)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(GaalError::from)
 }
 

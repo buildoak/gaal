@@ -466,7 +466,10 @@ mod tests {
                 assert_eq!(tool_use_id, "call_1");
                 assert_eq!(tool_name.as_deref(), Some("exec_command"));
                 assert_eq!(
-                    tool_input.as_ref().and_then(|value| value.get("cmd")).and_then(Value::as_str),
+                    tool_input
+                        .as_ref()
+                        .and_then(|value| value.get("cmd"))
+                        .and_then(Value::as_str),
                     Some("cargo build")
                 );
             }

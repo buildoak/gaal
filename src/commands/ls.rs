@@ -3,11 +3,11 @@ use std::path::Path;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, SecondsFormat, Utc};
 use clap::{ArgAction, Args, ValueEnum};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::db::open_db_readonly;
-use crate::db::queries::{self, count_sessions, ListFilter, SessionRow};
+use crate::db::queries::{self, count_sessions, get_session, ListFilter, SessionRow};
 use crate::error::GaalError;
 use crate::model::TokenUsage;
 use crate::output::human::{
@@ -15,6 +15,7 @@ use crate::output::human::{
     ColumnKind,
 };
 use crate::output::{self, HumanReadable, OutputFormat};
+use crate::subagent::get_subagent_summaries;
 
 /// CLI arguments for `gaal ls`.
 #[derive(Debug, Clone, Args)]
@@ -449,7 +450,7 @@ fn build_summary(
     row: SessionRow,
     now: DateTime<Utc>,
 ) -> Result<SessionSummary, GaalError> {
-    let headline = queries::get_handoff(conn, &row.id)?.and_then(|handoff| handoff.headline);
+    let headline = resolve_headline(conn, &row)?;
 
     let duration_secs = compute_duration_secs(&row.started_at, row.ended_at.as_deref(), now);
 
@@ -471,6 +472,98 @@ fn build_summary(
         session_type: row.session_type,
         parent_id: row.parent_id,
     })
+}
+
+fn resolve_headline(conn: &Connection, row: &SessionRow) -> Result<Option<String>, GaalError> {
+    if let Some(handoff) = queries::get_handoff(conn, &row.id)? {
+        if let Some(headline) = normalize_summary_text(&handoff.headline.unwrap_or_default()) {
+            return Ok(Some(headline));
+        }
+    }
+
+    if row.session_type == "subagent" {
+        if let Some(description) = parent_subagent_description(conn, row)? {
+            return Ok(Some(description));
+        }
+    }
+
+    if let Some(prompt) = first_user_prompt(conn, &row.id)? {
+        return Ok(Some(prompt));
+    }
+
+    Ok(None)
+}
+
+fn parent_subagent_description(
+    conn: &Connection,
+    row: &SessionRow,
+) -> Result<Option<String>, GaalError> {
+    let Some(parent_id) = row.parent_id.as_deref() else {
+        return Ok(None);
+    };
+
+    let Some(parent) = get_session(conn, parent_id)? else {
+        return Ok(None);
+    };
+
+    let parent_jsonl = Path::new(&parent.jsonl_path);
+    let Some(parent_dir) = parent_jsonl.parent() else {
+        return Ok(None);
+    };
+
+    let child_path = Path::new(&row.jsonl_path);
+    let summaries = get_subagent_summaries(parent_jsonl, parent_dir).unwrap_or_default();
+    for summary in summaries {
+        if let Some(path) = summary.jsonl_path.as_deref() {
+            if path == child_path {
+                if let Some(description) = normalize_summary_text(&summary.meta.description) {
+                    return Ok(Some(description));
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn first_user_prompt(conn: &Connection, session_id: &str) -> Result<Option<String>, GaalError> {
+    let prompt = conn
+        .query_row(
+            r#"
+            SELECT detail
+            FROM facts
+            WHERE session_id = :session_id AND fact_type = 'user_prompt'
+            ORDER BY COALESCE(turn_number, 0) ASC, ts ASC, id ASC
+            LIMIT 1
+            "#,
+            rusqlite::named_params! { ":session_id": session_id },
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+
+    Ok(prompt.and_then(|text| normalize_summary_text(&text)))
+}
+
+fn normalize_summary_text(text: &str) -> Option<String> {
+    let normalized = text.trim().replace('\n', " ");
+    let normalized = normalized.trim();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(truncate_summary_text(normalized, 60))
+}
+
+fn truncate_summary_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut truncated: String = text.chars().take(keep).collect();
+    truncated.push_str("...");
+    truncated
 }
 
 fn compute_duration_secs(started_at: &str, ended_at: Option<&str>, now: DateTime<Utc>) -> u64 {
@@ -566,12 +659,13 @@ impl HumanReadable for Vec<SessionSummary> {
 
         if has_subagents {
             let headers = [
-                "ID", "Type", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools",
+                "ID", "Type", "Task", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools",
                 "Model", "CWD",
             ];
             let col_kinds = [
                 ColumnKind::Fixed,    // ID
                 ColumnKind::Fixed,    // Type
+                ColumnKind::Variable, // Task
                 ColumnKind::Fixed,    // Engine
                 ColumnKind::Fixed,    // Started
                 ColumnKind::Fixed,    // Duration
@@ -603,6 +697,7 @@ impl HumanReadable for Vec<SessionSummary> {
                     vec![
                         id,
                         type_badge,
+                        session.headline.clone().unwrap_or_else(|| "-".to_string()),
                         session.engine.clone(),
                         format_timestamp(&session.started_at),
                         format_duration(u64_to_i64_saturating(session.duration_secs)),
@@ -617,10 +712,12 @@ impl HumanReadable for Vec<SessionSummary> {
             print_table_with_kinds(&headers, &rows, &col_kinds);
         } else {
             let headers = [
-                "ID", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools", "Model", "CWD",
+                "ID", "Task", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools", "Model",
+                "CWD",
             ];
             let col_kinds = [
                 ColumnKind::Fixed,    // ID
+                ColumnKind::Variable, // Task
                 ColumnKind::Fixed,    // Engine
                 ColumnKind::Fixed,    // Started
                 ColumnKind::Fixed,    // Duration
@@ -646,6 +743,7 @@ impl HumanReadable for Vec<SessionSummary> {
                     };
                     vec![
                         id,
+                        session.headline.clone().unwrap_or_else(|| "-".to_string()),
                         session.engine.clone(),
                         format_timestamp(&session.started_at),
                         format_duration(u64_to_i64_saturating(session.duration_secs)),
@@ -659,5 +757,132 @@ impl HumanReadable for Vec<SessionSummary> {
                 .collect();
             print_table_with_kinds(&headers, &rows, &col_kinds);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_test_dir(prefix: &str) -> std::path::PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        std::env::temp_dir().join(format!("gaal-{prefix}-{stamp}"))
+    }
+
+    fn make_session_row(
+        id: &str,
+        parent_id: Option<&str>,
+        session_type: &str,
+        jsonl_path: &str,
+    ) -> SessionRow {
+        SessionRow {
+            id: id.to_string(),
+            engine: "claude".to_string(),
+            model: Some("claude-opus-4-6".to_string()),
+            cwd: Some("/tmp/project".to_string()),
+            started_at: "2026-03-28T08:00:00Z".to_string(),
+            ended_at: None,
+            exit_signal: None,
+            last_event_at: Some("2026-03-28T08:10:00Z".to_string()),
+            parent_id: parent_id.map(str::to_string),
+            session_type: session_type.to_string(),
+            jsonl_path: jsonl_path.to_string(),
+            total_input_tokens: 10,
+            total_output_tokens: 20,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+            total_tools: 1,
+            total_turns: 1,
+            peak_context: 100,
+            last_indexed_offset: 0,
+        }
+    }
+
+    #[test]
+    fn standalone_session_uses_first_user_prompt() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        conn.execute_batch(include_str!("../db/schema.sql"))
+            .expect("schema");
+
+        let session = make_session_row("sess-1", None, "standalone", "/tmp/session.jsonl");
+        crate::db::queries::upsert_session(&conn, &session).expect("insert session");
+        conn.execute(
+            "INSERT INTO facts (session_id, ts, turn_number, fact_type, detail) VALUES (?1, ?2, ?3, 'user_prompt', ?4)",
+            rusqlite::params![
+                "sess-1",
+                "2026-03-28T08:01:00Z",
+                1,
+                "Build a session list with a Task column"
+            ],
+        )
+        .expect("insert fact");
+
+        let headline = resolve_headline(&conn, &session).expect("resolve headline");
+        assert_eq!(
+            headline.as_deref(),
+            Some("Build a session list with a Task column")
+        );
+    }
+
+    #[test]
+    fn subagent_session_prefers_parent_description() {
+        let root = unique_test_dir("subagent");
+        let parent_jsonl = root.join("parent.jsonl");
+        let parent_dir = root.clone();
+        let subagents_dir = parent_dir.join("subagents");
+        fs::create_dir_all(&subagents_dir).expect("create subagents dir");
+
+        let parent_tool_use = r#"{"toolUseResult":{"agentId":"agent-abc123","description":"Investigate API failures","prompt":"fallback prompt","status":"completed","totalTokens":10,"totalDurationMs":20,"totalToolUseCount":3,"usage":{}}}"#;
+        fs::write(&parent_jsonl, format!("{parent_tool_use}\n")).expect("write parent jsonl");
+        fs::write(subagents_dir.join("agent-abc123.jsonl"), "").expect("write child jsonl");
+
+        let conn = Connection::open_in_memory().expect("open memory db");
+        conn.execute_batch(include_str!("../db/schema.sql"))
+            .expect("schema");
+
+        let parent = make_session_row(
+            "parent-session",
+            None,
+            "coordinator",
+            parent_jsonl.to_string_lossy().as_ref(),
+        );
+        let child = make_session_row(
+            "agent-abc123",
+            Some("parent-session"),
+            "subagent",
+            subagents_dir
+                .join("agent-abc123.jsonl")
+                .to_string_lossy()
+                .as_ref(),
+        );
+        crate::db::queries::upsert_session(&conn, &parent).expect("insert parent");
+        crate::db::queries::upsert_session(&conn, &child).expect("insert child");
+        conn.execute(
+            "INSERT INTO facts (session_id, ts, turn_number, fact_type, detail) VALUES (?1, ?2, ?3, 'user_prompt', ?4)",
+            rusqlite::params![
+                "agent-abc123",
+                "2026-03-28T08:02:00Z",
+                1,
+                "child prompt"
+            ],
+        )
+        .expect("insert child fact");
+
+        let headline = resolve_headline(&conn, &child).expect("resolve headline");
+        assert_eq!(headline.as_deref(), Some("Investigate API failures"));
+    }
+
+    #[test]
+    fn truncate_summary_text_adds_ellipsis_when_needed() {
+        let text = "a".repeat(100);
+        let truncated = truncate_summary_text(&text, 20);
+        assert_eq!(truncated, "aaaaaaaaaaaaaaaaa...");
     }
 }
