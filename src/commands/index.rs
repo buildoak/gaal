@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use rusqlite::named_params;
+use rusqlite::{named_params, Connection};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -151,7 +151,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                 );
                 if with_markdown {
                     if let Some(output_dir) = &output_dir {
-                        match write_session_markdown_to_dir(&session, output_dir, true) {
+                        match write_session_markdown_to_dir(&conn, &session, output_dir, true) {
                             Ok(WriteOutcome::Written(md_path)) => {
                                 *summary.markdown_written.as_mut().unwrap() += 1;
                                 eprintln!("  -> markdown: {}", md_path.display());
@@ -164,7 +164,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                             }
                         }
                     } else {
-                        match generate_session_markdown(&session) {
+                        match generate_session_markdown(&conn, &session) {
                             Ok(md_path) => {
                                 eprintln!("  -> markdown: {}", md_path.display());
                             }
@@ -181,7 +181,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                 // Even for index-skipped sessions, write markdown if output-dir
                 // is set and the file doesn't exist yet.
                 if let Some(output_dir) = &output_dir {
-                    match write_session_markdown_to_dir(&session, output_dir, false) {
+                    match write_session_markdown_to_dir(&conn, &session, output_dir, false) {
                         Ok(WriteOutcome::Written(md_path)) => {
                             *summary.markdown_written.as_mut().unwrap() += 1;
                             eprintln!("  -> markdown: {}", md_path.display());
@@ -198,7 +198,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                     // if the file doesn't already exist.
                     let md_path = default_session_markdown_path(&session);
                     if !md_path.exists() {
-                        match generate_session_markdown(&session) {
+                        match generate_session_markdown(&conn, &session) {
                             Ok(md_path) => {
                                 eprintln!("  -> markdown: {}", md_path.display());
                             }
@@ -825,7 +825,10 @@ fn default_session_markdown_path(discovered: &DiscoveredSession) -> PathBuf {
 /// Generate a session markdown file from raw JSONL during backfill.
 ///
 /// Writes the rendered markdown to `~/.gaal/data/{engine}/sessions/YYYY/MM/DD/{id}.md`.
-fn generate_session_markdown(discovered: &DiscoveredSession) -> Result<PathBuf, GaalError> {
+fn generate_session_markdown(
+    conn: &Connection,
+    discovered: &DiscoveredSession,
+) -> Result<PathBuf, GaalError> {
     let started_at = discovered.started_at.as_deref().unwrap_or(EPOCH_RFC3339);
 
     // Don't create markdown for sessions with no valid timestamp (epoch fallback).
@@ -835,7 +838,7 @@ fn generate_session_markdown(discovered: &DiscoveredSession) -> Result<PathBuf, 
         ));
     }
 
-    let markdown = crate::render::session_md::render_session_markdown(&discovered.path)
+    let markdown = crate::render::session_md::render_session_markdown_with_db(&discovered.path, conn)
         .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
 
     let engine = discovered.engine.to_string();
@@ -876,6 +879,7 @@ enum WriteOutcome {
 /// because new data arrived, e.g. an active session).
 /// Uses atomic writes to avoid partial files.
 fn write_session_markdown_to_dir(
+    conn: &Connection,
     discovered: &DiscoveredSession,
     output_dir: &Path,
     overwrite: bool,
@@ -903,7 +907,7 @@ fn write_session_markdown_to_dir(
         return Ok(WriteOutcome::Skipped);
     }
 
-    let markdown = crate::render::session_md::render_session_markdown(&discovered.path)
+    let markdown = crate::render::session_md::render_session_markdown_with_db(&discovered.path, conn)
         .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
 
     if let Some(parent) = md_path.parent() {

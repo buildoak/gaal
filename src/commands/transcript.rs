@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Local;
+use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::commands::inspect::resolve_one;
@@ -49,7 +50,7 @@ pub fn run(args: TranscriptArgs) -> Result<(), GaalError> {
     let session = resolve_one(&conn, &raw_id).map_err(map_session_resolution_error)?;
     let config = load_config();
     let paths = transcript_paths(&session, config.markdown_output_dir.as_deref());
-    let md_path = resolve_markdown_path(&session, &paths, args.force)?;
+    let md_path = resolve_markdown_path(&conn, &session, &paths, args.force)?;
 
     if args.stdout {
         let markdown = read_markdown_file(&md_path)?;
@@ -88,6 +89,7 @@ fn map_session_resolution_error(err: GaalError) -> GaalError {
 }
 
 fn resolve_markdown_path(
+    conn: &Connection,
     session: &SessionRow,
     paths: &TranscriptPaths,
     force: bool,
@@ -103,12 +105,12 @@ fn resolve_markdown_path(
         }
     }
 
-    let markdown = render_markdown(session)?;
+    let markdown = render_markdown(session, Some(conn))?;
     write_markdown_file(&paths.gaal_path, &markdown)?;
     Ok(paths.gaal_path.clone())
 }
 
-fn render_markdown(session: &SessionRow) -> Result<String, GaalError> {
+fn render_markdown(session: &SessionRow, conn: Option<&Connection>) -> Result<String, GaalError> {
     let jsonl_path = Path::new(&session.jsonl_path);
     if !jsonl_path.exists() {
         return Err(GaalError::NotFound(format!(
@@ -117,8 +119,12 @@ fn render_markdown(session: &SessionRow) -> Result<String, GaalError> {
         )));
     }
 
-    crate::render::session_md::render_session_markdown(jsonl_path)
-        .map_err(|e| GaalError::Internal(format!("failed to render session markdown: {e}")))
+    let rendered = match conn {
+        Some(conn) => crate::render::session_md::render_session_markdown_with_db(jsonl_path, conn),
+        None => crate::render::session_md::render_session_markdown(jsonl_path),
+    };
+
+    rendered.map_err(|e| GaalError::Internal(format!("failed to render session markdown: {e}")))
 }
 
 fn write_markdown_file(path: &Path, content: &str) -> Result<(), GaalError> {

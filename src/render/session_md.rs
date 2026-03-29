@@ -9,6 +9,7 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Utc};
 use regex::Regex;
+use rusqlite::{named_params, Connection};
 use serde_json::Value;
 
 use crate::parser::event::{
@@ -143,6 +144,26 @@ pub fn render_session_markdown(path: &Path) -> Result<String> {
         Engine::Codex => codex::parse_events(path)?,
     };
     let session = events_to_session_data(&events, path);
+    Ok(session_to_markdown(&session))
+}
+
+/// Render a JSONL session file to markdown, enriching subagent data from the DB.
+///
+/// Falls back to the legacy SubagentProgress pipeline when DB data is unavailable.
+pub fn render_session_markdown_with_db(path: &Path, conn: &Connection) -> Result<String> {
+    let engine = detect_engine(path)?;
+    let events = match engine {
+        Engine::Claude => claude::parse_events(path)?,
+        Engine::Codex => codex::parse_events(path)?,
+    };
+    let mut session = events_to_session_data(&events, path);
+
+    if session.subagent_deltas.is_empty() {
+        if let Some(db_deltas) = load_subagent_deltas_from_db(conn, &session.session_id) {
+            session.subagent_deltas = db_deltas;
+        }
+    }
+
     Ok(session_to_markdown(&session))
 }
 
@@ -1043,6 +1064,144 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
         cache_creation_tokens,
         subagent_deltas,
     }
+}
+
+fn load_subagent_deltas_from_db(
+    conn: &Connection,
+    session_id: &str,
+) -> Option<Vec<SubagentDelta>> {
+    let child_rows = load_child_sessions(conn, session_id)
+        .or_else(|| {
+            let short_id: String = session_id.chars().take(8).collect();
+            if short_id == session_id {
+                None
+            } else {
+                load_child_sessions(conn, &short_id)
+            }
+        })?;
+
+    if child_rows.is_empty() {
+        return None;
+    }
+
+    let mut deltas = Vec::with_capacity(child_rows.len());
+    for (
+        child_id,
+        input_tokens,
+        output_tokens,
+        tool_count,
+        started_at,
+        ended_at,
+    ) in child_rows
+    {
+        let (files_read, files_written, commands) = load_child_facts(conn, &child_id)?;
+        deltas.push(SubagentDelta {
+            agent_id: child_id,
+            prompt: String::new(),
+            files_read,
+            files_written,
+            commands,
+            tool_counts: HashMap::new(),
+            timestamps: vec![started_at.clone()],
+            total_tokens: Some(input_tokens + output_tokens),
+            total_duration_ms: calculate_duration_ms(&started_at, ended_at.as_deref()),
+            total_tool_use_count: Some(tool_count),
+        });
+    }
+
+    Some(deltas)
+}
+
+fn load_child_sessions(
+    conn: &Connection,
+    parent_id: &str,
+) -> Option<Vec<(String, i64, i64, i64, String, Option<String>)>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, total_input_tokens, total_output_tokens, total_tools, started_at, ended_at
+             FROM sessions
+             WHERE parent_id = :parent_id
+             ORDER BY started_at ASC",
+        )
+        .ok()?;
+
+    let rows = stmt
+        .query_map(named_params! { ":parent_id": parent_id }, |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })
+        .ok()?;
+
+    rows.collect::<std::result::Result<Vec<_>, _>>().ok()
+}
+
+fn load_child_facts(
+    conn: &Connection,
+    child_id: &str,
+) -> Option<(Vec<String>, Vec<(String, String)>, Vec<String>)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT fact_type, subject, detail
+             FROM facts
+             WHERE session_id = :sid
+               AND fact_type IN ('file_read', 'file_write', 'command')
+             ORDER BY ts ASC",
+        )
+        .ok()?;
+
+    let rows = stmt
+        .query_map(named_params! { ":sid": child_id }, |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .ok()?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+
+    let mut files_read = Vec::new();
+    let mut files_written = Vec::new();
+    let mut commands = Vec::new();
+
+    for (fact_type, subject, detail) in rows {
+        match fact_type.as_str() {
+            "file_read" => {
+                if let Some(path) = subject {
+                    if !files_read.contains(&path) {
+                        files_read.push(path);
+                    }
+                }
+            }
+            "file_write" => {
+                if let Some(path) = subject {
+                    files_written.push((path, detail.unwrap_or_default()));
+                }
+            }
+            "command" => {
+                let command = detail.or(subject);
+                if let Some(command) = command {
+                    commands.push(command);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Some((files_read, files_written, commands))
+}
+
+fn calculate_duration_ms(started: &str, ended: Option<&str>) -> Option<i64> {
+    let start = DateTime::parse_from_rfc3339(started).ok()?;
+    let end = DateTime::parse_from_rfc3339(ended?).ok()?;
+    Some((end - start).num_milliseconds())
 }
 
 /// Convert parser content blocks to renderer content blocks.
