@@ -23,6 +23,7 @@ use crate::model::{Fact, HandoffRecord};
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
 use crate::parser::{parse_session, parse_session_incremental, ParsedSession};
+use crate::subagent::engine::get_subagent_summaries;
 
 const EPOCH_RFC3339: &str = "1970-01-01T00:00:00Z";
 const SUSPICIOUS_PEAK_CONTEXT_THRESHOLD: i64 = 10_000_000;
@@ -410,6 +411,19 @@ pub(crate) fn index_discovered_session(
             insert_facts_batch(&tx, &normalized_facts)?;
         }
         tx.commit().map_err(GaalError::from)?;
+        if discovered.engine == Engine::Claude {
+            let parent_id = merged_row.id.clone();
+            match index_subagents(conn, &discovered.path, &parent_id) {
+                Ok(count) => {
+                    if count > 0 {
+                        eprintln!("  -> indexed {} subagents", count);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("  -> subagent indexing warning: {}", err);
+                }
+            }
+        }
         return Ok(IndexOutcome::Indexed);
     }
 
@@ -458,7 +472,182 @@ pub(crate) fn index_discovered_session(
         insert_facts_batch(&tx, &facts)?;
     }
     tx.commit().map_err(GaalError::from)?;
+    if discovered.engine == Engine::Claude {
+        let parent_id = session_row.id.clone();
+        match index_subagents(conn, &discovered.path, &parent_id) {
+            Ok(count) => {
+                if count > 0 {
+                    eprintln!("  -> indexed {} subagents", count);
+                }
+            }
+            Err(err) => {
+                eprintln!("  -> subagent indexing warning: {}", err);
+            }
+        }
+    }
     Ok(IndexOutcome::Indexed)
+}
+
+fn index_subagents(
+    conn: &mut rusqlite::Connection,
+    parent_jsonl_path: &Path,
+    parent_session_id: &str,
+) -> Result<usize, GaalError> {
+    let parent_row = get_session(conn, parent_session_id)?.ok_or_else(|| {
+        GaalError::Internal(format!(
+            "parent session missing during subagent indexing: {parent_session_id}"
+        ))
+    })?;
+    let session_dir = parent_jsonl_path.with_extension("");
+    let summaries = get_subagent_summaries(parent_jsonl_path, &session_dir)
+        .map_err(|e| GaalError::Internal(format!("discover subagents: {e}")))?;
+    if summaries.is_empty() {
+        return Ok(0);
+    }
+
+    let mut indexed = 0usize;
+
+    for summary in summaries {
+        if !summary.has_jsonl {
+            continue;
+        }
+
+        let Some(jsonl_path) = summary.jsonl_path.as_ref() else {
+            continue;
+        };
+
+        let child_id = match resolve_subagent_session_id(conn, &summary.meta.agent_id, parent_session_id)?
+        {
+            Some(id) => id,
+            None => {
+                eprintln!(
+                    "  -> subagent indexing warning: id collision for agent {} under parent {}",
+                    summary.meta.agent_id, parent_session_id
+                );
+                continue;
+            }
+        };
+
+        let parsed = match parse_session(jsonl_path) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                eprintln!(
+                    "  -> subagent indexing warning: failed to parse {}: {}",
+                    jsonl_path.display(),
+                    err
+                );
+                continue;
+            }
+        };
+        let last_indexed_offset = match file_len_i64(jsonl_path) {
+            Ok(len) => len,
+            Err(err) => {
+                eprintln!(
+                    "  -> subagent indexing warning: failed to stat {}: {}",
+                    jsonl_path.display(),
+                    err
+                );
+                continue;
+            }
+        };
+        let started_at = if parsed.meta.started_at == EPOCH_RFC3339 {
+            parent_row.started_at.clone()
+        } else {
+            parsed.meta.started_at.clone()
+        };
+
+        let child_facts = normalize_facts(parsed.facts, &child_id);
+        let child_row = SessionRow {
+            id: child_id.clone(),
+            engine: "claude".to_string(),
+            model: parsed.meta.model.clone(),
+            cwd: parsed.meta.cwd.clone().or_else(|| parent_row.cwd.clone()),
+            started_at,
+            ended_at: parsed.ended_at.clone(),
+            exit_signal: parsed.exit_signal.clone(),
+            last_event_at: parsed.last_event_at.clone(),
+            parent_id: Some(parent_session_id.to_string()),
+            session_type: "subagent".to_string(),
+            jsonl_path: jsonl_path.to_string_lossy().to_string(),
+            total_input_tokens: parsed.total_input_tokens,
+            total_output_tokens: parsed.total_output_tokens,
+            cache_read_tokens: parsed.cache_read_tokens,
+            cache_creation_tokens: parsed.cache_creation_tokens,
+            reasoning_tokens: parsed.reasoning_tokens,
+            total_tools: i64::from(parsed.total_tools),
+            total_turns: i64::from(parsed.total_turns),
+            peak_context: parsed.peak_context,
+            last_indexed_offset,
+        };
+
+        let tx = match conn.savepoint_with_name("index_subagent") {
+            Ok(tx) => tx,
+            Err(err) => {
+                eprintln!(
+                    "  -> subagent indexing warning: savepoint failed for {}: {}",
+                    child_id, err
+                );
+                continue;
+            }
+        };
+
+        let save_result: Result<(), GaalError> = (|| {
+            tx.execute(
+                "DELETE FROM facts WHERE session_id = :session_id",
+                named_params! { ":session_id": &child_id },
+            )
+            .map_err(GaalError::from)?;
+            upsert_session(&tx, &child_row)?;
+            if !child_facts.is_empty() {
+                insert_facts_batch(&tx, &child_facts)?;
+            }
+            tx.commit().map_err(GaalError::from)?;
+            Ok(())
+        })();
+
+        match save_result {
+            Ok(()) => indexed += 1,
+            Err(err) => {
+                eprintln!(
+                    "  -> subagent indexing warning: failed to save {}: {}",
+                    child_id, err
+                );
+            }
+        }
+    }
+
+    if indexed > 0 {
+        conn.execute(
+            "UPDATE sessions SET session_type = 'coordinator' WHERE id = :id",
+            named_params! { ":id": parent_session_id },
+        )
+        .map_err(GaalError::from)?;
+    }
+
+    Ok(indexed)
+}
+
+fn resolve_subagent_session_id(
+    conn: &rusqlite::Connection,
+    agent_id: &str,
+    parent_session_id: &str,
+) -> Result<Option<String>, GaalError> {
+    for prefix_len in [8usize, 12usize] {
+        let candidate: String = agent_id.chars().take(prefix_len).collect();
+        if candidate.is_empty() {
+            return Ok(None);
+        }
+
+        match get_session(conn, &candidate)? {
+            None => return Ok(Some(candidate)),
+            Some(existing) if existing.parent_id.as_deref() == Some(parent_session_id) => {
+                return Ok(Some(candidate));
+            }
+            Some(_) => continue,
+        }
+    }
+
+    Ok(None)
 }
 
 fn session_needs_full_reparse(
