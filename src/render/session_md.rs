@@ -1070,19 +1070,25 @@ fn load_subagent_deltas_from_db(
     conn: &Connection,
     session_id: &str,
 ) -> Option<Vec<SubagentDelta>> {
-    let child_rows = load_child_sessions(conn, session_id)
-        .or_else(|| {
+    // Try full session_id first, then fall back to the 8-char short prefix.
+    // Note: load_child_sessions returns Some(vec![]) (not None) when no rows
+    // match — so we must check for empty vecs, not just None, before falling back.
+    let child_rows = {
+        let rows = load_child_sessions(conn, session_id)?;
+        if rows.is_empty() {
             let short_id: String = session_id.chars().take(8).collect();
             if short_id == session_id {
-                None
-            } else {
-                load_child_sessions(conn, &short_id)
+                return None;
             }
-        })?;
-
-    if child_rows.is_empty() {
-        return None;
-    }
+            let fallback = load_child_sessions(conn, &short_id)?;
+            if fallback.is_empty() {
+                return None;
+            }
+            fallback
+        } else {
+            rows
+        }
+    };
 
     let mut deltas = Vec::with_capacity(child_rows.len());
     for (
