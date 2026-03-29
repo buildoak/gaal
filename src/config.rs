@@ -104,8 +104,17 @@ pub fn load_config() -> GaalConfig {
     }
 }
 
-/// Returns the Gaal home directory path (`~/.gaal/`).
+/// Returns the Gaal home directory path.
+///
+/// Resolution order:
+/// 1. `GAAL_HOME` environment variable (if set and non-empty)
+/// 2. `~/.gaal/` (default)
 pub fn gaal_home() -> PathBuf {
+    if let Ok(val) = std::env::var("GAAL_HOME") {
+        if !val.is_empty() {
+            return PathBuf::from(val);
+        }
+    }
     dirs::home_dir()
         .map(|path| path.join(".gaal"))
         .unwrap_or_else(|| PathBuf::from(".gaal"))

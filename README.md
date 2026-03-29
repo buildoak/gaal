@@ -2,7 +2,7 @@
 
 Session observability for AI coding agents. Like k9s for your Claude Code and Codex fleet.
 
-Canonical documentation lives in [DOCS.md](./DOCS.md). Use this README as the short overview and `DOCS.md` for the current command reference.
+Full documentation lives in [`docs/`](./docs/README.md). Use this README as the short overview and `docs/` for architecture, command reference, agent guide, and format details.
 
 ## The problem
 

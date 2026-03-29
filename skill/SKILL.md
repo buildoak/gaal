@@ -1,91 +1,93 @@
 ---
 name: gaal
 description: |
-  Agent session observability CLI for Claude Code and Codex. Query sessions, facts,
-  transcripts, tags, handoffs, and subagents. JSON output by default, `-H` for human
-  output. AX errors teach agents what went wrong and how to recover.
-  Use when: session observability, session history, who wrote/read/ran a file,
-  search sessions, fleet view, inspect session details, handoff generation, recall
-  context from past sessions, transcript rendering, tag management, self-identification,
-  salt token, subagents, token accounting, cache tokens, continuity, prior context.
-  Replaces eywa for session recall and handoff generation.
-  Do NOT use for: cross-session prompt injection (use session-ctl), live JSONL tailing
-  (not supported), real-time process monitoring (removed in v0.1.0).
+  Agent session observability CLI — turns AI coding sessions into first-class queryable artifacts.
+  Parses Claude Code + Codex JSONL, indexes into SQLite + Tantivy FTS, answers questions in seconds.
+  Use when: recalling past context, attributing file changes, searching session history, generating
+  continuity handoffs, inspecting sessions, viewing transcripts, managing session taxonomy,
+  session search, who wrote, who read, who ran, fleet view, inspect session, recall context,
+  transcript, tag management, self-identification, salt token, subagents, token accounting,
+  cache tokens, continuity, prior context, attribution, handoff.
+  11 commands. JSON default, -H for human. AX errors teach agents what went wrong + how to recover.
 ---
 
 # gaal
 
-Agent session observability CLI. 11 commands. JSON default, `-H` for human-readable output.
-See [`DOCS.md`](/Users/otonashi/thinking/building/gaal/DOCS.md) for the canonical user doc and exact flag/output examples.
+Session observability for AI coding agents.
 
-## Paths
+Claude Code and Codex emit JSONL session logs — 10-50MB blobs of undocumented, engine-specific event streams. Raw, they're useless. Gaal parses both formats, indexes them into SQLite and Tantivy, and turns raw traces into answers.
 
-| What | Path |
-|------|------|
-| Binary | `gaal` (or `./target/release/gaal` if not on PATH) |
-| Data root | `~/.gaal/` |
-| SQLite index | `~/.gaal/index.db` |
-| Config | `~/.gaal/config.toml` |
-| Tantivy FTS | `~/.gaal/tantivy/` |
-| Handoff prompt | `~/.gaal/prompts/handoff.md` |
-| Session MDs | `~/.gaal/data/{engine}/sessions/YYYY/MM/DD/<id>.md` |
-| Handoff MDs | `~/.gaal/data/{engine}/handoffs/YYYY/MM/DD/<id>.md` |
-| Canonical docs | [`DOCS.md`](/Users/otonashi/thinking/building/gaal/DOCS.md) |
+The core idea: **sessions are first-class queryable artifacts, not throwaway logs.**
 
-## Config Defaults (`~/.gaal/config.toml`)
+Every session you ran is indexed, searchable, and summarizable. Use gaal to resume work, attribute changes, search across sessions, and maintain continuity across context resets. It is the memory layer that makes each new session less amnesic than the last.
 
-| Key | Default | What |
-|-----|---------|------|
-| `llm.default_engine` | `codex` | Engine for handoff generation |
-| `llm.default_model` | `gpt-5.3-codex-spark` | Model for handoff generation |
-| `llm.timeout_secs` | `120` | LLM timeout |
-| `handoff.prompt` | `prompts/handoff.md` | Extraction prompt path (relative to `~/.gaal/`) |
-| `handoff.format` | `eywa` | Default handoff output format |
-| `agent-mux.path` | `agent-mux` | agent-mux binary path |
+## Design Principles
 
-## Eywa Migration Map
+**1. Two-source architecture.** Database for speed, filesystem for truth. SQLite powers `ls`, `inspect`, `who`, `recall`, `search` — fast structured queries over session metadata and extracted facts. Raw JSONL files on disk power `transcript` rendering, `salt` scanning, and subagent discovery. Parent JSONL `toolUseResult` blocks give fleet-level subagent metadata (tokens, duration, status). Subagent JSONL files give the full turn-by-turn trace. Both sources needed. The DB is derived from the files, not the other way around.
 
-| Eywa command | Gaal equivalent |
-|-------------|----------------|
-| `eywa get` | `gaal recall --format eywa` |
-| `eywa get "query"` | `gaal recall "query" --format eywa` |
-| `eywa get "topic" --days-back 30 --max 5` | `gaal recall "topic" --days-back 30 --limit 5 --format eywa` |
-| `eywa extract` | `gaal create-handoff` |
-| `eywa extract <id>` | `gaal create-handoff <id>` |
-| `eywa rebuild-index` | `gaal index backfill` |
+**2. Errors teach.** Every gaal error has three parts: what went wrong, a working example, and a hint for the next action. This is the AX principle — agent experience matters more than API surface. A failed command should be productive: parse the error, extract the example, retry. Zero cryptic failures is the bar.
 
-The `--format eywa` flag produces coordinator-compatible output matching eywa's layout.
+**3. Agent-native.** JSON by default. Exit codes are stable contracts (0=success, 1=no results, 2=ambiguous ID, 3=not found, 10=no index, 11=parse error). Composable with jq, pipeable into scripts, assertable with `jq -e`. `-H` is the human escape hatch, not the default.
 
-## Session Protocol
+**4. Taxonomy over heuristics.** Sessions have types — `standalone`, `coordinator`, `subagent` — not guessed states. We killed stuck detection, loop detection, velocity estimation, and process monitoring because heuristics lie more often than they help. What survived: deterministic classification based on observable structure.
 
-### Session Start
+**5. Evidence first.** When working on gaal's own code: grep real JSONL before reasoning about schemas. When using gaal: trust `inspect --trace` output over assumptions about what a session contains. Ground truth is sacred — confident lies compound.
 
-Use recall to pull context before starting work.
+## The Six Questions
+
+Every gaal command answers exactly one question:
+
+| Question | Command |
+|----------|---------|
+| What sessions exist? | `gaal ls` |
+| What happened in this session? | `gaal inspect <id>` |
+| Which sessions touched this? | `gaal who <verb> <target>` |
+| Where does this text appear? | `gaal search <query>` |
+| What past context is relevant? | `gaal recall [topic]` |
+| How do I create continuity? | `gaal create-handoff` |
+
+Supporting commands: `transcript` (rendered markdown of a session), `salt`/`find-salt` (self-identification), `index` (maintenance), `tag` (annotation).
+
+If you're unsure which command to reach for, match your intent to one of these six questions.
+
+## Quick Start
 
 ```bash
-gaal recall --format eywa
-gaal recall "sorbent operations" --format eywa --limit 5
-gaal recall "gaussian moat" --days-back 30 --format eywa
+gaal ls -H                              # fleet overview
+gaal inspect latest --tokens -H         # drill into newest session
+gaal who wrote CLAUDE.md                # attribution
+gaal search "auth refactor" --limit 5   # free-text search
+gaal recall --format brief              # continuity recall
+gaal create-handoff latest              # generate handoff
 ```
 
-`gaal recall` defaults to `--format brief`. Use `--format summary`, `--format handoff`, `--format full`, or `--format eywa` when you need a different shape.
+## Session Taxonomy
 
-### Session End
+```
+standalone    — normal session, no subagents
+coordinator   — parent that spawned subagents via Agent tool
+subagent      — child spawned by a coordinator
+```
 
-Write a short session summary first, then generate the handoff.
+`gaal ls` hides subagents by default. `--include-subagents` or `--session-type subagent` to surface them. `inspect` shows a Subagents table for coordinators, parent linkage for subagents. Attribution via `who` flows through the chain — if a subagent wrote a file, gaal traces it back through the parent.
 
+## Continuity Protocol
+
+**Start of session** — pull relevant context:
+```bash
+gaal recall "topic" --format brief --limit 5
+```
+
+**End of session** — generate a handoff for the next agent:
 ```bash
 gaal create-handoff
-gaal create-handoff <session-id>
-gaal create-handoff --batch --since 1d --dry-run
-gaal create-handoff --batch --since 1d
 ```
 
-Handoff generation uses LLM via agent-mux by default. `--provider openrouter` is also available. Use `--dry-run` before batch runs.
+Recall quality depends on indexed handoffs. If recall returns nothing useful, check `gaal index status` — you may need `gaal index backfill`.
 
-### Self-Handoff Protocol
+## Self-Identification
 
-When the current session needs to identify its own JSONL file, use the salt flow.
+When an agent needs to identify its own running session:
 
 ```bash
 SALT=$(gaal salt)
@@ -94,224 +96,80 @@ JSONL=$(gaal find-salt "$SALT" | jq -r .jsonl_path)
 gaal create-handoff --jsonl "$JSONL"
 ```
 
-`gaal salt` and `gaal find-salt` must be separate tool calls so the salt is flushed to JSONL before scanning.
+`salt` and `find-salt` must be separate tool calls — the JSONL must flush between them.
 
-### Index Freshness
+Fallback if salt scanning fails (sandbox environments, unflushed logs): `gaal inspect latest --source` gives the most recent session's JSONL path.
 
-Recall quality depends on indexed handoffs. Use the index subcommands when freshness matters:
+## Essential Patterns
 
-```bash
-gaal index status
-gaal index backfill
-gaal index reindex <id>
-gaal index import-eywa [PATH]
-gaal index prune --before <DATE>
-```
-
-See [`DOCS.md`](/Users/otonashi/thinking/building/gaal/DOCS.md) for subcommand flags such as `--with-markdown`, `--output-dir`, and `--force`.
-
-## Architecture Notes
-
-- Two-source model: database-backed metadata and filesystem discovery of raw JSONL plus `subagents/agent-*.jsonl`.
-- The DB is the fast query surface for `ls`, `inspect`, `who`, `recall`, tags, and most session metadata.
-- The filesystem is still needed for transcript rendering, salt scanning, and subagent discovery.
-- Parent JSONL `toolUseResult` blocks provide aggregate subagent metadata such as `agentId`, duration, total tokens, status, and prompt/description.
-- Subagent JSONL files provide the full turn-by-turn trace and tool activity.
-- This is why `inspect`, `transcript`, `who`, and `search` can show subagent-aware results while still surfacing the parent linkage.
-
-## Quick Reference
-
-```bash
-gaal ls -H
-gaal inspect latest --tokens -H
-gaal who wrote CLAUDE.md
-gaal search "gaussian moat" --limit 5
-gaal transcript latest
-gaal create-handoff latest
-```
-
-## Decision Tree
-
-| Need | Tool |
-|------|------|
-| Fleet overview / recent sessions | `gaal ls` |
-| Drill into one session | `gaal inspect <id>` |
-| Get rendered transcript markdown for one session | `gaal transcript <id>` |
-| Fleet totals instead of individual sessions | `gaal ls --aggregate` |
-| Session health / operational snapshot | `gaal inspect <id>` |
-| "Who wrote/read/ran X?" | `gaal who <verb> <target>` |
-| Free-text search across content | `gaal search <query>` |
-| Semantic recall | `gaal recall [query]` |
-| Generate handoff document | `gaal create-handoff <id\|today>` |
-| Self-identify current session | `gaal salt` -> `gaal find-salt <SALT>` -> `gaal create-handoff --jsonl` |
-| Cross-session prompt injection | session-ctl (different tool) |
-
-## Commands by Tier
-
-### Fleet View
-
-| Command | What |
-|---------|------|
-| `gaal ls` | List sessions. Filters: `--engine`, `--since`, `--before`, `--cwd`, `--tag`, `--session-type`, `--sort`, `--limit`. Default limit is 10. |
-| `gaal ls --aggregate` | Return aggregate totals instead of rows. |
-| `gaal ls --all` | Include short/noise sessions. |
-| `gaal ls --skip-subagents` | Hide subagent sessions and show only standalone/coordinator sessions. |
-
-Human `ls` output uses a `Task` column for the session headline and shows subagent type badges when subagents are present.
-
-### Drill-Down
-
-| Command | What |
-|---------|------|
-| `gaal inspect <id>` | Session detail view. `latest` resolves the newest session. |
-| `gaal inspect <id> --files write` | File ops view; bare `--files` defaults to `all`. |
-| `gaal inspect <id> --errors` | Errors and non-zero exits only. |
-| `gaal inspect <id> --commands` | Commands only. |
-| `gaal inspect <id> --git` | Git operations only. |
-| `gaal inspect <id> --tokens` | Token usage breakdown. |
-| `gaal inspect <id> --trace` | Full event timeline. |
-| `gaal inspect <id> --source` | Raw JSONL source path. |
-| `gaal inspect <id> --include-empty` | Include empty/low-signal subagents in coordinator views. |
-| `gaal inspect --ids a1b2,c3d4` | Batch IDs in comma-delimited form. |
-| `gaal inspect --tag <tag>` | Batch filter by tag. |
-| `gaal transcript <id>` | Transcript path metadata by default. |
-| `gaal transcript <id> --stdout` | Dump rendered transcript markdown to stdout. |
-| `gaal transcript <id> --force` | Re-render even if cached file exists. |
-
-### Inverted Queries
-
-| Command | What |
-|---------|------|
-| `gaal who read <path>` | Sessions that read a file. |
-| `gaal who wrote <path>` | Sessions that modified a file. |
-| `gaal who ran "<cmd>"` | Sessions that ran a command. |
-| `gaal who touched <term>` | Broadest match across files and commands. |
-| `gaal who changed <path>` | Sessions that changed a file. |
-| `gaal who deleted <path>` | Sessions that deleted a file or removed it via command. |
-
-`who` flags: `--since` default `7d`, `--before`, `--cwd`, `--engine`, `--tag`, `--failed` for `ran`, `--limit` default `10`, `-F/--full`, `-H/--human`.
-
-### Search & Recall
-
-| Command | What |
-|---------|------|
-| `gaal search "<query>"` | Full-text search over indexed facts. Flags: `--since` default `30d`, `--cwd`, `--engine`, `--field` default `all`, `--context` default `2`, `--limit` default `20`. |
-| `gaal recall [query]` | Semantic session retrieval. Flags: `--days-back` default `14`, `--limit` default `3`, `--format` default `brief`, `--substance` default `1`, `-H`. |
-
-### LLM-Powered
-
-| Command | What |
-|---------|------|
-| `gaal create-handoff <id\|today\|latest>` | Generate a handoff doc via LLM extraction. Flags: `--jsonl`, `--engine`, `--model`, `--prompt`, `--provider` default `agent-mux`, `--format` default `eywa-compatible`, `--batch`, `--since` default `7d`, `--parallel` default `1`, `--min-turns` default `3`, `--this`, `--dry-run`, `-H`. |
-
-### Self-Identification
-
-| Command | What |
-|---------|------|
-| `gaal salt` | Generate a unique salt token for self-identification. `-H` is supported; output is otherwise a raw token string. |
-| `gaal find-salt <SALT>` | Find the first JSONL file containing the token. Returns `session_id`, `engine`, and `jsonl_path`. `-H` is supported. |
-
-### Index Management
-
-| Command | What |
-|---------|------|
-| `gaal index backfill` | Index all existing JSONL files. Flags: `--engine`, `--since`, `--force`, `--with-markdown`, `--output-dir`, `-H`. |
-| `gaal index status` | Show index health/status. `-H` is supported. |
-| `gaal index reindex <id>` | Force re-index of one session. `-H` is supported. |
-| `gaal index import-eywa [PATH]` | Import legacy eywa handoff-index data. `-H` is supported. |
-| `gaal index prune --before <DATE>` | Remove old facts before a date. `-H` is supported. |
-| `gaal tag ls` | List all tags. This is the `gaal tag` listing form, not a separate subcommand. |
-| `gaal tag <id> <tags...>` | Add tags to a session. |
-| `gaal tag <id> <tags...> --remove` | Remove tags from a session. |
-
-## Session ID Resolution
-
-Gaal resolves short session IDs and prefixes where possible. Use `latest` for the newest session. Full UUIDs are truncated internally to the stored short ID.
-
-What you can pass to gaal commands (`inspect`, `transcript`, `create-handoff`, `who`, `search`, and index/session workflows where applicable):
-
-| Input | Behavior |
-|-------|----------|
-| Full UUID | Truncated internally to the stored short ID |
-| Short ID | Used directly for lookup |
-| Prefix | Resolves if unique, otherwise returns an ambiguous-ID error |
-| `latest` | Resolves to the most recent session |
-
-`create-handoff` accepts `today` and `latest` in addition to explicit session IDs.
-
-## Output Contract
-
-- Default output is JSON.
-- `-H` / `--human` switches to human-readable tables or cards.
-- `inspect --full` and `who --full` expose all arrays or per-fact rows.
-- `ls -H` uses a `Task` column and type badges when subagents are present.
-- `inspect -H` shows a subagent table for coordinator sessions.
-- `transcript <id>` is path-first by default and returns JSON metadata; `--stdout` prints markdown.
-- JSON errors include `hint` and `example` fields alongside `ok`, `error`, and `exit_code`.
-
-## AX Error Handling
-
-Every gaal error is designed to teach calling agents.
-
-1. What went wrong.
-2. A working example.
-3. A hint for the next step.
-
-Exit codes are meaningful and consistent: 0=success, 1=no results, 2=ambiguous ID, 3=not found, 10=no index, 11=parse error. `-H` routes errors through human formatting.
-
-## Agent Consumption Notes
-
-**Pipe gotcha with `gaal who`:** The `who` verb consumes trailing args greedily. Capture to a variable first, then pipe.
-
+**Pipe gotcha:** `who` consumes trailing args greedily. Capture first, then pipe:
 ```bash
 OUTPUT=$(gaal who wrote CLAUDE.md --since 7d)
 echo "$OUTPUT" | jq '.'
 ```
 
-**jq assertion pattern:**
-
+**Assertion gate:**
 ```bash
-gaal ls --limit 1 | jq -e '.sessions | length == 1 and all(.[]; .id and .engine)' > /dev/null
+gaal ls --limit 1 | jq -e '.sessions | length == 1' > /dev/null
 ```
 
 **Composable pipeline:**
-
 ```bash
 gaal ls --since today | jq -r '.sessions[].id' | xargs -I{} gaal inspect {} --files write
 ```
 
-**Transcript behavior:** `gaal transcript <id>` returns path metadata by default. Use `--stdout` only when you explicitly want markdown content in the calling context.
+**Transcript:** `gaal transcript <id>` returns path metadata by default. Use `--stdout` only when you want markdown content in the calling context.
+
+## What Gaal Does Not Do
+
+- Real-time monitoring of active processes (killed — too fragile)
+- Stuck detection or loop detection (killed — heuristics lie)
+- Velocity or context-percentage estimates (killed — unreliable)
+- Cross-session prompt injection (use `session-ctl`)
+- Live JSONL tailing (not a daemon, not a watcher)
+
+These were deliberately removed, not deferred.
+
+## Hard Rules
+
+- **Read-only by default.** Most gaal commands are pure queries. Commands that mutate state: `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index import-eywa`, `tag`. Do not call mutation commands without explicit task need — they change the DB or dispatch LLM calls.
+- **`create-handoff` costs money.** It dispatches to an external LLM via agent-mux. Always `--dry-run` first for batch operations. One careless loop can burn real dollars.
+- **When developing gaal itself:** always `cargo build --release`. Debug builds don't update the installed binary (symlinked to `target/release/gaal`). Read gaal's own CLAUDE.md before writing code — it has Rust conventions and test contracts.
+- **Evidence first.** Grep real JSONL before reasoning about schemas. Don't guess field names — Claude Code and Codex emit different event shapes. Confident guesses about JSONL structure are the #1 source of gaal bugs.
+- **Trust gaal's JSON output, not raw JSONL parsing.** Gaal normalizes two incompatible formats into one clean schema. If you're tempted to read a session JSONL directly, you're using the wrong command.
 
 ## Anti-Patterns
 
-| Do NOT | Do instead |
-|--------|------------|
-| Pipe `gaal who` directly with `|` | Capture to a variable first, then pipe |
-| Assume `gaal ls` has `--status active` or a separate `active` command | Use `gaal ls --all` plus `gaal inspect <id>` |
-| Read entire session JSONL manually | Use `gaal inspect <id> --trace`, `gaal inspect <id> --source`, or `gaal transcript <id>` |
-| Call `gaal inspect` in a loop for multiple IDs | Use `gaal inspect --ids a1b2,c3d4` |
-| Assume `gaal recall` works without handoffs | Check `gaal index status` first |
-| Run `gaal create-handoff` without agent-mux installed | Verify agent-mux availability first |
+| Do NOT | Do Instead | Why |
+|--------|------------|-----|
+| Pipe `gaal who` directly with `\|` | Capture to variable first | `who` consumes trailing args greedily — the pipe target becomes an argument |
+| Assume `gaal ls` has `--status active` | Use `gaal ls --all` + `gaal inspect <id>` | Active monitoring was killed — heuristics lie. Taxonomy is deterministic, status was not |
+| Read raw session JSONL manually | Use `gaal inspect --trace` or `gaal transcript` | Gaal normalizes dual formats; raw parsing will silently break on the other engine's schema |
+| Call `gaal inspect` in a loop | Use `gaal inspect --ids a1b2,c3d4` | Batch mode exists — saves N-1 DB opens and N-1 process spawns |
+| Assume `gaal recall` works without handoffs | Check `gaal index status` first | Recall queries the handoff index, not raw sessions. No handoffs = no recall results |
+| Run `gaal create-handoff` without checking agent-mux | Verify `agent-mux` is available | Handoff generation dispatches to an external LLM — if agent-mux is down, the command hangs |
+| Use `cargo build` (debug) when developing gaal | Always `cargo build --release` | Installed binary is symlinked to release target. Debug build compiles but changes nothing |
 
-## Security / Approval
+## Reference
 
-- Read-only by default. `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index import-eywa`, and `tag` mutate state.
-- `create-handoff` dispatches to LLM via agent-mux or openrouter. Costs money. Use `--dry-run` for batch runs.
-- `index backfill` is safe. It reads JSONL and writes to `~/.gaal/`.
-- `index import-eywa` is safe. It copies legacy data into gaal's own directory.
+Full command flags, output schemas, format comparison tables, and operational details:
 
-## Bundled Resources
+| Need | Where | Read when |
+|------|-------|-----------|
+| Agent consumption guide | [docs/agent-guide.md](/Users/otonashi/thinking/building/gaal/docs/agent-guide.md) | First time using gaal in a pipeline, or hitting unexpected output shapes |
+| Command reference by group | [docs/commands/](/Users/otonashi/thinking/building/gaal/docs/commands/) | Need exact flags, output schemas, or edge-case behavior for a specific command |
+| Output formats and exit codes | [docs/formats.md](/Users/otonashi/thinking/building/gaal/docs/formats.md) | Choosing between recall formats (brief/summary/handoff/full/eywa) or handling non-zero exits |
+| Architecture deep-dive | [docs/architecture.md](/Users/otonashi/thinking/building/gaal/docs/architecture.md) | Building on gaal's internals, extending the parser, or understanding the two-source model |
+| Eywa migration (legacy) | [docs/migration.md](/Users/otonashi/thinking/building/gaal/docs/migration.md) | One-time: migrating from eywa to gaal. Not needed for normal operation |
+| Build and install | [docs/getting-started.md](/Users/otonashi/thinking/building/gaal/docs/getting-started.md) | First time setting up gaal, or troubleshooting build/install issues |
 
-| Path | What | When to load |
-|------|------|-------------|
-| [`DOCS.md`](/Users/otonashi/thinking/building/gaal/DOCS.md) | Canonical user doc with current commands, flags, and examples | Need exact flag behavior or output shapes |
-| `references/exit-codes.md` | Exit code table with agent response guidance | Handling errors in scripts or pipelines |
-| `references/troubleshooting.md` | Known bugs and workarounds | Something unexpected happens |
+## Paths
 
-## Build
-
-```bash
-cargo build --release
-```
-
-The installed binary is expected to be `target/release/gaal`. Always verify changes against the release build before treating them as shipped.
+| What | Path |
+|------|------|
+| Binary | `gaal` (symlink to `target/release/gaal`) |
+| Data root | `~/.gaal/` (override with `GAAL_HOME` env var) |
+| SQLite index | `$GAAL_HOME/index.db` |
+| Tantivy FTS | `$GAAL_HOME/tantivy/` |
+| Config | `$GAAL_HOME/config.toml` |
+| Source repo | `/Users/otonashi/thinking/building/gaal/` |
