@@ -50,9 +50,12 @@ pub struct LsArgs {
     /// Show all sessions including noise (0 tool calls and <30s duration).
     #[arg(long, action = ArgAction::SetTrue)]
     pub all: bool,
-    /// Include subagent sessions (hidden by default).
-    #[arg(long, action = ArgAction::SetTrue)]
+    /// Include subagent sessions. Deprecated; sessions are included by default.
+    #[arg(long, action = ArgAction::SetTrue, hide = true)]
     pub include_subagents: bool,
+    /// Hide subagent sessions and show only standalone/coordinator sessions.
+    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "include_subagents")]
+    pub skip_subagents: bool,
 }
 
 /// Supported `gaal ls --engine` values.
@@ -315,7 +318,7 @@ fn build_filter(args: &LsArgs) -> Result<ListFilter, GaalError> {
         tag,
         sort_by: args.sort.map(|sort| sort.as_str().to_string()),
         limit,
-        include_subagents: args.include_subagents,
+        include_subagents: args.include_subagents || !args.skip_subagents,
     })
 }
 
@@ -877,6 +880,48 @@ mod tests {
 
         let headline = resolve_headline(&conn, &child).expect("resolve headline");
         assert_eq!(headline.as_deref(), Some("Investigate API failures"));
+    }
+
+    #[test]
+    fn build_filter_includes_subagents_by_default() {
+        let args = LsArgs {
+            engine: None,
+            since: None,
+            before: None,
+            cwd: None,
+            tag: Vec::new(),
+            sort: None,
+            limit: 10,
+            aggregate: false,
+            human_readable: false,
+            all: false,
+            include_subagents: false,
+            skip_subagents: false,
+        };
+
+        let filter = build_filter(&args).expect("build filter");
+        assert!(filter.include_subagents);
+    }
+
+    #[test]
+    fn build_filter_excludes_subagents_when_requested() {
+        let args = LsArgs {
+            engine: None,
+            since: None,
+            before: None,
+            cwd: None,
+            tag: Vec::new(),
+            sort: None,
+            limit: 10,
+            aggregate: false,
+            human_readable: false,
+            all: false,
+            include_subagents: false,
+            skip_subagents: true,
+        };
+
+        let filter = build_filter(&args).expect("build filter");
+        assert!(!filter.include_subagents);
     }
 
     #[test]

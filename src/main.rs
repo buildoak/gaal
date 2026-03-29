@@ -46,9 +46,12 @@ enum Commands {
         /// Show all sessions including noise (0 tool calls and <30s duration).
         #[arg(long)]
         all: bool,
-        /// Include subagent sessions (hidden by default).
-        #[arg(long)]
+        /// Include subagent sessions. Deprecated; sessions are included by default.
+        #[arg(long, hide = true)]
         include_subagents: bool,
+        /// Hide subagent sessions and show only standalone/coordinator sessions.
+        #[arg(long, conflicts_with = "include_subagents")]
+        skip_subagents: bool,
     },
 
     /// Session details with optional focused views (formerly show).
@@ -79,6 +82,9 @@ enum Commands {
         /// Raw JSONL source path.
         #[arg(long)]
         source: bool,
+        /// Include empty/low-signal subagents in coordinator views.
+        #[arg(long)]
+        include_empty: bool,
         /// Batch IDs in comma-delimited form.
         #[arg(long, value_delimiter = ',')]
         ids: Vec<String>,
@@ -366,6 +372,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             aggregate,
             all,
             include_subagents,
+            skip_subagents,
         } => {
             let args = gaal::commands::ls::LsArgs {
                 engine: engine.map(convert_ls_engine),
@@ -379,6 +386,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 human_readable: human,
                 all,
                 include_subagents,
+                skip_subagents,
             };
             gaal::commands::ls::run(args)
         }
@@ -392,6 +400,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             tokens,
             trace,
             source,
+            include_empty,
             ids,
             tag,
         } => {
@@ -405,6 +414,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 tokens,
                 trace,
                 source,
+                include_empty,
                 ids: csv_or_none(ids),
                 tag: single_or_none("--tag", tag)?,
                 human,

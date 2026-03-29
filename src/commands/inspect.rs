@@ -68,6 +68,10 @@ pub struct InspectArgs {
     #[arg(long)]
     pub source: bool,
 
+    /// Include empty/low-signal subagents in coordinator views.
+    #[arg(long)]
+    pub include_empty: bool,
+
     /// Batch mode session IDs (comma-separated prefixes).
     #[arg(long, conflicts_with = "tag", conflicts_with = "id")]
     pub ids: Option<String>,
@@ -291,6 +295,7 @@ fn build_inspect_data(
     let subagents = if row.session_type == "coordinator" {
         get_child_sessions(conn, &row.id)?
             .into_iter()
+            .filter(|child| args.include_empty || subagent_has_meaningful_content(child))
             .map(|child| {
                 let child_facts = get_facts(conn, &child.id, None)?;
                 Ok(SubagentSummary {
@@ -856,6 +861,17 @@ fn first_user_prompt(facts: &[Fact]) -> Option<String> {
     })
 }
 
+fn subagent_has_meaningful_content(row: &SessionRow) -> bool {
+    if row.total_turns <= 0 {
+        return false;
+    }
+
+    let total_tokens = row
+        .total_input_tokens
+        .saturating_add(row.total_output_tokens);
+    total_tokens > 0 || row.total_tools > 0
+}
+
 fn parse_ts(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
@@ -1191,5 +1207,45 @@ mod tests {
         let errors = collect_errors(&facts);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].exit_code, 5);
+    }
+
+    #[test]
+    fn subagent_meaningful_content_requires_turns_and_activity() {
+        let empty = SessionRow {
+            id: "child".to_string(),
+            engine: "claude".to_string(),
+            model: None,
+            cwd: None,
+            started_at: "2026-03-07T10:00:00Z".to_string(),
+            ended_at: None,
+            exit_signal: None,
+            last_event_at: None,
+            parent_id: Some("parent".to_string()),
+            session_type: "subagent".to_string(),
+            jsonl_path: "/tmp/child.jsonl".to_string(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+            total_tools: 0,
+            total_turns: 1,
+            peak_context: 0,
+            last_indexed_offset: 0,
+        };
+
+        assert!(!subagent_has_meaningful_content(&empty));
+
+        let mut with_tokens = empty.clone();
+        with_tokens.total_output_tokens = 12;
+        assert!(subagent_has_meaningful_content(&with_tokens));
+
+        let mut with_tools = empty.clone();
+        with_tools.total_tools = 1;
+        assert!(subagent_has_meaningful_content(&with_tools));
+
+        let mut zero_turns = with_tools.clone();
+        zero_turns.total_turns = 0;
+        assert!(!subagent_has_meaningful_content(&zero_turns));
     }
 }
