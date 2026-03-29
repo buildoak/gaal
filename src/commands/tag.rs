@@ -1,6 +1,7 @@
 use rusqlite::named_params;
 use serde::Serialize;
 
+use crate::commands::inspect::find_latest_session_id;
 use crate::db::open_db;
 use crate::db::queries::{add_tag, get_session, remove_tag};
 use crate::error::GaalError;
@@ -80,6 +81,10 @@ fn resolve_session_id(
     conn: &rusqlite::Connection,
     id_or_prefix: &str,
 ) -> Result<String, GaalError> {
+    if id_or_prefix == "latest" {
+        return find_latest_session_id(conn);
+    }
+
     if let Some(session) = get_session(conn, id_or_prefix)? {
         return Ok(session.id);
     }

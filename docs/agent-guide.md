@@ -145,6 +145,38 @@ Avoid these patterns. They usually create incorrect assumptions or unnecessary w
 | Assume `gaal recall` works without handoffs | Check gaal index status first |
 | Run `gaal create-handoff` without `agent-mux` | Verify `agent-mux` availability first |
 
+## Sandbox Usage
+
+By default `gaal` stores its database, Tantivy index, and config under `~/.gaal/`. In sandboxed environments (Codex workers, CI containers) that path is often read-only or remapped. Set `GAAL_HOME` to relocate the data directory:
+
+```bash
+# Point gaal at a writable location
+export GAAL_HOME=/tmp/gaal-workspace
+gaal ls
+
+# One-liner for a single command
+GAAL_HOME=/tmp/gaal-workspace gaal inspect latest -H
+```
+
+The resolution order is:
+1. `GAAL_HOME` environment variable (if set and non-empty)
+2. `~/.gaal/` (default)
+
+When dispatching workers that need gaal access from a sandboxed harness, export `GAAL_HOME` before the dispatch so child processes inherit it.
+
+## Comparing Sessions
+
+```bash
+# Compare two sessions side by side
+gaal inspect --ids a1b2,c3d4 --tokens -H
+
+# Compare all sessions from a time range
+gaal ls --since 3d --aggregate -H
+
+# Get token totals for a specific project
+gaal ls --cwd /path/to/project --aggregate -H
+```
+
 ## Security And Approval Notes
 
 `gaal` is read-only by default, but not every command is harmless.

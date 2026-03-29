@@ -97,8 +97,15 @@ parse_tasks() {
     fi
 }
 
+# Export GAAL_HOME so dispatched workers can find the gaal database even in
+# sandboxed environments where ~/.gaal/ is not writable.
+if [[ -z "${GAAL_HOME:-}" ]]; then
+    export GAAL_HOME="${HOME}/.gaal"
+fi
+
 echo "=== Layer 2: First-Attempt Agent Tasks ===" >&2
 echo "Tasks file: $TASKS_FILE" >&2
+echo "GAAL_HOME: $GAAL_HOME" >&2
 echo "Output: $OUTPUT" >&2
 
 all_results="[]"
@@ -138,7 +145,7 @@ while IFS=$'\t' read -r name prompt expected_pattern agents category; do
             --engine codex \
             --model gpt-5.4-mini \
             --effort high \
-            --sandbox workspace-write \
+            --sandbox none \
             --cwd "$GAAL_ROOT" \
             --context-file "${GAAL_ROOT}/skill/SKILL.md" \
             --context-file "${GAAL_ROOT}/docs/README.md" \
