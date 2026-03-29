@@ -1,124 +1,207 @@
 {
   "convergence": {
-    "high_convergence_tasks": [
-      "token-cost-inspection",
-      "transcript-retrieval",
-      "self-identification",
-      "recall-context",
-      "subagent-inspection"
-    ],
+    "high_convergence_tasks": [],
     "low_convergence_tasks": [
-      "handoff-creation",
       "content-search",
-      "list-recent-coordinators",
+      "error-recovery-flow",
       "find-file-author",
-      "tag-and-filter"
+      "handoff-creation",
+      "list-recent-coordinators",
+      "multi-session-compare",
+      "recall-context",
+      "self-identification",
+      "subagent-inspection",
+      "tag-and-filter",
+      "token-cost-inspection",
+      "transcript-retrieval"
     ],
     "details": [
       {
-        "task": "token-cost-inspection",
-        "convergence_score": 1.0,
-        "dominant_approach": "Run `gaal inspect latest --tokens` directly and report the returned token fields.",
+        "task": "content-search",
+        "convergence_score": 0.33,
+        "dominant_approach": "search via mirrored writable home",
         "variants": [
-          "All three agents used `gaal inspect latest --tokens`; only the resolved session differed because they ran at different times."
-        ]
-      },
-      {
-        "task": "transcript-retrieval",
-        "convergence_score": 1.0,
-        "dominant_approach": "Use `gaal transcript latest --stdout` to render the transcript body, not just metadata.",
-        "variants": [
-          "One agent also tried `--force --stdout` and hit a write-permission failure in `~/.gaal`.",
-          "One agent resolved `latest` via `gaal ls` first and wrote stdout to an artifact file."
-        ]
-      },
-      {
-        "task": "self-identification",
-        "convergence_score": 1.0,
-        "dominant_approach": "Follow the documented salt flow: `gaal salt` then `gaal find-salt <token>`.",
-        "variants": [
-          "One agent persisted the salt in an artifact file to make the two-step flow explicit."
-        ]
-      },
-      {
-        "task": "recall-context",
-        "convergence_score": 1.0,
-        "dominant_approach": "Use `gaal recall \"gaussian moat\"` to pick the best prior session, then inspect that session for resume details.",
-        "variants": [
-          "All three converged on session `f1eed35c` as the best resume point.",
-          "Two agents also tried `gaal search` for corroboration and hit lockfile-permission failures."
-        ]
-      },
-      {
-        "task": "subagent-inspection",
-        "convergence_score": 1.0,
-        "dominant_approach": "Find a recent coordinator with `gaal ls --skip-subagents`, then inspect that coordinator for subagent detail.",
-        "variants": [
-          "All three selected coordinator `781575ac`."
+          {
+            "approach": "search via mirrored writable home",
+            "count": 1
+          },
+          {
+            "approach": "search via redirected HOME",
+            "count": 1
+          },
+          {
+            "approach": "search via copied writable home",
+            "count": 1
+          }
         ]
       },
       {
         "task": "multi-session-compare",
-        "convergence_score": 0.9,
-        "dominant_approach": "List the last five sessions with `gaal ls`, then compare token totals (`input + output`).",
+        "convergence_score": 0.33,
+        "dominant_approach": "manual token summary after ls",
         "variants": [
-          "Two agents explicitly sorted by end time before comparing.",
-          "One agent used the default last-five ordering from `gaal ls --limit 5`."
+          {
+            "approach": "manual token summary after ls",
+            "count": 1
+          },
+          {
+            "approach": "ls + inspect --ids token comparison",
+            "count": 1
+          },
+          {
+            "approach": "ls-only comparison with jq totals",
+            "count": 1
+          }
         ]
       },
       {
         "task": "error-recovery-flow",
         "convergence_score": 0.67,
-        "dominant_approach": "Recover from `inspect` not-found by running `gaal ls` to get valid IDs, then rerun `gaal inspect <id>` or `gaal inspect latest`.",
+        "dominant_approach": "docs/help -> ls/latest recovery guidance",
         "variants": [
-          "Two agents gave the same recovery path.",
-          "One dispatch froze before running any `gaal` command."
+          {
+            "approach": "docs/help -> ls/latest recovery guidance",
+            "count": 2
+          },
+          {
+            "approach": "inspect error -> ls-based recovery",
+            "count": 1
+          }
         ]
       },
       {
         "task": "find-file-author",
         "convergence_score": 0.67,
-        "dominant_approach": "Use `gaal who changed|wrote <path> --full` and then post-filter exact path matches in JSON.",
+        "dominant_approach": "who + inspect confirmation",
         "variants": [
-          "Two agents independently used `who` plus `jq` to isolate exact subject matches.",
-          "One dispatch froze."
+          {
+            "approach": "dual who query",
+            "count": 1
+          },
+          {
+            "approach": "who + inspect confirmation",
+            "count": 2
+          }
         ]
       },
       {
-        "task": "content-search",
+        "task": "handoff-creation",
         "convergence_score": 0.67,
-        "dominant_approach": "Use `gaal search \"database migration\" --since 30d --limit 5`.",
+        "dominant_approach": "create-handoff fallback with provider/jsonl retry",
         "variants": [
-          "Two agents hit a lockfile-permission error first and reran with a writable copy of `~/.gaal` under `HOME`.",
-          "One agent succeeded after the same search but returned self-generated current-session hits in the top 5."
+          {
+            "approach": "create-handoff then manual fallback handoff",
+            "count": 1
+          },
+          {
+            "approach": "create-handoff fallback with provider/jsonl retry",
+            "count": 2
+          }
         ]
       },
       {
         "task": "list-recent-coordinators",
         "convergence_score": 0.67,
-        "dominant_approach": "Start with `gaal ls --since 3d --sort tokens`, then manually isolate coordinator sessions.",
+        "dominant_approach": "direct ls sorted by tokens",
         "variants": [
-          "Two agents added `--all` and then filtered `.session_type == \"coordinator\"` in `jq`.",
-          "One agent treated `--skip-subagents` as sufficient and produced a mixed list dominated by standalones."
+          {
+            "approach": "direct ls sorted by tokens",
+            "count": 2
+          },
+          {
+            "approach": "ls + external token sorting",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "task": "recall-context",
+        "convergence_score": 0.67,
+        "dominant_approach": "recall + drill-down validation",
+        "variants": [
+          {
+            "approach": "recall + drill-down validation",
+            "count": 2
+          },
+          {
+            "approach": "recall-only selection",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "task": "self-identification",
+        "convergence_score": 0.67,
+        "dominant_approach": "salt failed -> inspect latest --source",
+        "variants": [
+          {
+            "approach": "salt failed -> use agent-mux events.jsonl",
+            "count": 1
+          },
+          {
+            "approach": "salt failed -> inspect latest --source",
+            "count": 2
+          }
+        ]
+      },
+      {
+        "task": "subagent-inspection",
+        "convergence_score": 0.67,
+        "dominant_approach": "single coordinator inspect",
+        "variants": [
+          {
+            "approach": "single coordinator inspect",
+            "count": 2
+          },
+          {
+            "approach": "batch inspect several coordinators",
+            "count": 1
+          }
         ]
       },
       {
         "task": "tag-and-filter",
         "convergence_score": 0.67,
-        "dominant_approach": "Find the latest session, tag it with `gaal tag <id> experiment`, then list tagged sessions.",
+        "dominant_approach": "tag latest fails -> mirror db and tag by explicit id",
         "variants": [
-          "All three had to mirror `~/.gaal` into a writable location before mutating tags.",
-          "Two agents verified via `gaal inspect --tag experiment` after `gaal ls --tag experiment` returned no results."
+          {
+            "approach": "tag latest fails -> mirror db and tag by explicit id",
+            "count": 2
+          },
+          {
+            "approach": "mirror db and tag by explicit id",
+            "count": 1
+          }
         ]
       },
       {
-        "task": "handoff-creation",
-        "convergence_score": 0.33,
-        "dominant_approach": "Try `gaal create-handoff` first, then fall back to `inspect` and `transcript` when generation fails.",
+        "task": "token-cost-inspection",
+        "convergence_score": 0.67,
+        "dominant_approach": "inspect latest --tokens",
         "variants": [
-          "All three tried `create-handoff latest` or `create-handoff <id>`.",
-          "Two traces hit `create-handoff latest` -> `not found: latest` before switching to a concrete ID.",
-          "All three then hit provider-stream disconnects and manually assembled a fallback handoff artifact."
+          {
+            "approach": "inspect latest --tokens",
+            "count": 2
+          },
+          {
+            "approach": "inspect latest --tokens after help check",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "task": "transcript-retrieval",
+        "convergence_score": 0.67,
+        "dominant_approach": "transcript --stdout redirected to file",
+        "variants": [
+          {
+            "approach": "transcript --stdout redirected to file",
+            "count": 2
+          },
+          {
+            "approach": "transcript --stdout piped to file",
+            "count": 1
+          }
         ]
       }
     ]
@@ -127,106 +210,100 @@
     "ranked_by_variance": [
       {
         "task": "handoff-creation",
+        "variance_score": 0.95,
+        "strategies_seen": [
+          "create-handoff then manual fallback handoff",
+          "create-handoff fallback with provider/jsonl retry"
+        ]
+      },
+      {
+        "task": "multi-session-compare",
+        "variance_score": 0.92,
+        "strategies_seen": [
+          "manual token summary after ls",
+          "ls + inspect --ids token comparison",
+          "ls-only comparison with jq totals"
+        ]
+      },
+      {
+        "task": "self-identification",
         "variance_score": 0.9,
         "strategies_seen": [
-          "Direct `create-handoff latest`",
-          "Resolve ID with `inspect latest` or `ls --limit 1` first",
-          "Manual fallback handoff built from `inspect` plus `transcript` after provider failure"
+          "salt failed -> use agent-mux events.jsonl",
+          "salt failed -> inspect latest --source"
         ]
       },
       {
         "task": "tag-and-filter",
-        "variance_score": 0.8,
+        "variance_score": 0.88,
         "strategies_seen": [
-          "Tag in live HOME first, then copy on failure",
-          "Copy SQLite DB to a writable mirror before tagging",
-          "Verify via `inspect --tag` because `ls --tag` returned no results"
+          "tag latest fails -> mirror db and tag by explicit id",
+          "mirror db and tag by explicit id"
+        ]
+      },
+      {
+        "task": "subagent-inspection",
+        "variance_score": 0.82,
+        "strategies_seen": [
+          "single coordinator inspect",
+          "batch inspect several coordinators"
         ]
       },
       {
         "task": "content-search",
         "variance_score": 0.75,
         "strategies_seen": [
-          "Straight `gaal search`",
-          "HOME redirection to a writable mirror after lockfile failure",
-          "Additional source inspection because search results looked self-contaminated"
-        ]
-      },
-      {
-        "task": "list-recent-coordinators",
-        "variance_score": 0.7,
-        "strategies_seen": [
-          "`ls --since 3d --skip-subagents --sort tokens` only",
-          "`ls --all` plus manual `.session_type == \"coordinator\"` filtering",
-          "Different interpretations of whether `--skip-subagents` means 'coordinators only'"
-        ]
-      },
-      {
-        "task": "find-file-author",
-        "variance_score": 0.65,
-        "strategies_seen": [
-          "`who changed` with exact-path `jq` filtering",
-          "`who wrote` and `who changed` cross-check",
-          "Dispatch freeze"
-        ]
-      },
-      {
-        "task": "error-recovery-flow",
-        "variance_score": 0.55,
-        "strategies_seen": [
-          "`gaal ls` then `gaal inspect <id>`",
-          "`gaal inspect latest` as a shortcut",
-          "Dispatch freeze"
-        ]
-      },
-      {
-        "task": "multi-session-compare",
-        "variance_score": 0.35,
-        "strategies_seen": [
-          "`gaal ls --limit 5` and sum tokens",
-          "`gaal ls --limit 5 --sort ended` before summing",
-          "Extra `inspect` call on the highest-token session"
-        ]
-      },
-      {
-        "task": "subagent-inspection",
-        "variance_score": 0.2,
-        "strategies_seen": [
-          "Find coordinator with `ls --skip-subagents`",
-          "Inspect coordinator for subagent summary"
-        ]
-      },
-      {
-        "task": "transcript-retrieval",
-        "variance_score": 0.15,
-        "strategies_seen": [
-          "`transcript latest --stdout` directly",
-          "Resolve `latest` through `ls` first",
-          "Try `--force` and then fall back"
+          "search via mirrored writable home",
+          "search via redirected HOME",
+          "search via copied writable home"
         ]
       },
       {
         "task": "recall-context",
-        "variance_score": 0.15,
+        "variance_score": 0.3,
         "strategies_seen": [
-          "`recall` only",
-          "`recall` plus `inspect`",
-          "`recall` plus a corroborating but failing `search`"
+          "recall + drill-down validation",
+          "recall-only selection"
         ]
       },
       {
-        "task": "self-identification",
-        "variance_score": 0.05,
+        "task": "error-recovery-flow",
+        "variance_score": 0.25,
         "strategies_seen": [
-          "`salt` -> `find-salt`",
-          "Optional artifact-file step to preserve the salt between tool calls"
+          "docs/help -> ls/latest recovery guidance",
+          "inspect error -> ls-based recovery"
+        ]
+      },
+      {
+        "task": "find-file-author",
+        "variance_score": 0.2,
+        "strategies_seen": [
+          "dual who query",
+          "who + inspect confirmation"
         ]
       },
       {
         "task": "token-cost-inspection",
-        "variance_score": 0.0,
+        "variance_score": 0.2,
         "strategies_seen": [
-          "`inspect latest --tokens`"
+          "inspect latest --tokens",
+          "inspect latest --tokens after help check"
+        ]
+      },
+      {
+        "task": "transcript-retrieval",
+        "variance_score": 0.2,
+        "strategies_seen": [
+          "transcript --stdout redirected to file",
+          "transcript --stdout piped to file"
+        ]
+      },
+      {
+        "task": "list-recent-coordinators",
+        "variance_score": 0.15,
+        "strategies_seen": [
+          "direct ls sorted by tokens",
+          "ls + external token sorting"
         ]
       }
     ]
@@ -236,239 +313,220 @@
       {
         "task": "content-search",
         "agent": "content-search-agent1",
-        "error_hit": "Lockfile permission error on `gaal search` in the default HOME.",
+        "error_hit": "Lockfile/permission issue on default ~/.gaal; mirrored DB/Tantivy into /tmp and reran search",
         "recovered": true,
         "attempts": 2
       },
       {
         "task": "content-search",
         "agent": "content-search-agent2",
-        "error_hit": "Lockfile permission error on the first `gaal search` attempt.",
+        "error_hit": "Initial lockfile error on default home; reran with HOME=tmp/home",
         "recovered": true,
         "attempts": 2
       },
       {
         "task": "content-search",
         "agent": "content-search-agent3",
-        "error_hit": "Lockfile permission error on `gaal search`; reran in a temporary writable HOME.",
+        "error_hit": "Lockfile permission issue in default ~/.gaal; copied gaal home under artifact dir",
         "recovered": true,
         "attempts": 2
-      },
-      {
-        "task": "recall-context",
-        "agent": "recall-context-agent1",
-        "error_hit": "`gaal search` failed with `Failed to acquire Lockfile ... Operation not permitted`.",
-        "recovered": true,
-        "attempts": 2
-      },
-      {
-        "task": "recall-context",
-        "agent": "recall-context-agent2",
-        "error_hit": "`gaal search` failed with the same lockfile-permission error.",
-        "recovered": true,
-        "attempts": 2
-      },
-      {
-        "task": "recall-context",
-        "agent": "recall-context-agent3",
-        "error_hit": "`gaal search` repeatedly failed with a lockfile-permission error.",
-        "recovered": true,
-        "attempts": 2
-      },
-      {
-        "task": "transcript-retrieval",
-        "agent": "transcript-retrieval-agent1",
-        "error_hit": "`gaal transcript latest --force --stdout` tried to write under `~/.gaal` and hit `Operation not permitted`.",
-        "recovered": true,
-        "attempts": 1
       },
       {
         "task": "handoff-creation",
         "agent": "handoff-creation-agent1",
-        "error_hit": "`gaal create-handoff` failed twice with provider stream-disconnect errors.",
+        "error_hit": "create-handoff latest failed twice with backend stream disconnect",
         "recovered": true,
         "attempts": 3
       },
       {
         "task": "handoff-creation",
         "agent": "handoff-creation-agent2",
-        "error_hit": "`gaal create-handoff latest` returned `not found: latest`, then provider calls disconnected.",
+        "error_hit": "create-handoff latest failed twice with backend stream disconnect",
         "recovered": true,
         "attempts": 4
       },
       {
         "task": "handoff-creation",
         "agent": "handoff-creation-agent3",
-        "error_hit": "`gaal create-handoff latest` returned `not found: latest`, then provider calls disconnected.",
+        "error_hit": "Backend stream disconnect, then readonly DB on jsonl/openrouter fallback",
         "recovered": true,
         "attempts": 4
       },
       {
-        "task": "find-file-author",
-        "agent": "find-file-author-agent2",
-        "error_hit": "Dispatch froze with `No harness events for 241s. Likely frozen. Process terminated.`",
-        "recovered": false,
-        "attempts": 0
+        "task": "self-identification",
+        "agent": "self-identification-agent1",
+        "error_hit": "Documented salt -> find-salt flow returned no matching JSONL",
+        "recovered": true,
+        "attempts": 3
+      },
+      {
+        "task": "self-identification",
+        "agent": "self-identification-agent2",
+        "error_hit": "salt/find-salt did not locate current session; switched to inspect latest --source",
+        "recovered": true,
+        "attempts": 5
+      },
+      {
+        "task": "self-identification",
+        "agent": "self-identification-agent3",
+        "error_hit": "salt/find-salt failed; create-handoff --dry-run then hit readonly DB",
+        "recovered": true,
+        "attempts": 6
       },
       {
         "task": "error-recovery-flow",
         "agent": "error-recovery-flow-agent3",
-        "error_hit": "Dispatch froze with `No harness events for 241s. Likely frozen. Process terminated.`",
-        "recovered": false,
-        "attempts": 0
+        "error_hit": "inspect xyz123 returned not-found JSON with example and hint",
+        "recovered": true,
+        "attempts": 2
+      },
+      {
+        "task": "tag-and-filter",
+        "agent": "tag-and-filter-agent1",
+        "error_hit": "tag latest experiment unsupported and live DB readonly",
+        "recovered": true,
+        "attempts": 4
+      },
+      {
+        "task": "tag-and-filter",
+        "agent": "tag-and-filter-agent2",
+        "error_hit": "tag latest experiment unsupported and live DB readonly",
+        "recovered": true,
+        "attempts": 3
+      },
+      {
+        "task": "recall-context",
+        "agent": "recall-context-agent2",
+        "error_hit": "search attempts failed with lockfile error",
+        "recovered": true,
+        "attempts": 2
       }
     ],
-    "recovery_rate": 0.83
+    "recovery_rate": 1.0
   },
   "implicit_api": {
     "phantom_commands": [
       {
-        "command": "gaal help <subcommand>",
-        "frequency": 5,
-        "likely_intent": "Request command-specific help in the common `git help <cmd>` style."
+        "command": "gaal find-salt <salt> for current live dispatch",
+        "frequency": 3,
+        "likely_intent": "Locate the current in-flight session automatically for self-handoff"
+      },
+      {
+        "command": "gaal tag latest <tag>",
+        "frequency": 2,
+        "likely_intent": "Uniform latest-selector support across session commands"
       }
     ],
-    "phantom_flags": [
-      {
-        "flag": "--help",
-        "on_command": "ls",
-        "frequency": 6
-      },
-      {
-        "flag": "--help",
-        "on_command": "search",
-        "frequency": 2
-      },
-      {
-        "flag": "--help",
-        "on_command": "recall",
-        "frequency": 2
-      },
-      {
-        "flag": "--help",
-        "on_command": "who",
-        "frequency": 1
-      },
-      {
-        "flag": "--help",
-        "on_command": "create-handoff",
-        "frequency": 1
-      },
-      {
-        "flag": "--help",
-        "on_command": "inspect",
-        "frequency": 1
-      }
-    ]
+    "phantom_flags": []
   },
   "cost_efficiency": {
     "per_task": [
       {
-        "task": "token-cost-inspection",
-        "avg_tokens": 383,
-        "avg_attempts": 1.0,
-        "success_rate": 1.0
-      },
-      {
-        "task": "error-recovery-flow",
-        "avg_tokens": 449,
-        "avg_attempts": 2.67,
-        "success_rate": 0.67
-      },
-      {
-        "task": "find-file-author",
-        "avg_tokens": 486,
-        "avg_attempts": 5.0,
-        "success_rate": 0.67
-      },
-      {
-        "task": "multi-session-compare",
-        "avg_tokens": 533,
-        "avg_attempts": 2.67,
-        "success_rate": 1.0
-      },
-      {
-        "task": "self-identification",
-        "avg_tokens": 540,
+        "task": "transcript-retrieval",
+        "avg_tokens": 729,
         "avg_attempts": 1.67,
         "success_rate": 1.0
       },
       {
-        "task": "subagent-inspection",
-        "avg_tokens": 679,
-        "avg_attempts": 7.67,
-        "success_rate": 1.0
-      },
-      {
-        "task": "recall-context",
-        "avg_tokens": 807,
-        "avg_attempts": 5.0,
-        "success_rate": 1.0
-      },
-      {
-        "task": "transcript-retrieval",
-        "avg_tokens": 964,
-        "avg_attempts": 1.33,
-        "success_rate": 1.0
-      },
-      {
-        "task": "handoff-creation",
-        "avg_tokens": 1021,
-        "avg_attempts": 6.67,
-        "success_rate": 1.0
-      },
-      {
-        "task": "tag-and-filter",
-        "avg_tokens": 1177,
-        "avg_attempts": 12.0,
+        "task": "list-recent-coordinators",
+        "avg_tokens": 605,
+        "avg_attempts": 3.67,
         "success_rate": 1.0
       },
       {
         "task": "content-search",
-        "avg_tokens": 1286,
-        "avg_attempts": 3.33,
+        "avg_tokens": 477,
+        "avg_attempts": 4.0,
         "success_rate": 1.0
       },
       {
-        "task": "list-recent-coordinators",
-        "avg_tokens": 1385,
-        "avg_attempts": 3.33,
+        "task": "subagent-inspection",
+        "avg_tokens": 431,
+        "avg_attempts": 3.0,
+        "success_rate": 1.0
+      },
+      {
+        "task": "handoff-creation",
+        "avg_tokens": 352,
+        "avg_attempts": 8.0,
+        "success_rate": 1.0
+      },
+      {
+        "task": "recall-context",
+        "avg_tokens": 327,
+        "avg_attempts": 4.67,
+        "success_rate": 1.0
+      },
+      {
+        "task": "self-identification",
+        "avg_tokens": 302,
+        "avg_attempts": 6.33,
+        "success_rate": 1.0
+      },
+      {
+        "task": "error-recovery-flow",
+        "avg_tokens": 286,
+        "avg_attempts": 10.0,
+        "success_rate": 1.0
+      },
+      {
+        "task": "multi-session-compare",
+        "avg_tokens": 264,
+        "avg_attempts": 2.33,
+        "success_rate": 0.67
+      },
+      {
+        "task": "token-cost-inspection",
+        "avg_tokens": 239,
+        "avg_attempts": 1.33,
+        "success_rate": 1.0
+      },
+      {
+        "task": "tag-and-filter",
+        "avg_tokens": 227,
+        "avg_attempts": 5.0,
+        "success_rate": 1.0
+      },
+      {
+        "task": "find-file-author",
+        "avg_tokens": 133,
+        "avg_attempts": 2.0,
         "success_rate": 1.0
       }
     ],
-    "total_tokens": 29132,
-    "total_cost_estimate_usd": 0.0583
+    "total_tokens": 13122,
+    "total_cost_estimate_usd": 0.13
   },
   "recommendations": [
     {
       "priority": 1,
-      "change": "Make read-only queries truly read-only: stop requiring a writable lockfile for `search`/`recall`-adjacent index reads, or auto-relocate runtime state when HOME is unwritable.",
-      "evidence": "All 3 `content-search` agents and 3 `recall-context` agents reported `Failed to acquire Lockfile ... Operation not permitted` and recovered only by copying `~/.gaal` into a writable HOME mirror.",
-      "expected_impact": "Removes the biggest first-run sandbox failure mode and should materially raise first-attempt success on search-heavy tasks."
+      "change": "Make gaal state relocatable with an explicit --home/GAAL_HOME override and degrade cleanly to read-only search/list modes.",
+      "evidence": "content-search agents 1/2/3 and tag-and-filter agents 1/2/3 all had to mirror ~/.gaal or override HOME because lockfiles/readonly DB blocked first attempts.",
+      "expected_impact": "Removes the most common environment workaround and should materially improve first-attempt success for search, tag, and write-adjacent flows."
     },
     {
       "priority": 2,
-      "change": "Fix `create-handoff` selector semantics and add a local fallback artifact when provider generation fails.",
-      "evidence": "In `handoff-creation`, 2 agents hit `gaal create-handoff latest` -> `not found: latest` despite docs teaching broad `latest` support, and all 3 then hit provider stream disconnects before manually synthesizing handoff files.",
-      "expected_impact": "Turns the highest-variance task into a one-command success path and removes an especially damaging docs/runtime contradiction."
+      "change": "Support latest/today selectors anywhere a session ID is accepted, especially gaal tag.",
+      "evidence": "tag-and-filter agents 1 and 2 explicitly tried gaal tag latest experiment before falling back to an explicit ID; the docs teach latest widely elsewhere, so agents generalized it.",
+      "expected_impact": "Cuts an avoidable recovery step and aligns the selector model across commands."
     },
     {
       "priority": 3,
-      "change": "Add an explicit `--session-type coordinator` filter or clarify that `--skip-subagents` does not mean coordinator-only.",
-      "evidence": "In `list-recent-coordinators`, one agent treated `--skip-subagents` as sufficient and returned 100 mixed sessions, while two others had to add manual `.session_type == \"coordinator\"` filtering to get the correct 20-session set.",
-      "expected_impact": "Cuts variance on fleet-view tasks and reduces the amount of `jq` post-processing agents need for basic filtering."
+      "change": "Rewrite the self-identification guidance around create-handoff --this or inspect latest --source; treat salt/find-salt as an advanced path unless the session is guaranteed to land in scanned roots.",
+      "evidence": "self-identification agents 1/2/3 all followed the documented salt flow first, and all three failed to locate the active session before switching to inspect latest --source or raw events.jsonl.",
+      "expected_impact": "Fixes the largest doc-vs-reality mismatch and should turn a multi-attempt task into a one-command path."
     },
     {
       "priority": 4,
-      "change": "Support `gaal <subcommand> --help` and `gaal help <subcommand>`, or document the supported help pattern much more aggressively.",
-      "evidence": "Agents attempted phantom help interfaces 18 times total: `gaal help <subcommand>` 5 times and `--help` on concrete subcommands 13 times (`ls` 6, `search` 2, `recall` 2, plus `who`, `create-handoff`, and `inspect`).",
-      "expected_impact": "Aligns gaal with a strong default CLI mental model and reduces exploratory dead-ends early in a session."
+      "change": "Add an offline/local fallback mode for create-handoff and make provider failures auto-suggest transcript-based recovery.",
+      "evidence": "handoff-creation agents 1/2/3 all hit backend stream disconnects; agent 3 then hit readonly DB on the jsonl/openrouter fallback, so none completed the documented happy path.",
+      "expected_impact": "Improves resilience of one of the highest-value commands and avoids total failure when the LLM transport is unavailable."
     },
     {
       "priority": 5,
-      "change": "Tighten path/tag query fidelity: add exact-path matching for `who`, fix `ls --tag`, and consider suppressing the current session from `search` by default.",
-      "evidence": "Two `find-file-author` agents had to pipe `who` results through `jq` to isolate an exact subject path. In `tag-and-filter`, 2 agents reported `ls --tag experiment` returning no results even after the tag was visible via `inspect --tag experiment`. In `content-search`, self-generated current-session command facts appeared in the top 5.",
-      "expected_impact": "Improves trust in query results and reduces manual post-filtering, especially on first contact when agents do not yet know gaal's matching quirks."
+      "change": "Clarify the canonical token-comparison workflow in docs: use ls to select IDs, then inspect --ids ... --tokens for exact comparison.",
+      "evidence": "multi-session-compare split three ways: one agent used inspect --ids and got a stable answer, one hand-assembled totals, and one used ls --all --sort ended and answered a different session.",
+      "expected_impact": "Reduces variance on analytical tasks and prevents agents from comparing different \u201clast 5\u201d cohorts."
     }
   ]
 }
