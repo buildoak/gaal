@@ -1,9 +1,9 @@
-# FEATURES.md — Future Features & Design Notes
+# BACKLOG.md — Future Features & Design Notes
 
 ## Incremental Parsing (SHA-256 prefix + byte offset resume)
 
 **Source:** tokscale v2.0.0 (`crates/tokscale-core/src/message_cache.rs` + `sessions/codex.rs`)
-**Priority:** P0 — would make `gaal index backfill` near-instant for append-only sessions
+**Priority:** P3 — would make `gaal index backfill` near-instant for append-only sessions
 
 ### Problem
 
@@ -134,7 +134,7 @@ The core tokscale pattern (`SourceFingerprint` + `sha256_prefix` check before tr
 
 ## Subagent Session Discovery
 
-**Priority:** P1 — coordinator-heavy workflows lose observability over the majority of actual work
+**Priority:** P0 — coordinator-heavy workflows lose observability over the majority of actual work
 
 ### Problem
 
@@ -208,7 +208,7 @@ The `SubagentProgress` event kind (populated from `type: "progress"` / `data.typ
 
 ## Transcript Subagent Rendering Quality
 
-**Priority:** P1 — tool name mismatch causes all Agent dispatches to render as bare `-> Agent` instead of rich subagent blocks
+**Priority:** P0 — tool name mismatch causes all Agent dispatches to render as bare `-> Agent` instead of rich subagent blocks
 
 ### Problem
 
@@ -293,7 +293,7 @@ These two changes restore full subagent rendering (description, model, prompt, r
 
 ## Subagent First-Class Indexing — Design Spec
 
-**Priority:** P1 — coordinator-heavy workflows have 7,014 subagent JSONL files (1.55 GB) that are completely invisible to search, who, inspect, and recall. The majority of actual work product lives in subagent conversations.
+**Priority:** P0 — coordinator-heavy workflows have 7,014 subagent JSONL files (1.55 GB) that are completely invisible to search, who, inspect, and recall. The majority of actual work product lives in subagent conversations.
 
 **Date:** 2026-03-28
 **Author:** Research phase, grounded in code + data examination
@@ -694,3 +694,58 @@ This queries `SELECT * FROM sessions WHERE parent_id = :parent_id` using the exi
 **Risk: Incremental parsing for subagents.** Subagent JSONLs are typically written once (agent runs, completes, file is finalized). Incremental parsing is less important than for long-running parent sessions. Full parse on each backfill run is acceptable for Phase 1.
 
 **Risk: 7,014 files in a single backfill.** First backfill will take ~30-60 seconds extra. Subsequent runs will skip unchanged files (size-based skip). Acceptable.
+
+---
+
+## Transcript Title Caveat Leak
+
+**Priority:** P1 — visible quality bug in transcript titles
+**Date added:** 2026-03-29
+
+### Problem
+
+Sessions whose first user message is a system-injected `<local-command-caveat>` block render as `# Session: Caveat: The messages belo...`. The XML-stripping fix (efa6648) strips the tag but the plain text inside survives as the title. Same bug class affects `<tg_message_voice>` injection — titles show raw XML fragments.
+
+### Root Cause
+
+In `src/render/session_md.rs`, `get_first_user_prompt()` truncates the raw text to 47 chars BEFORE `strip_xml_tags()` is called. After truncation, the tag is complete and gets stripped — but the content ("Caveat: The messages...") is plain prose that passes through.
+
+### Fix
+
+Move `strip_xml_tags()` call into `get_first_user_prompt()`, apply it to full text BEFORE truncation. Then skip turns whose stripped text starts with known injection patterns ("Caveat:", empty after stripping). This handles caveat, tg_message_voice, and any future injection wrappers.
+
+**Effort:** ~30 min. One function in `session_md.rs`, no schema changes.
+
+---
+
+## DOCS.md / Documentation Structure
+
+**Priority:** P1 — gaal lacks user-facing documentation outside README
+**Date added:** 2026-03-29
+
+### Problem
+
+Gaal has README.md (rewritten 2026-03-28 to match current command surface) and CLAUDE.md (operator guidance for AI workers). Missing: structured user-facing documentation covering workflows, examples, common patterns, troubleshooting. Currently knowledge is scattered across CLAUDE.md, BACKLOG.md, skill/SKILL.md, and skill/references/.
+
+### Decision needed
+
+- Single `DOCS.md` file vs `docs/` folder with multiple files?
+- What should it cover? (Getting started, command reference, workflow recipes, architecture overview?)
+- Should it consolidate content currently in skill/references/ (verb-reference.md, exit-codes.md)?
+
+---
+
+## SKILL.md Verification
+
+**Priority:** P1 — skill file may be stale after major hardening session
+**Date added:** 2026-03-29
+
+### Problem
+
+`skill/SKILL.md` was updated in the 2026-03-28 hardening session (commit b8d7685) but needs verification that it accurately reflects the current command surface, error handling, and workflow guidance after all the fixes that landed. May have stale references or missing coverage for new capabilities.
+
+### Action
+
+Audit skill/SKILL.md against current `gaal --help`, `gaal <cmd> --help` for all commands, and the actual binary behavior. Fix any gaps.
+
+**Effort:** ~1 hour audit + fixes.
