@@ -86,6 +86,9 @@ pub struct SearchResult {
     pub ts: String,
     pub score: f32,
     pub session_headline: String,
+    pub session_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,6 +146,9 @@ pub fn run(args: SearchArgs) -> Result<(), GaalError> {
     if results.is_empty() {
         return Err(GaalError::NoResults);
     }
+
+    // Enrich results with session_type and parent_id from DB
+    enrich_session_metadata(&conn, &mut results);
 
     if args.human {
         print_search_human(&results);
@@ -288,6 +294,8 @@ fn search_facts_with_context(
             ts: doc_text(&retrieved, fields.ts).unwrap_or_default(),
             score,
             session_headline: doc_text(&retrieved, fields.session_headline).unwrap_or_default(),
+            session_type: "standalone".to_string(),
+            parent_id: None,
         });
     }
 
@@ -352,6 +360,27 @@ fn print_search_human(results: &[SearchResult]) {
         })
         .collect();
     print_table(&headers, &rows);
+}
+
+/// Enrich search results with session_type and parent_id from the sessions table.
+fn enrich_session_metadata(conn: &Connection, results: &mut [SearchResult]) {
+    // Collect unique session IDs to batch-query
+    let session_ids: HashSet<String> = results.iter().map(|r| r.session_id.clone()).collect();
+    let mut metadata: std::collections::HashMap<String, (String, Option<String>)> =
+        std::collections::HashMap::new();
+
+    for sid in &session_ids {
+        if let Ok(Some(row)) = crate::db::queries::get_session(conn, sid) {
+            metadata.insert(sid.clone(), (row.session_type, row.parent_id));
+        }
+    }
+
+    for result in results.iter_mut() {
+        if let Some((session_type, parent_id)) = metadata.get(&result.session_id) {
+            result.session_type = session_type.clone();
+            result.parent_id = parent_id.clone();
+        }
+    }
 }
 
 fn parse_since_bound(value: &str) -> Result<DateTime<Utc>, GaalError> {

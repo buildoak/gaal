@@ -73,6 +73,8 @@ struct WhoRow {
     subject: Option<String>,
     detail: Option<String>,
     session_headline: Option<String>,
+    session_type: String,
+    parent_id: Option<String>,
 }
 
 impl From<WhoResult> for WhoRow {
@@ -90,6 +92,8 @@ impl From<WhoResult> for WhoRow {
             subject,
             detail: value.detail,
             session_headline: value.session_headline,
+            session_type: value.session_type,
+            parent_id: value.parent_id,
         }
     }
 }
@@ -103,6 +107,8 @@ struct WhoSummaryRow {
     fact_count: usize,
     subjects: Vec<String>,
     headline: Option<String>,
+    session_type: String,
+    parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -572,6 +578,8 @@ fn group_by_session(rows: &[WhoRow]) -> Vec<WhoSummaryRow> {
                 fact_count: 0,
                 subjects: Vec::new(),
                 headline: row.session_headline.clone(),
+                session_type: row.session_type.clone(),
+                parent_id: row.parent_id.clone(),
             });
         if is_new {
             order.push(row.session_id.clone());
@@ -643,8 +651,20 @@ fn print_human_full(rows: &[WhoRow]) {
     let table_rows: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
+            // Show parent→subagent attribution for subagent sessions
+            let session_display = if row.session_type == "subagent" {
+                let parent_short = row
+                    .parent_id
+                    .as_deref()
+                    .map(|id| id.chars().take(8).collect::<String>())
+                    .unwrap_or_else(|| "?".to_string());
+                let sub_short: String = row.session_id.chars().take(8).collect();
+                format!("{parent_short} \u{2192} {sub_short}")
+            } else {
+                row.session_id.chars().take(8).collect()
+            };
             vec![
-                row.session_id.chars().take(8).collect(),
+                session_display,
                 row.engine.clone(),
                 format_timestamp(&row.ts),
                 row.fact_type.clone(),
@@ -683,8 +703,20 @@ fn print_human_brief(rows: &[WhoSummaryRow]) {
             } else {
                 row.subjects.join(", ")
             };
+            // Show parent→subagent attribution for subagent sessions
+            let session_display = if row.session_type == "subagent" {
+                let parent_short = row
+                    .parent_id
+                    .as_deref()
+                    .map(|id| id.chars().take(8).collect::<String>())
+                    .unwrap_or_else(|| "?".to_string());
+                let sub_short: String = row.session_id.chars().take(8).collect();
+                format!("{parent_short} \u{2192} {sub_short}")
+            } else {
+                row.session_id.chars().take(8).collect()
+            };
             vec![
-                row.session_id.chars().take(8).collect(),
+                session_display,
                 row.engine.clone(),
                 format_timestamp(&row.latest_ts),
                 row.fact_count.to_string(),

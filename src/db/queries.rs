@@ -103,6 +103,8 @@ pub struct WhoResult {
     pub subject: Option<String>,
     pub detail: Option<String>,
     pub session_headline: Option<String>,
+    pub session_type: String,
+    pub parent_id: Option<String>,
 }
 
 /// Database index status snapshot.
@@ -659,7 +661,9 @@ pub fn query_who(conn: &Connection, filter: &WhoFilter) -> Result<Vec<WhoResult>
                 f.fact_type,
                 f.subject,
                 f.detail,
-                h.headline
+                h.headline,
+                COALESCE(s.session_type, 'standalone') AS session_type,
+                s.parent_id
             FROM facts f
             INNER JOIN sessions s ON s.id = f.session_id
             LEFT JOIN handoffs h ON h.session_id = f.session_id
@@ -729,6 +733,11 @@ pub fn query_who(conn: &Connection, filter: &WhoFilter) -> Result<Vec<WhoResult>
             subject: row.get("subject").map_err(db_err)?,
             detail: row.get("detail").map_err(db_err)?,
             session_headline: row.get("headline").map_err(db_err)?,
+            session_type: row
+                .get::<_, Option<String>>("session_type")
+                .map_err(db_err)?
+                .unwrap_or_else(|| "standalone".to_string()),
+            parent_id: row.get("parent_id").map_err(db_err)?,
         };
 
         if let Some(types) = &allowed_types {

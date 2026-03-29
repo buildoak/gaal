@@ -87,6 +87,9 @@ pub struct SessionSummary {
     pub peak_context: u64,
     pub tools_used: u64,
     pub headline: Option<String>,
+    pub session_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,17 +156,23 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
         return Err(GaalError::NoResults);
     }
 
-    // Apply noise filter: hide sessions with 0 tool calls and <30s duration
+    // Apply noise filter: hide sessions with 0 tool calls and <30s duration.
+    // We overfetch in build_filter (3x limit) then truncate here to the
+    // user-requested limit so the noise filter doesn't eat into results.
+    let requested_limit = args.limit.max(1) as usize;
     let total_unfiltered = count_sessions(&conn, &filter)? as usize;
     let (summaries, is_filtered) = if args.all {
-        (summaries, false)
+        let mut s = summaries;
+        s.truncate(requested_limit);
+        (s, false)
     } else {
         let before_len = summaries.len();
-        let filtered: Vec<SessionSummary> = summaries
+        let mut filtered: Vec<SessionSummary> = summaries
             .into_iter()
             .filter(|s| !(s.tools_used == 0 && s.duration_secs < 30))
             .collect();
         let did_filter = filtered.len() != before_len || total_unfiltered != filtered.len();
+        filtered.truncate(requested_limit);
         (filtered, did_filter)
     };
 
@@ -286,7 +295,15 @@ fn build_filter(args: &LsArgs) -> Result<ListFilter, GaalError> {
         .as_deref()
         .map(|raw| parse_time_bound(raw, true))
         .transpose()?;
-    let limit = Some(args.limit.max(1));
+    // Overfetch when noise filter is active (not --all) so that post-filter
+    // doesn't eat into the requested limit. 3x heuristic covers typical
+    // noise ratios without fetching the entire DB.
+    let raw_limit = args.limit.max(1);
+    let limit = if args.all {
+        Some(raw_limit)
+    } else {
+        Some(raw_limit.saturating_mul(3).max(30))
+    };
     let tag = args.tag.first().cloned();
 
     Ok(ListFilter {
@@ -451,6 +468,8 @@ fn build_summary(
         peak_context: clamp_i64_to_u64(row.peak_context),
         tools_used: clamp_i64_to_u64(row.total_tools),
         headline,
+        session_type: row.session_type,
+        parent_id: row.parent_id,
     })
 }
 
@@ -542,50 +561,103 @@ impl HumanReadable for Vec<SessionSummary> {
             return;
         }
 
-        let headers = [
-            "ID", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools", "Model", "CWD",
-        ];
-        let col_kinds = [
-            ColumnKind::Fixed,    // ID
-            ColumnKind::Fixed,    // Engine
-            ColumnKind::Fixed,    // Started
-            ColumnKind::Fixed,    // Duration
-            ColumnKind::Fixed,    // Tokens
-            ColumnKind::Fixed,    // Peak
-            ColumnKind::Fixed,    // Tools
-            ColumnKind::Variable, // Model
-            ColumnKind::Variable, // CWD
-        ];
-        let rows: Vec<Vec<String>> = self
-            .iter()
-            .map(|session| {
-                let id = session.id.chars().take(8).collect::<String>();
-                let tokens = format!(
-                    "{} / {}",
-                    format_tokens(u64_to_i64_saturating(session.tokens.input)),
-                    format_tokens(u64_to_i64_saturating(session.tokens.output))
-                );
-                let peak = if session.peak_context > 0 {
-                    format!(
-                        "{}",
+        // Show Type column when any session is a subagent (i.e. --include-subagents is active)
+        let has_subagents = self.iter().any(|s| s.session_type == "subagent");
+
+        if has_subagents {
+            let headers = [
+                "ID", "Type", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools",
+                "Model", "CWD",
+            ];
+            let col_kinds = [
+                ColumnKind::Fixed,    // ID
+                ColumnKind::Fixed,    // Type
+                ColumnKind::Fixed,    // Engine
+                ColumnKind::Fixed,    // Started
+                ColumnKind::Fixed,    // Duration
+                ColumnKind::Fixed,    // Tokens
+                ColumnKind::Fixed,    // Peak
+                ColumnKind::Fixed,    // Tools
+                ColumnKind::Variable, // Model
+                ColumnKind::Variable, // CWD
+            ];
+            let rows: Vec<Vec<String>> = self
+                .iter()
+                .map(|session| {
+                    let id = session.id.chars().take(8).collect::<String>();
+                    let type_badge = match session.session_type.as_str() {
+                        "subagent" => "[sub]".to_string(),
+                        "coordinator" => "[coord]".to_string(),
+                        _ => "-".to_string(),
+                    };
+                    let tokens = format!(
+                        "{} / {}",
+                        format_tokens(u64_to_i64_saturating(session.tokens.input)),
+                        format_tokens(u64_to_i64_saturating(session.tokens.output))
+                    );
+                    let peak = if session.peak_context > 0 {
                         format_tokens(u64_to_i64_saturating(session.peak_context))
-                    )
-                } else {
-                    "-".to_string()
-                };
-                vec![
-                    id,
-                    session.engine.clone(),
-                    format_timestamp(&session.started_at),
-                    format_duration(u64_to_i64_saturating(session.duration_secs)),
-                    tokens,
-                    peak,
-                    session.tools_used.to_string(),
-                    session.model.clone(),
-                    format_cwd(&session.cwd, 40),
-                ]
-            })
-            .collect();
-        print_table_with_kinds(&headers, &rows, &col_kinds);
+                    } else {
+                        "-".to_string()
+                    };
+                    vec![
+                        id,
+                        type_badge,
+                        session.engine.clone(),
+                        format_timestamp(&session.started_at),
+                        format_duration(u64_to_i64_saturating(session.duration_secs)),
+                        tokens,
+                        peak,
+                        session.tools_used.to_string(),
+                        session.model.clone(),
+                        format_cwd(&session.cwd, 40),
+                    ]
+                })
+                .collect();
+            print_table_with_kinds(&headers, &rows, &col_kinds);
+        } else {
+            let headers = [
+                "ID", "Engine", "Started", "Duration", "Tokens", "Peak", "Tools", "Model", "CWD",
+            ];
+            let col_kinds = [
+                ColumnKind::Fixed,    // ID
+                ColumnKind::Fixed,    // Engine
+                ColumnKind::Fixed,    // Started
+                ColumnKind::Fixed,    // Duration
+                ColumnKind::Fixed,    // Tokens
+                ColumnKind::Fixed,    // Peak
+                ColumnKind::Fixed,    // Tools
+                ColumnKind::Variable, // Model
+                ColumnKind::Variable, // CWD
+            ];
+            let rows: Vec<Vec<String>> = self
+                .iter()
+                .map(|session| {
+                    let id = session.id.chars().take(8).collect::<String>();
+                    let tokens = format!(
+                        "{} / {}",
+                        format_tokens(u64_to_i64_saturating(session.tokens.input)),
+                        format_tokens(u64_to_i64_saturating(session.tokens.output))
+                    );
+                    let peak = if session.peak_context > 0 {
+                        format_tokens(u64_to_i64_saturating(session.peak_context))
+                    } else {
+                        "-".to_string()
+                    };
+                    vec![
+                        id,
+                        session.engine.clone(),
+                        format_timestamp(&session.started_at),
+                        format_duration(u64_to_i64_saturating(session.duration_secs)),
+                        tokens,
+                        peak,
+                        session.tools_used.to_string(),
+                        session.model.clone(),
+                        format_cwd(&session.cwd, 40),
+                    ]
+                })
+                .collect();
+            print_table_with_kinds(&headers, &rows, &col_kinds);
+        }
     }
 }
