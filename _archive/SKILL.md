@@ -1,3 +1,4 @@
+<!-- Archived 2026-03-29: superseded by DOCS.md / BACKLOG.md -->
 # SKILL.md — gaal Skills Integration
 
 No gaal-specific skills implemented in v0.1.0. The CLI tool operates independently.

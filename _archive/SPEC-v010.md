@@ -1,3 +1,4 @@
+<!-- Archived 2026-03-29: superseded by DOCS.md / BACKLOG.md -->
 # gaal v0.1.0 — Definitive Spec
 
 ## What gaal IS

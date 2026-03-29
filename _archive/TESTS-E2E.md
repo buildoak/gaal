@@ -1,3 +1,4 @@
+<!-- Archived 2026-03-29: superseded by DOCS.md / BACKLOG.md -->
 # TESTS-E2E.md — Gaal Agentic Usage Tests
 
 Tracked: 2026-03-11

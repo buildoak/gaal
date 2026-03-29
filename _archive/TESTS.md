@@ -1,3 +1,4 @@
+<!-- Archived 2026-03-29: superseded by DOCS.md / BACKLOG.md -->
 # TESTS.md — Gaal Stress Tests
 
 Tracked: 2026-03-10

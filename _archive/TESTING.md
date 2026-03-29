@@ -1,3 +1,4 @@
+<!-- Archived 2026-03-29: superseded by DOCS.md / BACKLOG.md -->
 # TESTING.md — Gaal Agentic Test Plan
 
 20 test cases against real indexed data. No mocks. Every command is copy-paste runnable.

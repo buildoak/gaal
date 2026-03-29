@@ -2,6 +2,8 @@
 
 Session observability for AI coding agents. Like k9s for your Claude Code and Codex fleet.
 
+Canonical documentation lives in [DOCS.md](./DOCS.md). Use this README as the short overview and `DOCS.md` for the current command reference.
+
 ## The problem
 
 You're running Claude Code and Codex sessions all day. Some last minutes, some last hours. You need to know: what did that session from yesterday actually do? Where's the context I need to continue this work? How much did it cost?
