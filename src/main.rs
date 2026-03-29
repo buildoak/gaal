@@ -298,6 +298,13 @@ enum IndexCommand {
         #[arg(long)]
         before: String,
     },
+    /// Recover orphaned subagent files whose parent JSONL was deleted.
+    #[command(name = "recover-orphans")]
+    RecoverOrphans {
+        /// Preview what would be recovered without writing to the database.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -582,6 +589,10 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             IndexCommand::Prune { before } => {
                 let args = gaal::commands::index::PruneArgs { before };
                 gaal::commands::index::run_prune(args)
+            }
+            IndexCommand::RecoverOrphans { dry_run } => {
+                let args = gaal::commands::index::RecoverOrphansArgs { dry_run };
+                gaal::commands::index::run_recover_orphans(args)
             }
         },
         Commands::Tag { id, tags, remove } => {

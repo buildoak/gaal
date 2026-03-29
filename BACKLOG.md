@@ -14,6 +14,7 @@
 | CLAUDE.md rewrite with AX convention, verification protocol, feature kill list | 2026-03-29 | [commit: 1d2a70d] |
 | BACKLOG.md reconciliation | 2026-03-29 | [commit: 1cc1b1d] |
 | SKILL.md audit: verified against current command surface and binary behavior | 2026-03-29 | [commit: 3cd740a] |
+| Orphan recovery: `gaal index recover-orphans` — recovered 3,437 subagents from 4,173 orphan files across 400 parent groups. 9 ghost parents created with `_recovered` tag. 736 collisions (prompt_suggestion noise). Symlink dedup, FK-safe ghost insertion, savepoint-per-orphan. | 2026-03-29 | [session: 0e49b03c] |
 
 ---
 
@@ -21,10 +22,10 @@
 
 | Priority | Item | Description |
 |----------|------|-------------|
-| P0 | Orphan recovery (4,051 files) | Parse `parentUuid` from subagent JSONL to reconstruct parent links for the 4,051 files pruned before `cleanupPeriodDays` was raised to 365. Fleet metadata (tokens, duration, status) is unrecoverable; facts (file_read/write/command) can be indexed. Most important remaining work. |
+| ~~P0~~ | ~~Orphan recovery~~ | **SHIPPED** 2026-03-29. `gaal index recover-orphans` — 3,437 subagents recovered, 9 ghost parents, 736 prompt_suggestion collisions (expected). |
 | P0 | SKILL.md rewrite | Philosophy-first rewrite. Kill eywa (~20% of current content), add vision/mission/design principles. Operational manual moves to reference/ material. Needs Opus 4.6 writer. |
 | P1 | AX harness sandbox fix | Use `--sandbox none` for AX test workers (our own code, not untrusted). Fixes SQLite lockfile failures in Layer 2 tasks. Dispatch config issue, not a gaal code fix. Note: AX layer2 failures on salt/find-salt were caused by Codex sandboxing (SQLite lockfile + HOME remapping), not by the salt logic itself. Salt is reliable. |
-| P1 | Subagent Phase 4 polish | Orphan handling, zero-turn subagents, Task column parent-description preference for v2.1.86+ sessions where `user_prompt` is not the task description. |
+| P1 | Subagent Phase 4 polish | ~~Orphan handling~~ (shipped), zero-turn subagents, Task column parent-description preference for v2.1.86+ sessions where `user_prompt` is not the task description. |
 | P2 | Codex subagent audit | Verify Codex parser handles subagent JSONL correctly. Test coverage for Codex coordinator→subagent flows. No confirmed bugs yet — needs investigation. |
 | P2 | `latest` selector in tag | `gaal tag latest add <tag>` — extend latest resolution beyond inspect/transcript to the tag command. |
 | P2 | Agent-mux worker visibility | Workers dispatched via Bash have no `toolUseResult`, no subagent JSONL. Needs new metadata format from agent-mux side — not a gaal code problem until agent-mux emits it. |
