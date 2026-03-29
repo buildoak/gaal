@@ -16,6 +16,17 @@
 - Facts extraction fix: inline `ContentBlock::ToolUse` now generates `file_read`/`file_write`/`command` facts **DONE** [session: 2b0db33c]
 - Transcript DB lookup fix: `.or_else()` on `Some(vec![])` fallback repaired **DONE** [session: 2b0db33c]
 
+## AX Sprint Fixes
+
+### Shipped (2026-03-29)
+
+- JSON error parity (`hint` and `example` fields) **DONE**
+- `create-handoff latest` **DONE**
+- `find-salt` false success **DONE**
+- `--session-type` filter on `ls` **DONE**
+- Per-subcommand `--help` (already working via clap) **DONE**
+- Read-only DB (already correct, no change needed) **DONE**
+
 ### Open Issue (2026-03-29)
 
 - 4,051 orphan subagent files from CC's 30-day cleanup (historical loss, not recoverable without parent JSONL)
@@ -236,4 +247,3 @@ gaal already implements the easy half: byte-offset-based incremental parsing. Wh
 - Tantivy rebuild already runs after backfill.
 - `--force` already bypasses skip/incremental logic.
 - `gaal index reindex <id>` already does a full reparse.
-

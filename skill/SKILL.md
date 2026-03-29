@@ -152,7 +152,7 @@ gaal create-handoff latest
 
 | Command | What |
 |---------|------|
-| `gaal ls` | List sessions. Filters: `--engine`, `--since`, `--before`, `--cwd`, `--tag`, `--sort`, `--limit`. Default limit is 10. |
+| `gaal ls` | List sessions. Filters: `--engine`, `--since`, `--before`, `--cwd`, `--tag`, `--session-type`, `--sort`, `--limit`. Default limit is 10. |
 | `gaal ls --aggregate` | Return aggregate totals instead of rows. |
 | `gaal ls --all` | Include short/noise sessions. |
 | `gaal ls --skip-subagents` | Hide subagent sessions and show only standalone/coordinator sessions. |
@@ -202,7 +202,7 @@ Human `ls` output uses a `Task` column for the session headline and shows subage
 
 | Command | What |
 |---------|------|
-| `gaal create-handoff <id\|today>` | Generate a handoff doc via LLM extraction. Flags: `--jsonl`, `--engine`, `--model`, `--prompt`, `--provider` default `agent-mux`, `--format` default `eywa-compatible`, `--batch`, `--since` default `7d`, `--parallel` default `1`, `--min-turns` default `3`, `--this`, `--dry-run`, `-H`. |
+| `gaal create-handoff <id\|today\|latest>` | Generate a handoff doc via LLM extraction. Flags: `--jsonl`, `--engine`, `--model`, `--prompt`, `--provider` default `agent-mux`, `--format` default `eywa-compatible`, `--batch`, `--since` default `7d`, `--parallel` default `1`, `--min-turns` default `3`, `--this`, `--dry-run`, `-H`. |
 
 ### Self-Identification
 
@@ -237,6 +237,8 @@ What you can pass to gaal commands (`inspect`, `transcript`, `create-handoff`, `
 | Prefix | Resolves if unique, otherwise returns an ambiguous-ID error |
 | `latest` | Resolves to the most recent session |
 
+`create-handoff` accepts `today` and `latest` in addition to explicit session IDs.
+
 ## Output Contract
 
 - Default output is JSON.
@@ -245,6 +247,7 @@ What you can pass to gaal commands (`inspect`, `transcript`, `create-handoff`, `
 - `ls -H` uses a `Task` column and type badges when subagents are present.
 - `inspect -H` shows a subagent table for coordinator sessions.
 - `transcript <id>` is path-first by default and returns JSON metadata; `--stdout` prints markdown.
+- JSON errors include `hint` and `example` fields alongside `ok`, `error`, and `exit_code`.
 
 ## AX Error Handling
 

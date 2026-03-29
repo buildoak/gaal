@@ -38,22 +38,17 @@ command = "gaal transcript nonexistent123 -H"
 expected_exit = 3
 description = "Unknown session ID passed to transcript (human mode)"
 
-# NOTE: find-salt currently always returns exit 0 (matches a file even with bogus tokens).
-# This appears to be a bug — it should return exit 3 when no JSONL contains the token.
-# The expected_exit below documents ACTUAL behavior, not DESIRED behavior.
-# TODO: Fix find-salt to properly return exit 3 when no match is found.
-
 [[errors]]
 name = "find-salt-nonexistent"
 command = "gaal find-salt XNOSALT_9f8e7d6c5b4a3210_XNOSALT"
-expected_exit = 0
-description = "Salt token not in any JSONL — BUG: currently always matches (should be exit 3)"
+expected_exit = 3
+description = "find-salt returns NotFound for nonexistent salt token"
 
 [[errors]]
 name = "find-salt-nonexistent-human"
 command = "gaal find-salt XNOSALT_9f8e7d6c5b4a3210_XNOSALT -H"
-expected_exit = 0
-description = "Salt token not found human mode — BUG: currently always matches (should be exit 3)"
+expected_exit = 3
+description = "find-salt returns NotFound for nonexistent salt token (human mode)"
 
 [[errors]]
 name = "tag-nonexistent-session"
@@ -72,6 +67,12 @@ name = "create-handoff-nonexistent"
 command = "gaal create-handoff nonexistent123"
 expected_exit = 3
 description = "Handoff for a nonexistent session"
+
+[[errors]]
+name = "create-handoff-latest"
+command = "gaal create-handoff latest --dry-run"
+expected_exit = 0
+description = "create-handoff resolves 'latest' to most recent session"
 
 # ─── Exit code 2: Ambiguous ID ────────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ expected_exit = 11
 description = "Invalid verb in who command"
 
 [[errors]]
-name = "search-empty"
+name = "search-empty-parse-error"
 command = "gaal search ''"
 expected_exit = 11
 description = "Empty search query"
@@ -162,6 +163,12 @@ name = "search-no-results"
 command = "gaal search 'xyzzy_nonexistent_impossible_term_999'"
 expected_exit = 1
 description = "Search for a term that matches nothing"
+
+[[errors]]
+name = "search-empty"
+command = "gaal search AX_EMPTY_PROBE_ZZZZZZZ"
+expected_exit = 1
+description = "search returns NoResults for unmatched query"
 
 [[errors]]
 name = "who-no-results"

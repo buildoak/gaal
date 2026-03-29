@@ -104,6 +104,7 @@ Errors are AX-style:
 - Specific problem statement
 - Copyable example
 - Hint for the next action
+- JSON errors include `hint` and `example` fields alongside `ok`, `error`, and `exit_code`: `{"ok": false, "error": "...", "hint": "...", "example": "...", "exit_code": N}`
 
 Meaningful exit codes:
 
@@ -330,6 +331,7 @@ Flags:
 - `--before <date|timestamp>`
 - `--cwd <substring>`
 - `--tag <tag>`: repeatable, AND semantics
+- `--session-type <coordinator|standalone|subagent>`
 - `--sort <started|ended|tokens|cost|duration>`
 - `--limit <n>`: default `10`
 - `--aggregate`: return totals instead of session rows
@@ -596,6 +598,8 @@ Flags:
 - `--this`: prefer the current detected session rather than a parent
 - `--dry-run`: preview candidates only
 - `-H`, `--human`
+
+`ID` may be a session ID, `today`, or `latest`; `latest` resolves to the most recent session.
 
 JSON output:
 
