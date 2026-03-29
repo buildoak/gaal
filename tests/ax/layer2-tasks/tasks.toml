@@ -1,0 +1,91 @@
+# tasks.toml — Declarative first-attempt agent task definitions
+#
+# Each task gives an agent ONLY skill/SKILL.md and DOCS.md as context,
+# then asks it to accomplish a gaal-related goal. We measure whether
+# the agent can figure out the right command on the first attempt.
+#
+# agents_per_task: how many independent agents attempt each task (for convergence analysis)
+
+[[tasks]]
+name = "find-file-author"
+prompt = "Find which session last modified the file src/render/session_md.rs. Return the session ID and when it happened."
+expected_command_pattern = "gaal who (wrote|changed|touched) .*session_md"
+agents_per_task = 3
+category = "attribution"
+
+[[tasks]]
+name = "list-recent-coordinators"
+prompt = "List only coordinator sessions from the last 3 days. I want to see which ones used the most tokens."
+expected_command_pattern = "gaal ls.*(--skip-subagents|session_type.*coordinator|--sort.*tokens)"
+agents_per_task = 3
+category = "fleet-view"
+
+[[tasks]]
+name = "token-cost-inspection"
+prompt = "Show me the full token breakdown for the most recent session, including cache read and creation tokens."
+expected_command_pattern = "gaal inspect (latest|[a-f0-9]+) --tokens"
+agents_per_task = 3
+category = "drill-down"
+
+[[tasks]]
+name = "content-search"
+prompt = "Search for sessions that discussed 'database migration' in the last 30 days. Show me the top 5 results."
+expected_command_pattern = "gaal search.*database.migration.*--limit 5"
+agents_per_task = 3
+category = "search"
+
+[[tasks]]
+name = "transcript-retrieval"
+prompt = "Get the full transcript of the most recent session. I want to read the actual conversation content, not just metadata."
+expected_command_pattern = "gaal transcript (latest|[a-f0-9]+) --stdout"
+agents_per_task = 3
+category = "transcript"
+
+[[tasks]]
+name = "handoff-creation"
+prompt = "Generate a handoff document for the most recent session so I can continue the work later."
+expected_command_pattern = "gaal create-handoff (latest|[a-f0-9]+)"
+agents_per_task = 3
+category = "handoff"
+
+[[tasks]]
+name = "self-identification"
+prompt = "You are an agent running inside a session. Identify your own session's JSONL file path so you could generate a self-handoff. Describe the exact commands you would run."
+expected_command_pattern = "gaal salt.*gaal find-salt"
+agents_per_task = 3
+category = "self-id"
+
+[[tasks]]
+name = "error-recovery-flow"
+prompt = "I ran 'gaal inspect xyz123' and got a 'not found' error. What should I do to find the correct session ID? Show the exact commands."
+expected_command_pattern = "gaal ls"
+agents_per_task = 3
+category = "error-recovery"
+
+[[tasks]]
+name = "tag-and-filter"
+prompt = "Tag the most recent session with 'experiment' and then list all sessions that have that tag."
+expected_command_pattern = "gaal tag.*experiment.*gaal (ls|inspect).*--tag.*experiment"
+agents_per_task = 3
+category = "tag-management"
+
+[[tasks]]
+name = "recall-context"
+prompt = "I need to continue work on 'gaussian moat' from a previous session. Find the most relevant prior context to resume."
+expected_command_pattern = "gaal recall.*gaussian.moat"
+agents_per_task = 3
+category = "recall"
+
+[[tasks]]
+name = "multi-session-compare"
+prompt = "Compare the token usage of the last 5 sessions. Which one was most expensive?"
+expected_command_pattern = "gaal ls.*(--sort.*(tokens|cost)|--limit 5)"
+agents_per_task = 3
+category = "fleet-view"
+
+[[tasks]]
+name = "subagent-inspection"
+prompt = "I want to see all the subagents that ran inside a coordinator session. Find a recent coordinator and show its subagent details."
+expected_command_pattern = "gaal inspect.*(-F|--full|--include-empty)"
+agents_per_task = 3
+category = "drill-down"
