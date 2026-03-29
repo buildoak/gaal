@@ -13,7 +13,9 @@ use crate::error::GaalError;
 use crate::model::{
     CommandEntry, ErrorEntry, Fact, FactType, FileOps, GitOp, SessionRecord, TokenUsage,
 };
-use crate::output::human::{format_cwd, format_tokens};
+use crate::output::human::{
+    format_cwd, format_duration, format_tokens, print_table_with_kinds, ColumnKind,
+};
 use crate::output::json::print_json;
 use crate::parser::event::EventKind;
 
@@ -102,9 +104,21 @@ struct FileCount {
     edited: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct SubagentSummary {
+    id: String,
+    model: String,
+    total_tokens: i64,
+    duration: String,
+    description: String,
+}
+
 #[derive(Debug, Clone)]
 struct InspectData {
     record: SessionRecord,
+    parent_id: Option<String>,
+    session_type: String,
+    subagents: Vec<SubagentSummary>,
     trace: Option<Vec<Fact>>,
     token_breakdown: Option<TokenBreakdown>,
     file_count: Option<FileCount>,
@@ -274,6 +288,24 @@ fn build_inspect_data(
 
     let handoff = get_handoff(conn, &row.id)?;
     let tags = get_tags(conn, &row.id)?;
+    let subagents = if row.session_type == "coordinator" {
+        get_child_sessions(conn, &row.id)?
+            .into_iter()
+            .map(|child| {
+                let child_facts = get_facts(conn, &child.id, None)?;
+                Ok(SubagentSummary {
+                    id: child.id.clone(),
+                    model: child.model.clone().unwrap_or_else(|| "unknown".to_string()),
+                    total_tokens: child.total_input_tokens + child.total_output_tokens,
+                    duration: format_duration(duration_secs(&child) as i64),
+                    description: first_user_prompt(&child_facts)
+                        .unwrap_or_else(|| "subagent task".to_string()),
+                })
+            })
+            .collect::<Result<Vec<_>, GaalError>>()?
+    } else {
+        Vec::new()
+    };
 
     let files = if include_files {
         collect_files(&facts, args.files.unwrap_or(FilesMode::All))
@@ -393,6 +425,9 @@ fn build_inspect_data(
 
     Ok(InspectData {
         record,
+        parent_id: row.parent_id.clone(),
+        session_type: row.session_type.clone(),
+        subagents,
         trace,
         token_breakdown,
         file_count,
@@ -405,6 +440,9 @@ fn build_inspect_data(
 fn to_json_value(data: InspectData, args: &InspectArgs) -> Result<Value, GaalError> {
     let InspectData {
         record,
+        parent_id,
+        session_type,
+        subagents,
         trace,
         token_breakdown,
         file_count,
@@ -426,6 +464,18 @@ fn to_json_value(data: InspectData, args: &InspectArgs) -> Result<Value, GaalErr
 
     // AF2: Always remove status field from JSON output
     map.remove("status");
+    map.insert("session_type".to_string(), json!(session_type));
+    if let Some(parent_id) = parent_id {
+        map.insert("parent_id".to_string(), json!(parent_id));
+    }
+    if session_type == "coordinator" {
+        map.insert(
+            "subagents".to_string(),
+            serde_json::to_value(subagents).map_err(|e| {
+                GaalError::Internal(format!("failed to serialize subagents: {e}"))
+            })?,
+        );
+    }
 
     let any_fact_filter = args.files.is_some() || args.errors || args.commands || args.git;
     let summary_mode = !args.full && !any_fact_filter;
@@ -749,6 +799,62 @@ fn duration_secs(row: &SessionRow) -> u64 {
     secs.max(0) as u64
 }
 
+fn get_child_sessions(conn: &Connection, parent_id: &str) -> Result<Vec<SessionRow>, GaalError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
+         parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
+         cache_read_tokens, cache_creation_tokens, reasoning_tokens,
+         total_tools, total_turns, peak_context, last_indexed_offset
+         FROM sessions WHERE parent_id = :parent_id ORDER BY started_at ASC"
+    ).map_err(GaalError::from)?;
+    let rows = stmt.query_map(
+        named_params! { ":parent_id": parent_id },
+        |row| {
+            Ok(SessionRow {
+                id: row.get("id")?,
+                engine: row.get("engine")?,
+                model: row.get("model")?,
+                cwd: row.get("cwd")?,
+                started_at: row.get("started_at")?,
+                ended_at: row.get("ended_at")?,
+                exit_signal: row.get("exit_signal")?,
+                last_event_at: row.get("last_event_at")?,
+                parent_id: row.get("parent_id")?,
+                session_type: row
+                    .get::<_, Option<String>>("session_type")?
+                    .unwrap_or_else(|| "standalone".to_string()),
+                jsonl_path: row.get("jsonl_path")?,
+                total_input_tokens: row.get("total_input_tokens")?,
+                total_output_tokens: row.get("total_output_tokens")?,
+                cache_read_tokens: row.get::<_, Option<i64>>("cache_read_tokens")?.unwrap_or(0),
+                cache_creation_tokens: row
+                    .get::<_, Option<i64>>("cache_creation_tokens")?
+                    .unwrap_or(0),
+                reasoning_tokens: row.get::<_, Option<i64>>("reasoning_tokens")?.unwrap_or(0),
+                total_tools: row.get("total_tools")?,
+                total_turns: row.get("total_turns")?,
+                peak_context: row.get::<_, Option<i64>>("peak_context")?.unwrap_or(0),
+                last_indexed_offset: row.get("last_indexed_offset")?,
+            })
+        }
+    ).map_err(GaalError::from)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(GaalError::from)
+}
+
+fn first_user_prompt(facts: &[Fact]) -> Option<String> {
+    facts.iter().find_map(|fact| {
+        if matches!(fact.fact_type, FactType::UserPrompt) {
+            fact.detail
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(|text| truncate(text, 80))
+        } else {
+            None
+        }
+    })
+}
+
 fn parse_ts(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
@@ -830,6 +936,11 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
         println!("Started: {}", record.started_at);
         println!("Duration: {}s", record.duration_secs);
         println!("CWD: {}", format_cwd(&record.cwd, 80));
+        if data.session_type == "subagent" {
+            if let Some(parent_id) = &data.parent_id {
+                println!("Parent: {}", parent_id);
+            }
+        }
         if record.peak_context > 0 {
             println!(
                 "Peak Context: {} (max single-turn input incl. cache)",
@@ -839,6 +950,33 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
 
         if let Some(headline) = &record.headline {
             println!("Headline: {}", headline);
+        }
+        if data.session_type == "coordinator" {
+            println!("Subagents ({}):", data.subagents.len());
+            if !data.subagents.is_empty() {
+                let rows = data
+                    .subagents
+                    .iter()
+                    .map(|subagent| {
+                        vec![
+                            truncate(&subagent.id, 8),
+                            subagent.model.clone(),
+                            format_tokens(subagent.total_tokens),
+                            subagent.duration.clone(),
+                        ]
+                    })
+                    .collect::<Vec<_>>();
+                print_table_with_kinds(
+                    &["ID", "Model", "Tokens", "Duration"],
+                    &rows,
+                    &[
+                        ColumnKind::Fixed,
+                        ColumnKind::Variable,
+                        ColumnKind::Fixed,
+                        ColumnKind::Fixed,
+                    ],
+                );
+            }
         }
 
         if summary_mode {

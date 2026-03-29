@@ -46,6 +46,9 @@ enum Commands {
         /// Show all sessions including noise (0 tool calls and <30s duration).
         #[arg(long)]
         all: bool,
+        /// Include subagent sessions (hidden by default).
+        #[arg(long)]
+        include_subagents: bool,
     },
 
     /// Session details with optional focused views (formerly show).
@@ -362,6 +365,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             limit,
             aggregate,
             all,
+            include_subagents,
         } => {
             let args = gaal::commands::ls::LsArgs {
                 engine: engine.map(convert_ls_engine),
@@ -374,6 +378,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 aggregate,
                 human_readable: human,
                 all,
+                include_subagents,
             };
             gaal::commands::ls::run(args)
         }

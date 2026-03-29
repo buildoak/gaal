@@ -49,6 +49,9 @@ pub struct LsArgs {
     /// Show all sessions including noise (0 tool calls and <30s duration).
     #[arg(long, action = ArgAction::SetTrue)]
     pub all: bool,
+    /// Include subagent sessions (hidden by default).
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub include_subagents: bool,
 }
 
 /// Supported `gaal ls --engine` values.
@@ -294,6 +297,7 @@ fn build_filter(args: &LsArgs) -> Result<ListFilter, GaalError> {
         tag,
         sort_by: args.sort.map(|sort| sort.as_str().to_string()),
         limit,
+        include_subagents: args.include_subagents,
     })
 }
 

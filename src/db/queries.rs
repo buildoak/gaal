@@ -42,6 +42,7 @@ pub struct ListFilter {
     pub tag: Option<String>,
     pub sort_by: Option<String>,
     pub limit: Option<i64>,
+    pub include_subagents: bool,
 }
 
 /// Supported fact types for `who` queries and fact filtering.
@@ -396,6 +397,7 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
                   WHERE t.session_id = s.id AND t.tag = :tag
               )
           )
+          AND (:include_subagents = 1 OR s.session_type != 'subagent')
         ORDER BY {order_by}
         LIMIT :limit
         "#
@@ -409,6 +411,7 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
             ":before": filter.before.as_deref(),
             ":cwd_like": cwd_like.as_deref(),
             ":tag": filter.tag.as_deref(),
+            ":include_subagents": filter.include_subagents as i64,
             ":limit": limit,
         })
         .map_err(db_err)?;
@@ -438,6 +441,7 @@ pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, Gaa
                   WHERE t.session_id = s.id AND t.tag = :tag
               )
           )
+          AND (:include_subagents = 1 OR s.session_type != 'subagent')
     "#;
 
     let count: i64 = conn
@@ -449,6 +453,7 @@ pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, Gaa
                 ":before": filter.before.as_deref(),
                 ":cwd_like": cwd_like.as_deref(),
                 ":tag": filter.tag.as_deref(),
+                ":include_subagents": filter.include_subagents as i64,
             },
             |row| row.get(0),
         )
