@@ -137,6 +137,26 @@ The core tokscale pattern (`SourceFingerprint` + `sha256_prefix` check before tr
 **Priority:** P0 — critical path. Three capabilities blocked: `who` attribution, transcript subagent summaries (broken since CC v2.1.86), and parent→child inspect drill-down.
 **Date:** 2026-03-29 (revised from 2026-03-28 draft)
 
+### Shipped (2026-03-29)
+
+- `src/subagent/` module (`discovery.rs`, `parent_parser.rs`, `engine.rs`) — 237 lines
+- DB indexing: 5,170 subagents, 174 coordinators
+- `gaal ls --include-subagents`
+- `gaal inspect` shows Subagents table for coordinators, `parent_id` for subagents
+- `gaal search` includes subagent content in Tantivy
+- `gaal transcript` DB-backed subagent data (replaces dead `SubagentProgress` pipeline)
+- Facts extraction fix: inline `ContentBlock::ToolUse` now generates `file_read`/`file_write`/`command` facts (was missing — 136K new facts)
+- Transcript DB lookup fix: `.or_else()` on `Some(vec![])` fallback repaired
+
+### Open Issues (2026-03-29)
+
+- Duplicate entries: 2,253 8-char orphans + 12-char linked pairs (fix in progress)
+- Transcript Task column blank for v2.1.86+ sessions (prompt not pulled from facts)
+- `ls` output missing `session_type` field
+- `who` output missing parent→subagent attribution format
+- Positional model mapping in transcript (fragile, should match by `agent_id`)
+- 4,051 orphan subagent files from CC's 30-day cleanup (historical loss, not recoverable without parent JSONL)
+
 ### Why This Is Urgent
 
 Claude Code v2.1.86 (2026-03-28) stopped emitting `SubagentProgress` events. The transcript renderer's subagent summary table, Files Touched by Subagents, and Subagent Activity sections are **permanently broken for all new sessions.** This is not a regression we can wait on — every coordinator session recorded from now on has zero subagent metadata in its transcript.
@@ -225,16 +245,16 @@ Data comes from parent's `toolUseResult` blocks — no subagent JSONL read neede
 
 **Verification gate:** `gaal who read src/render/session_md.rs` shows subagent attribution. `gaal search "cargo build"` returns subagent sessions. `gaal inspect <subagent-id>` shows internal file reads, commands, tool counts.
 
-#### Phase 3: Transcript Renderer Migration (1 day)
+#### Phase 3: Transcript Renderer Migration (1 day) — SHIPPED 2026-03-29
 
 **Goal:** Replace dead SubagentProgress pipeline with DB-backed subagent data.
 
-1. `src/render/session_md.rs`: In Executive Summary, query DB for child sessions instead of building SubagentDelta from progress events.
-2. Populate summary table from `sessions` table (parent_id query).
-3. Populate "Files Touched by Subagents" from subagent facts.
-4. Keep SubagentProgress parsing as legacy fallback for pre-v2.1.86 sessions where DB hasn't been backfilled.
+1. `src/render/session_md.rs`: In Executive Summary, query DB for child sessions instead of building SubagentDelta from progress events. ✓
+2. Populate summary table from `sessions` table (parent_id query). ✓
+3. Populate "Files Touched by Subagents" from subagent facts. ✓
+4. Keep SubagentProgress parsing as legacy fallback for pre-v2.1.86 sessions where DB hasn't been backfilled. ✓
 
-**Verification gate:** `gaal transcript 7d5d03e4 --force` shows full Subagents table with 35 entries (previously empty). Files Touched by Subagents section populated.
+**Remaining gaps (see Open Issues above):** Task column blank for v2.1.86+ sessions; positional model mapping is fragile.
 
 #### Phase 4: Polish + Edge Cases (1 day)
 
@@ -256,6 +276,26 @@ Data comes from parent's `toolUseResult` blocks — no subagent JSONL read neede
 1. **ID collision:** agentId 8-char prefix could collide with UUID 8-char prefix. Test against full corpus before shipping.
 2. **Agent-mux workers:** Dispatched via Bash, not Agent tool — no `toolUseResult` in parent JSONL, no subagent JSONL files. These remain invisible until new agent-mux emits proper metadata. Known P2 gap.
 3. **Pre-v2.1.86 sessions:** Have SubagentProgress but may not have been backfilled. Phase 1 parsing handles both old and new formats.
+
+---
+
+## CC Session Cleanup Mitigation
+
+**Priority:** P1
+**Date:** 2026-03-29
+
+### Context
+
+CC's `cleanupPeriodDays` was set to 30 by default. On 2026-03-29, verified that 4,051 subagent JSONL files have already been pruned — their parent coordinator sessions survive but the child files are gone. These are unrecoverable without the parent JSONL (the `toolUseResult` blocks only exist in the parent, not the orphaned subagent files).
+
+### Actions Taken
+
+- `cleanupPeriodDays` set to **365** on 2026-03-29 — future sessions will not be pruned for a year
+
+### Remaining Work
+
+- **Daily `gaal index backfill` cron** (P1): Backfill must run before any future pruning window expires. A day-old session that hasn't been indexed yet is recoverable; a session pruned before indexing is gone. Add cron or LaunchAgent to run `gaal index backfill` nightly.
+- **Orphan recovery for existing 4,051 files** (P2): Subagent files that still exist on disk but whose parent JSONL is gone can be indexed independently using the internal `parentUuid` field embedded in each subagent JSONL. Parse `parentUuid` from the subagent file itself to reconstruct the link. This recovers file_read/file_write/command facts and makes the subagent searchable, but fleet-level metadata (totalTokens, totalDurationMs, status, prompt) is lost.
 
 ---
 
