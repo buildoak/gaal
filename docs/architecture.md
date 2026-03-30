@@ -258,6 +258,67 @@ The Codex implementation therefore uses a two-source pattern specific to Codex:
    prompt and `agent_type`; `close_agent` yields terminal status; `wait_agent` records lifecycle
    progress even though it is not the primary identity source.
 
+## Codex Subagent Model
+
+Codex subagents are identified child-first. A spawned Codex child writes its own
+`session_meta` record near the head of its JSONL, and that record carries
+`forked_from_id`. During discovery, gaal treats that field as the durable signal
+that the session is a subagent rather than a standalone rollout.
+
+This differs from Claude's model. Claude exposes parent-child identity directly in
+the parent's `toolUseResult` blocks through `agentId`, and the child trace lives at
+a deterministic `subagents/agent-*.jsonl` path beside the parent JSONL. Codex has
+no equivalent fleet block that declares child identity from the parent side.
+
+For Codex, the parent contributes lifecycle summaries rather than identity.
+The parent rollout emits `response_item` events with `payload.type` set to
+`function_call` and `function_call_output`. Within those records, gaal watches
+`spawn_agent` and `close_agent` calls to understand when a child was created and
+when it finished. `extract_codex_spawn_summaries()` in
+`src/subagent/parent_parser.rs` parses those events.
+
+The parser uses `spawn_agent` to recover the child prompt and `agent_type`, then
+matches the paired `function_call_output` to recover the returned `agent_id`.
+Later `close_agent` outputs update the terminal status for that same child. This
+gives gaal a parent-side lifecycle view, but it still does not establish the
+parent-child link on its own.
+
+The actual link comes from the child JSONL head. `discover_codex_sessions()` in
+`src/discovery/codex.rs` reads the first lines of each `rollout-*.jsonl` file and
+extracts `forked_from_id` from `session_meta`. If that field is present, the
+discovered session is carried forward as a Codex child candidate.
+
+Backfill then applies the link in the index pipeline. In
+`src/commands/index/mod.rs`, `apply_codex_subagent_link()` reads the discovered
+`forked_from_id`, truncates it to gaal's short Codex session ID form, and writes
+that value into the session row's `parent_id`. The same step also flips
+`session_type` to `subagent`.
+
+Coordinator promotion is a second pass, not part of discovery. After sessions are
+written, the same backfill path calls `promote_codex_coordinators()`, which scans
+for Codex parents referenced by child `parent_id` values and upgrades those parent
+rows from `standalone` to `coordinator`.
+
+The linking pipeline is therefore:
+
+1. `discover_codex_sessions()` extracts `forked_from_id` from the child JSONL head.
+2. Backfill indexes the session row.
+3. `apply_codex_subagent_link()` sets `parent_id` and `session_type = 'subagent'`.
+4. `promote_codex_coordinators()` upgrades the referenced parent to `coordinator`.
+
+This is the key contrast with Claude:
+
+- Claude: parent-side `toolUseResult` blocks carry `agentId`, so discovery can start
+  from the coordinator and the child file path is deterministic.
+- Codex: parent-side function calls describe lifecycle, but child identity comes
+  from the child's own `forked_from_id`.
+
+Two edge cases matter:
+
+- If `forked_from_id` is absent, gaal leaves the session as standalone.
+- If the parent has not been indexed yet, the child link is still recorded, but
+  effective parent promotion is deferred until that parent session appears in the DB.
+
 The practical split is:
 
 - Use the child JSONL when the question is "who is this child attached to?"
