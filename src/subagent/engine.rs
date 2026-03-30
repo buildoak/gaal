@@ -30,11 +30,15 @@ pub fn get_subagent_summaries(
 
     let mut summaries = Vec::new();
     for meta in metas {
+        let meta_stripped = meta
+            .agent_id
+            .strip_prefix("agent-")
+            .unwrap_or(&meta.agent_id);
         let matched_file = file_map
             .iter()
             .find(|(file_prefix, _)| {
-                meta.agent_id.starts_with(file_prefix.as_str())
-                    || file_prefix.starts_with(&meta.agent_id)
+                meta_stripped.starts_with(file_prefix.as_str())
+                    || file_prefix.starts_with(meta_stripped)
             })
             .map(|(_, f)| f);
 
