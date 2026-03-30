@@ -19,6 +19,7 @@
 | Orphan recovery: `gaal index recover-orphans` — recovered 3,437 subagents from 4,173 orphan files across 400 parent groups. 9 ghost parents created with `_recovered` tag. 736 collisions (prompt_suggestion noise). Symlink dedup, FK-safe ghost insertion, savepoint-per-orphan. | 2026-03-29 | [session: 0e49b03c] |
 | `subagent_type` indexing (P0): Extract from Agent tool_use input via prompt-matching correlation. New `subagent_type` column in sessions table, `--subagent-type` filter on `ls`, shown in inspect human/JSON. Auto-tag on ingest (P2). `task` field in ls/inspect JSON (P1). | 2026-03-30 | |
 | `gaal resolve` command: short ID to full paths/metadata. DB-only lookup, path construction, existence checks. JSON default, -H human. Exit codes 0/2/3. | 2026-03-30 | |
+| fix(inspect): subagent `total_tokens` now includes `cache_read_tokens + cache_creation_tokens`. Was 98-99% undercount for Claude Code subagents. Fixed in both `inspect` and `transcript` rendering. | 2026-03-30 | |
 
 ---
 

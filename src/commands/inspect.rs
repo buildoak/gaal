@@ -304,7 +304,10 @@ fn build_inspect_data(
                 Ok(SubagentSummary {
                     id: child.id.clone(),
                     model: child.model.clone().unwrap_or_else(|| "unknown".to_string()),
-                    total_tokens: child.total_input_tokens + child.total_output_tokens,
+                    total_tokens: child.total_input_tokens
+                        + child.total_output_tokens
+                        + child.cache_read_tokens
+                        + child.cache_creation_tokens,
                     duration: format_duration(duration_secs(&child) as i64),
                     description: first_user_prompt(&child_facts)
                         .unwrap_or_else(|| "subagent task".to_string()),

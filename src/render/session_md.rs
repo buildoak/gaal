@@ -1145,7 +1145,17 @@ fn load_subagent_deltas_from_db(conn: &Connection, session_id: &str) -> Option<V
     };
 
     let mut deltas = Vec::with_capacity(child_rows.len());
-    for (child_id, input_tokens, output_tokens, tool_count, started_at, ended_at) in child_rows {
+    for (
+        child_id,
+        input_tokens,
+        output_tokens,
+        cache_read,
+        cache_creation,
+        tool_count,
+        started_at,
+        ended_at,
+    ) in child_rows
+    {
         let (files_read, files_written, commands) = load_child_facts(conn, &child_id)?;
         let prompt = load_first_user_prompt(conn, &child_id).unwrap_or_default();
         deltas.push(SubagentDelta {
@@ -1156,7 +1166,7 @@ fn load_subagent_deltas_from_db(conn: &Connection, session_id: &str) -> Option<V
             commands,
             tool_counts: HashMap::new(),
             timestamps: vec![started_at.clone()],
-            total_tokens: Some(input_tokens + output_tokens),
+            total_tokens: Some(input_tokens + output_tokens + cache_read + cache_creation),
             total_duration_ms: calculate_duration_ms(&started_at, ended_at.as_deref()),
             total_tool_use_count: Some(tool_count),
         });
@@ -1188,14 +1198,16 @@ fn load_first_user_prompt(conn: &Connection, session_id: &str) -> Option<String>
     })
 }
 
-type ChildSessionRow = (String, i64, i64, i64, String, Option<String>);
+type ChildSessionRow = (String, i64, i64, i64, i64, i64, String, Option<String>);
 type FileWriteRow = (String, String);
 type ChildFacts = (Vec<String>, Vec<FileWriteRow>, Vec<String>);
 
 fn load_child_sessions(conn: &Connection, parent_id: &str) -> Option<Vec<ChildSessionRow>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, total_input_tokens, total_output_tokens, total_tools, started_at, ended_at
+            "SELECT id, total_input_tokens, total_output_tokens,
+                    COALESCE(cache_read_tokens, 0), COALESCE(cache_creation_tokens, 0),
+                    total_tools, started_at, ended_at
              FROM sessions
              WHERE parent_id = :parent_id
              ORDER BY started_at ASC",
@@ -1209,8 +1221,10 @@ fn load_child_sessions(conn: &Connection, parent_id: &str) -> Option<Vec<ChildSe
                 row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
                 row.get::<_, i64>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, Option<String>>(5)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })
         .ok()?;
