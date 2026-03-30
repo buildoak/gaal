@@ -148,10 +148,6 @@ fn parse_codex_head(lines: &[String]) -> CodexHead {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string);
         }
-
-        if id.is_some() && model.is_some() && cwd.is_some() && started_at.is_some() {
-            break;
-        }
     }
 
     CodexHead {
