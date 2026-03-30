@@ -28,7 +28,13 @@ pub fn discover_codex_sessions() -> Result<Vec<DiscoveredSession>> {
         }
 
         let head = read_head_lines(&path, HEAD_LINES);
-        let (id, model, cwd, started_at) = parse_codex_head(&head);
+        let CodexHead {
+            id,
+            model,
+            cwd,
+            started_at,
+            forked_from_id,
+        } = parse_codex_head(&head);
         let fallback_id = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -47,6 +53,7 @@ pub fn discover_codex_sessions() -> Result<Vec<DiscoveredSession>> {
             model,
             cwd,
             started_at,
+            forked_from_id,
             file_size: meta.len(),
         });
     }
@@ -97,6 +104,7 @@ fn parse_codex_head(lines: &[String]) -> CodexHead {
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut started_at: Option<String> = None;
+    let mut forked_from_id: Option<String> = None;
 
     for line in lines {
         let trimmed = line.trim();
@@ -121,6 +129,12 @@ fn parse_codex_head(lines: &[String]) -> CodexHead {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string);
         }
+        if forked_from_id.is_none() {
+            forked_from_id = record
+                .pointer("/payload/forked_from_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+        }
         if cwd.is_none() {
             cwd = record
                 .pointer("/payload/cwd")
@@ -140,22 +154,29 @@ fn parse_codex_head(lines: &[String]) -> CodexHead {
         }
     }
 
-    (id, model, cwd, started_at)
+    CodexHead {
+        id,
+        model,
+        cwd,
+        started_at,
+        forked_from_id,
+    }
 }
 
-type CodexHead = (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
+struct CodexHead {
+    id: Option<String>,
+    model: Option<String>,
+    cwd: Option<String>,
+    started_at: Option<String>,
+    forked_from_id: Option<String>,
+}
 
 /// Truncate a Codex session ID (UUIDv7) to its last 8 hex characters.
 ///
 /// UUIDv7 shares a timestamp prefix across sessions started in the same
 /// millisecond; the random suffix is what provides uniqueness. Stripping
 /// dashes and taking the last 8 hex chars gives a short, collision-free ID.
-fn truncate_codex_id(raw: &str) -> String {
+pub fn truncate_codex_id(raw: &str) -> String {
     let hex: String = raw.chars().filter(|c| *c != '-').collect();
     if hex.len() > 8 {
         hex[hex.len() - 8..].to_string()

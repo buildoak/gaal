@@ -998,6 +998,7 @@ fn index_single_jsonl(
         model: None,
         cwd: None,
         started_at: None,
+        forked_from_id: None,
         file_size: meta.len(),
     };
 

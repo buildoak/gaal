@@ -45,6 +45,7 @@ pub fn discover_claude_sessions() -> Result<Vec<DiscoveredSession>> {
             model,
             cwd,
             started_at,
+            forked_from_id: None,
             file_size: meta.len(),
         });
     }

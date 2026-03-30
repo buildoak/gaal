@@ -18,9 +18,10 @@ use crate::commands::search;
 use crate::config::{gaal_home, load_config};
 use crate::db::open_db;
 use crate::db::queries::{
-    delete_session, get_handoff, get_index_status, get_session, insert_facts_batch,
-    upsert_handoff, upsert_session, SessionRow,
+    delete_session, get_handoff, get_index_status, get_session, insert_facts_batch, upsert_handoff,
+    upsert_session, SessionRow,
 };
+use crate::discovery::codex::truncate_codex_id;
 use crate::discovery::{discover_sessions, DiscoveredSession};
 use crate::error::GaalError;
 use crate::model::{Fact, HandoffRecord};
@@ -227,6 +228,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
         }
     }
 
+    promote_codex_coordinators(&mut conn)?;
     search::build_search_index(&conn)?;
 
     if let Some(output_dir) = &output_dir {
@@ -348,7 +350,6 @@ pub fn run_prune(args: PruneArgs) -> Result<(), GaalError> {
     print_json(&payload).map_err(GaalError::from)
 }
 
-
 pub(crate) fn index_discovered_session(
     conn: &mut rusqlite::Connection,
     discovered: &DiscoveredSession,
@@ -402,6 +403,16 @@ pub(crate) fn index_discovered_session(
             &discovered.path,
             new_offset,
         )?;
+        let mut merged_row = merged_row;
+        apply_codex_subagent_link(
+            &mut merged_row,
+            discovered,
+            parsed_delta
+                .meta
+                .agent_role
+                .clone()
+                .or_else(|| existing_row.subagent_type.clone()),
+        );
         let normalized_facts = normalize_facts(parsed_delta.facts, &existing_row.id);
 
         // Wrap upsert + facts + links in a single savepoint to reduce lock
@@ -454,6 +465,7 @@ pub(crate) fn index_discovered_session(
     if let Some(row) = existing.as_ref() {
         session_row.session_type = row.session_type.clone();
     }
+    apply_codex_subagent_link(&mut session_row, discovered, parsed.meta.agent_role.clone());
     let facts = normalize_facts(parsed.facts, target_id);
 
     // Wrap delete-old-facts + upsert + insert-facts + links in a single
@@ -818,6 +830,37 @@ fn build_incremental_session_row(
         last_indexed_offset: u64_to_i64(new_offset)?,
         subagent_type: existing.subagent_type.clone(),
     })
+}
+
+fn apply_codex_subagent_link(
+    session_row: &mut SessionRow,
+    discovered: &DiscoveredSession,
+    subagent_type: Option<String>,
+) {
+    let Some(forked_from_id) = discovered.forked_from_id.as_deref() else {
+        return;
+    };
+
+    session_row.session_type = "subagent".to_string();
+    session_row.parent_id = Some(truncate_codex_id(forked_from_id));
+    session_row.subagent_type = subagent_type;
+}
+
+fn promote_codex_coordinators(conn: &mut Connection) -> Result<(), GaalError> {
+    conn.execute(
+        r#"
+        UPDATE sessions SET session_type = 'coordinator'
+        WHERE engine = 'codex'
+        AND session_type = 'standalone'
+        AND id IN (
+            SELECT DISTINCT parent_id FROM sessions
+            WHERE engine = 'codex' AND session_type = 'subagent' AND parent_id IS NOT NULL
+        )
+        "#,
+        [],
+    )
+    .map_err(GaalError::from)?;
+    Ok(())
 }
 
 /// Compute the default markdown path for a session without writing anything.

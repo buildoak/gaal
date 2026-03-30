@@ -22,6 +22,8 @@ pub struct DiscoveredSession {
     pub cwd: Option<String>,
     /// Session start timestamp if found in head records (RFC3339).
     pub started_at: Option<String>,
+    /// Raw parent UUID for forked Codex child sessions.
+    pub forked_from_id: Option<String>,
     /// File size in bytes.
     pub file_size: u64,
 }
