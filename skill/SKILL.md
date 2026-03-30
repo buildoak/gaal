@@ -145,7 +145,7 @@ These were deliberately removed, not deferred.
 ## Hard Rules
 
 - **Read-only by default.** Most gaal commands are pure queries. Commands that mutate state: `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index import-eywa`, `index recover-orphans`, `tag`. Do not call mutation commands without explicit task need — they change the DB or dispatch LLM calls.
-- **`create-handoff` costs money.** It dispatches to an external LLM via agent-mux. Always `--dry-run` first for batch operations. One careless loop can burn real dollars.
+- **`create-handoff` costs money.** It dispatches to an external LLM via agent-mux. Always `--dry-run` first for batch operations. One careless loop can burn real dollars. Use `--effort` to control dispatch effort (low/medium/high/xhigh); defaults to config value.
 - **When developing gaal itself:** always `cargo build --release`. Debug builds don't update the installed binary (symlinked to `target/release/gaal`). Read gaal's own CLAUDE.md before writing code — it has Rust conventions and test contracts.
 - **Evidence first.** Grep real JSONL before reasoning about schemas. Don't guess field names — Claude Code and Codex emit different event shapes. Confident guesses about JSONL structure are the #1 source of gaal bugs.
 - **Trust gaal's JSON output, not raw JSONL parsing.** Gaal normalizes two incompatible formats into one clean schema. If you're tempted to read a session JSONL directly, you're using the wrong command.

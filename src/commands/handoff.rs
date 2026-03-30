@@ -69,6 +69,8 @@ pub struct HandoffArgs {
     pub force_this: bool,
     /// Preview candidates without processing.
     pub dry_run: bool,
+    /// Effort level override (low, medium, high, xhigh).
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -111,6 +113,27 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
     let mut config = load_config();
     if config.handoff.prompt.is_relative() {
         config.handoff.prompt = gaal_home().join(&config.handoff.prompt);
+    }
+
+    // CLI --effort overrides config effort
+    if let Some(ref effort) = args.effort {
+        config.agent_mux.effort = Some(effort.clone());
+    }
+
+    // When effort is set, ensure gaal's wrapper timeout is at least as long
+    // as agent-mux's effort-mapped timeout bucket to avoid premature kills.
+    if let Some(ref effort) = config.agent_mux.effort {
+        let min_timeout = match effort.as_str() {
+            "low" => 130,
+            "medium" => 610,
+            "high" => 1810,
+            "xhigh" => 2710,
+            _ => 0,
+        };
+        let current = config.agent_mux.timeout_secs.unwrap_or(config.llm.timeout_secs);
+        if current < min_timeout {
+            config.agent_mux.timeout_secs = Some(min_timeout);
+        }
     }
 
     let mut conn = open_db()?;
@@ -1290,15 +1313,16 @@ fn invoke_agent_mux(
         if let Some(variant) = variant {
             command.arg("--variant").arg(variant);
         }
-        if let Some(effort) = effort {
-            command.arg("--effort").arg(effort);
-        }
     } else {
         command
             .arg("--engine")
             .arg(engine)
             .arg("--model")
             .arg(model);
+    }
+    // Pass --effort in both role and non-role paths
+    if let Some(effort) = effort {
+        command.arg("--effort").arg(effort);
     }
 
     // Override response truncation — handoff documents with the JSON metadata

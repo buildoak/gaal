@@ -86,6 +86,7 @@ Use `create-handoff` when wrapping up a session or producing a continuity artifa
 
 ```bash
 gaal create-handoff
+gaal create-handoff --effort high           # override effort level (low/medium/high/xhigh)
 gaal create-handoff --batch --since 1d --dry-run
 ```
 

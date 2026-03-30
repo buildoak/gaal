@@ -22,6 +22,7 @@ gaal create-handoff [OPTIONS] [ID]
 - `--min-turns <n>`: default `3`
 - `--this`: prefer the current detected session rather than a parent
 - `--dry-run`: preview candidates only
+- `--effort <low|medium|high|xhigh>`: effort level for agent-mux dispatch. Overrides config `[agent-mux] effort`. Controls how long the LLM worker runs and auto-aligns gaal's wrapper timeout.
 - `-H`, `--human`
 
 ## ID Resolution

@@ -245,6 +245,9 @@ enum Commands {
         /// Preview candidates without processing.
         #[arg(long)]
         dry_run: bool,
+        /// Effort level (low, medium, high, xhigh). Overrides config.
+        #[arg(long, value_parser = parse_effort)]
+        effort: Option<String>,
     },
 
     /// Index maintenance and backfill operations.
@@ -552,6 +555,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             min_turns,
             this,
             dry_run,
+            effort,
         } => {
             let args = gaal::commands::handoff::HandoffArgs {
                 id,
@@ -567,6 +571,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 min_turns,
                 force_this: this,
                 dry_run,
+                effort,
             };
             gaal::commands::handoff::run(args)
         }
@@ -678,6 +683,15 @@ fn convert_engine_string(engine: Engine) -> String {
 fn usize_to_i64(field: &str, value: usize) -> Result<i64, GaalError> {
     i64::try_from(value)
         .map_err(|_| GaalError::ParseError(format!("{field} is too large: {value}")))
+}
+
+fn parse_effort(raw: &str) -> Result<String, String> {
+    match raw {
+        "low" | "medium" | "high" | "xhigh" => Ok(raw.to_string()),
+        _ => Err(format!(
+            "invalid --effort value `{raw}` (valid: low, medium, high, xhigh)"
+        )),
+    }
 }
 
 fn parse_parallel(raw: &str) -> Result<usize, String> {
