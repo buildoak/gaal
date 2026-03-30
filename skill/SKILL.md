@@ -130,9 +130,13 @@ gaal ls --since today | jq -r '.sessions[].id' | xargs -I{} gaal inspect {} --fi
 
 These were deliberately removed, not deferred.
 
+## Admin: recover-orphans
+
+`gaal index recover-orphans` — one-off subcommand to recover subagent JSONL files orphaned by Claude Code's 30-day cleanup. Creates ghost parent records tagged `_recovered`. Run with `--dry-run` first. Not part of normal workflow.
+
 ## Hard Rules
 
-- **Read-only by default.** Most gaal commands are pure queries. Commands that mutate state: `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index import-eywa`, `tag`. Do not call mutation commands without explicit task need — they change the DB or dispatch LLM calls.
+- **Read-only by default.** Most gaal commands are pure queries. Commands that mutate state: `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index import-eywa`, `index recover-orphans`, `tag`. Do not call mutation commands without explicit task need — they change the DB or dispatch LLM calls.
 - **`create-handoff` costs money.** It dispatches to an external LLM via agent-mux. Always `--dry-run` first for batch operations. One careless loop can burn real dollars.
 - **When developing gaal itself:** always `cargo build --release`. Debug builds don't update the installed binary (symlinked to `target/release/gaal`). Read gaal's own CLAUDE.md before writing code — it has Rust conventions and test contracts.
 - **Evidence first.** Grep real JSONL before reasoning about schemas. Don't guess field names — Claude Code and Codex emit different event shapes. Confident guesses about JSONL structure are the #1 source of gaal bugs.

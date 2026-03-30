@@ -102,9 +102,30 @@ Output:
 
 - JSON object with `before` and `deleted`
 
+## `index recover-orphans`
+
+One-off recovery for subagent JSONL files orphaned when Claude Code's 30-day cleanup deletes parent session files. Scans `~/.claude/projects/` for subagent files whose parent session is missing or unlinked, creates ghost parent records tagged `_recovered`, and indexes the orphaned subagents.
+
+Usage:
+
+```bash
+gaal index recover-orphans [--dry-run]
+```
+
+Flags:
+
+- `--dry-run`: preview orphan counts without writing to the database
+
+Output:
+
+- Dry-run: `{ "orphan_files": N, "parent_groups": N, "dry_run": true }`
+- Live: `{ "ghosts_created": N, "subagents_indexed": N, "errors": N }`
+
+Run with `--dry-run` first. This is an admin-only recovery tool, not part of normal workflow.
+
 ## Operational Note
 
-Any command that mutates facts rebuilds the Tantivy index afterwards. Rebuild triggers include `gaal index backfill`, `gaal index reindex`, `gaal index prune`, and `gaal index import-eywa`.
+Any command that mutates facts rebuilds the Tantivy index afterwards. Rebuild triggers include `gaal index backfill`, `gaal index reindex`, `gaal index prune`, `gaal index import-eywa`, and `gaal index recover-orphans`.
 
 # `gaal tag`
 
