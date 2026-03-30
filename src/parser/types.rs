@@ -52,6 +52,12 @@ pub struct SessionMeta {
     pub started_at: String,
     /// CLI version, when present.
     pub version: Option<String>,
+    /// Parent session ID for Codex forked child sessions.
+    pub forked_from_id: Option<String>,
+    /// Codex subagent role (for example, "explorer"), when present.
+    pub agent_role: Option<String>,
+    /// Codex subagent nickname, when present.
+    pub agent_nickname: Option<String>,
 }
 
 /// Parsed session payload with normalized facts and counters.

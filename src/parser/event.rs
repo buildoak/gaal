@@ -13,6 +13,9 @@ pub enum EventKind {
         model: Option<String>,
         cwd: Option<String>,
         version: Option<String>,
+        forked_from_id: Option<String>,
+        agent_role: Option<String>,
+        agent_nickname: Option<String>,
     },
     UserMessage {
         content: Vec<ContentBlock>,

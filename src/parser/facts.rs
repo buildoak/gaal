@@ -67,6 +67,9 @@ pub fn extract_parsed_session(
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut version: Option<String> = None;
+    let mut forked_from_id: Option<String> = None;
+    let mut agent_role: Option<String> = None;
+    let mut agent_nickname: Option<String> = None;
     let mut started_at: Option<String> = None;
     let mut last_event_at: Option<String> = None;
     let mut last_stop_reason: Option<String> = None;
@@ -105,6 +108,9 @@ pub fn extract_parsed_session(
                 model: m,
                 cwd: c,
                 version: v,
+                forked_from_id: parent_id,
+                agent_role: role,
+                agent_nickname: nickname,
             } => {
                 if session_id.is_none() {
                     session_id = sid.clone();
@@ -117,6 +123,15 @@ pub fn extract_parsed_session(
                 }
                 if version.is_none() {
                     version = v.clone();
+                }
+                if forked_from_id.is_none() {
+                    forked_from_id = parent_id.clone();
+                }
+                if agent_role.is_none() {
+                    agent_role = role.clone();
+                }
+                if agent_nickname.is_none() {
+                    agent_nickname = nickname.clone();
                 }
             }
 
@@ -460,6 +475,9 @@ pub fn extract_parsed_session(
             cwd,
             started_at: resolved_start,
             version,
+            forked_from_id,
+            agent_role,
+            agent_nickname,
         },
         facts,
         total_input_tokens,
@@ -491,6 +509,9 @@ mod tests {
                 model: Some(model.to_string()),
                 cwd: Some(cwd.to_string()),
                 version: Some("1.0.0".to_string()),
+                forked_from_id: None,
+                agent_role: None,
+                agent_nickname: None,
             },
         }
     }
@@ -621,6 +642,9 @@ mod tests {
                 model: None,
                 cwd: None,
                 version: None,
+                forked_from_id: None,
+                agent_role: None,
+                agent_nickname: None,
             },
         }];
         let result =

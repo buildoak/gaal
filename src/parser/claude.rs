@@ -70,6 +70,9 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                         model,
                         cwd,
                         version,
+                        forked_from_id: None,
+                        agent_role: None,
+                        agent_nickname: None,
                     },
                 });
                 emitted_meta = true;

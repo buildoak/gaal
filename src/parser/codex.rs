@@ -69,6 +69,18 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                     .pointer("/payload/cli_version")
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                let forked_from_id = record
+                    .pointer("/payload/forked_from_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let agent_role = record
+                    .pointer("/payload/agent_role")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let agent_nickname = record
+                    .pointer("/payload/agent_nickname")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 events.push(SessionEvent {
                     timestamp: ts.clone(),
                     kind: EventKind::Meta {
@@ -76,6 +88,9 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                         model: None,
                         cwd,
                         version,
+                        forked_from_id,
+                        agent_role,
+                        agent_nickname,
                     },
                 });
             }
@@ -102,6 +117,9 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                         model,
                         cwd,
                         version: None,
+                        forked_from_id: None,
+                        agent_role: None,
+                        agent_nickname: None,
                     },
                 });
             }
