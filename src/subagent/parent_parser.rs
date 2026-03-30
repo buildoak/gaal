@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::Result;
+use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct SubagentMeta {
@@ -128,6 +129,157 @@ pub fn extract_subagent_summaries(parent_jsonl: &Path) -> Result<Vec<SubagentMet
     Ok(by_agent_id.into_values().collect())
 }
 
+pub fn extract_codex_spawn_summaries(parent_jsonl: &Path) -> Result<Vec<SubagentMeta>> {
+    let file = File::open(parent_jsonl)?;
+    let reader = BufReader::new(file);
+    let mut pending_spawns: HashMap<String, (Option<String>, String)> = HashMap::new();
+    let mut pending_closes: HashMap<String, String> = HashMap::new();
+    let mut by_agent_id: HashMap<String, SubagentMeta> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => continue,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let record: Value = match serde_json::from_str(trimmed) {
+            Ok(record) => record,
+            Err(_) => continue,
+        };
+        if record.get("type").and_then(Value::as_str) != Some("response_item") {
+            continue;
+        }
+
+        let payload_type = record
+            .pointer("/payload/type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let call_id = record
+            .pointer("/payload/call_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+
+        match payload_type {
+            "function_call" => {
+                let name = record
+                    .pointer("/payload/name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let arguments = parse_json_or_value(record.pointer("/payload/arguments"));
+                match name {
+                    "spawn_agent" => {
+                        let agent_type = arguments
+                            .get("agent_type")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string);
+                        let message = arguments
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .unwrap_or_default();
+                        if !call_id.is_empty() {
+                            pending_spawns.insert(call_id, (agent_type, message));
+                        }
+                    }
+                    "close_agent" => {
+                        let target = arguments
+                            .get("target")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string);
+                        if let (false, Some(target)) = (call_id.is_empty(), target) {
+                            pending_closes.insert(call_id, target);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "function_call_output" => {
+                let output = parse_json_or_value(record.pointer("/payload/output"));
+
+                if let Some((agent_type, message)) = pending_spawns.remove(&call_id) {
+                    let agent_id = output
+                        .get("agent_id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    let Some(agent_id) = agent_id else {
+                        continue;
+                    };
+
+                    let prompt = message;
+                    let description = derive_description(&prompt);
+                    let subagent_type = agent_type.filter(|value| !value.is_empty());
+
+                    if !by_agent_id.contains_key(&agent_id) {
+                        order.push(agent_id.clone());
+                    }
+
+                    by_agent_id.insert(
+                        agent_id.clone(),
+                        SubagentMeta {
+                            agent_id,
+                            prompt,
+                            status: "unknown".to_string(),
+                            total_tokens: 0,
+                            total_duration_ms: 0,
+                            total_tool_use_count: 0,
+                            description,
+                            subagent_type,
+                        },
+                    );
+                    continue;
+                }
+
+                if let Some(target) = pending_closes.remove(&call_id) {
+                    let status = decode_codex_close_status(&output);
+                    if let Some(meta) = by_agent_id.get_mut(&target) {
+                        meta.status = status;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(order
+        .into_iter()
+        .filter_map(|agent_id| by_agent_id.remove(&agent_id))
+        .collect())
+}
+
+fn parse_json_or_value(value: Option<&Value>) -> Value {
+    match value {
+        Some(Value::String(raw)) => {
+            serde_json::from_str::<Value>(raw).unwrap_or_else(|_| Value::String(raw.to_string()))
+        }
+        Some(other) => other.clone(),
+        None => Value::Null,
+    }
+}
+
+fn decode_codex_close_status(output: &Value) -> String {
+    match output.get("previous_status") {
+        Some(Value::String(status)) => status.clone(),
+        Some(Value::Object(map)) => map
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string()),
+        _ => "unknown".to_string(),
+    }
+}
+
 /// Generate a stable key for prompt matching between tool_use input and toolUseResult.
 /// Uses the first 200 characters to avoid false matches while being resilient to
 /// minor trailing differences.
@@ -244,5 +396,42 @@ mod tests {
             Some("gsd-heavy")
         );
         assert_eq!(summaries[0].description, "Build the auth module");
+    }
+
+    #[test]
+    fn extracts_codex_spawn_agent_summaries() {
+        let dir = std::env::temp_dir().join(format!(
+            "gaal-parent-parser-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("parent.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"spawn_agent\",\"call_id\":\"call_spawn\",\"arguments\":\"{\\\"agent_type\\\":\\\"explorer\\\",\\\"message\\\":\\\"Investigate the failing index path\\\"}\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_spawn\",\"output\":\"{\\\"agent_id\\\":\\\"019d2e57-8e18-7851-bbc1-93c2458fb749\\\",\\\"nickname\\\":\\\"Herschel\\\"}\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"close_agent\",\"call_id\":\"call_close\",\"arguments\":\"{\\\"target\\\":\\\"019d2e57-8e18-7851-bbc1-93c2458fb749\\\"}\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_close\",\"output\":\"{\\\"previous_status\\\":{\\\"completed\\\":\\\"done\\\"}}\"}}\n"
+            ),
+        )
+        .expect("write jsonl");
+
+        let summaries = extract_codex_spawn_summaries(&path).expect("parse");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(
+            summaries[0].agent_id,
+            "019d2e57-8e18-7851-bbc1-93c2458fb749"
+        );
+        assert_eq!(summaries[0].prompt, "Investigate the failing index path");
+        assert_eq!(summaries[0].description, "Investigate the failing index path");
+        assert_eq!(summaries[0].status, "completed");
+        assert_eq!(summaries[0].subagent_type.as_deref(), Some("explorer"));
+        assert_eq!(summaries[0].total_tokens, 0);
+        assert_eq!(summaries[0].total_duration_ms, 0);
+        assert_eq!(summaries[0].total_tool_use_count, 0);
     }
 }

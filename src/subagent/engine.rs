@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use super::discovery::{collect_subagent_files, SubagentFile};
-use super::parent_parser::{extract_subagent_summaries, SubagentMeta};
+use super::parent_parser::{
+    extract_codex_spawn_summaries, extract_subagent_summaries, SubagentMeta,
+};
 
 #[derive(Debug, Clone)]
 pub struct SubagentSummary {
@@ -17,9 +19,26 @@ pub fn get_subagent_summaries(
     parent_jsonl: &Path,
     session_dir: &Path,
 ) -> Result<Vec<SubagentSummary>> {
-    let metas = extract_subagent_summaries(parent_jsonl)?;
+    let parent_path = parent_jsonl.to_string_lossy();
+    let is_codex_parent = parent_path.contains("/.codex/");
+    let metas = if is_codex_parent {
+        extract_codex_spawn_summaries(parent_jsonl)?
+    } else {
+        extract_subagent_summaries(parent_jsonl)?
+    };
     if metas.is_empty() {
         return Ok(Vec::new());
+    }
+
+    if is_codex_parent {
+        return Ok(metas
+            .into_iter()
+            .map(|meta| SubagentSummary {
+                meta,
+                jsonl_path: None,
+                has_jsonl: false,
+            })
+            .collect());
     }
 
     let discovered = collect_subagent_files(session_dir);
