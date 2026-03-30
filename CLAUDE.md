@@ -252,7 +252,7 @@ cd /Users/otonashi/thinking/building/gaal
 ./tests/suite-1.sh
 ```
 
-The integration suites (`tests/run-all.sh`, `tests/suite-*.sh`) are the current quality gate. They test all 11 commands against live data on this machine. The AX layer harness (`tests/ax/`) is the structured extension point — new error paths and workflows go there.
+The integration suites (`tests/run-all.sh`, `tests/suite-*.sh`) are the current quality gate. They test all 12 commands against live data on this machine. The AX layer harness (`tests/ax/`) is the structured extension point — new error paths and workflows go there.
 
 ### What "AX-compliant" Means in Practice
 

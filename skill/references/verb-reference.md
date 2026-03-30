@@ -220,6 +220,7 @@ Semantic session retrieval. This is the eywa replacement surface.
 | `--days-back <DAYS_BACK>` | Recency window in days |
 | `--limit <LIMIT>` | Max number of sessions |
 | `--format <FORMAT>` | `summary`, `handoff`, `brief`, `full`, or `eywa` |
+| `--id <ID>` | Direct handoff lookup by session ID (bypasses search). Supports prefix, `latest` |
 | `--substance <SUBSTANCE>` | Minimum substance score |
 | `-H, --human` | Human-readable output |
 
@@ -279,6 +280,7 @@ Index maintenance commands.
 | `reindex` | Force re-index of one session |
 | `import-eywa` | Import legacy eywa handoff-index data |
 | `prune` | Remove old facts before a date |
+| `recover-orphans` | Scan for orphaned subagent JSONL files and create ghost parent records |
 
 ### Example
 
@@ -309,6 +311,37 @@ Apply or remove tags on a session.
 gaal tag 249aad1e "research"
 gaal tag 249aad1e --remove "research"
 gaal tag ls
+```
+
+---
+
+## 10. `salt`
+
+Generate a random salt token for self-identification.
+
+### Example
+
+```bash
+gaal salt
+```
+
+---
+
+## 11. `find-salt`
+
+Find the first JSONL file containing the provided salt token.
+
+### Flags
+
+| Flag | Meaning |
+|------|---------|
+| `[SALT]` | Salt token to search for |
+| `-H, --human` | Human-readable output |
+
+### Example
+
+```bash
+gaal find-salt GAAL_SALT_abc123    # use the literal token from `gaal salt`, never a shell variable
 ```
 
 ---
@@ -344,35 +377,4 @@ Resolve a short session ID to full session paths and metadata.
 gaal resolve dc5e98dc
 gaal resolve dc5e98dc -H
 gaal resolve dc5e98dc --engine claude
-```
-
----
-
-## 10. `salt`
-
-Generate a random salt token for self-identification.
-
-### Example
-
-```bash
-gaal salt
-```
-
----
-
-## 11. `find-salt`
-
-Find the first JSONL file containing the provided salt token.
-
-### Flags
-
-| Flag | Meaning |
-|------|---------|
-| `[SALT]` | Salt token to search for |
-| `-H, --human` | Human-readable output |
-
-### Example
-
-```bash
-gaal find-salt GAAL_SALT_abc123    # use the literal token from `gaal salt`, never a shell variable
 ```

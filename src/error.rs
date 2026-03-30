@@ -227,6 +227,18 @@ fn parse_error_message(command: &str, detail: &str) -> (String, String, String) 
             "gaal resolve dc5e98dc".to_string(),
             "Pass an 8-character session ID prefix.".to_string(),
         ),
+        "who" if detail.contains("invalid who verb:") => {
+            // Extract the bad verb from "invalid who verb: <verb> (expected: ...)"
+            let bad_verb = detail
+                .strip_prefix("invalid who verb: ")
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or("?");
+            (
+                format!("Unrecognized verb `{bad_verb}`. Valid verbs: read, wrote, ran, touched, changed, deleted."),
+                "gaal who ran cargo --since 7d -H".to_string(),
+                "Pick one of the listed verbs, then optionally provide a target to narrow the match.".to_string(),
+            )
+        }
         "who" if detail.contains("verb") => (
             "The `who` command needs a verb such as `read`, `wrote`, or `ran`.".to_string(),
             "gaal who ran cargo --since 7d -H".to_string(),

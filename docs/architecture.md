@@ -32,7 +32,9 @@ src/
     handoff.rs         LLM-powered handoff generation (create-handoff)
     salt.rs            Unique token generation for self-identification
     find.rs            JSONL file discovery by salt token (find-salt)
-    index.rs           Index maintenance (backfill, reindex, prune, import-eywa, status)
+    index/             Index maintenance (module directory)
+      mod.rs           backfill, reindex, prune, import-eywa, status
+      recover_orphans.rs  Orphaned subagent recovery
     tag.rs             Tag management (add, remove, ls)
     runtime.rs         Shared command runtime (DB handle, config, output mode)
     mod.rs             Module declarations

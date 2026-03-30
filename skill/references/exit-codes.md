@@ -11,10 +11,12 @@
 
 ## Stderr Format
 
-On non-zero exit, stderr contains:
+On non-zero exit, stderr contains a full JSON error envelope:
 ```json
-{"error": "descriptive message", "exit_code": N}
+{"ok": false, "error": "descriptive message", "hint": "what to try next", "example": "gaal <correct invocation>", "exit_code": N}
 ```
+
+All five fields are always present: `ok` (always `false`), `error`, `hint`, `example`, and `exit_code`.
 
 ## Script Pattern
 
