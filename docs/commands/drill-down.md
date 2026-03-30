@@ -27,7 +27,7 @@ gaal inspect [OPTIONS] [ID]
 
 JSON:
 
-- Default output is a compact session card with counts, token summary, tags, and `session_type`.
+- Default output is a compact session card with counts, token summary, tags, `session_type`, `task` (3-level cascade: handoff headline -> parent description -> first user prompt), and `subagent_type` (when present).
 - Focused flags swap in specific payloads such as `files`, `commands`, `errors`, `git_ops`, or `trace`.
 - Batch mode returns an array.
 

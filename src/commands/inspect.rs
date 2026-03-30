@@ -122,6 +122,9 @@ struct InspectData {
     record: SessionRecord,
     parent_id: Option<String>,
     session_type: String,
+    subagent_type: Option<String>,
+    /// Task description computed via the 3-level cascade: handoff headline -> parent description -> first user prompt.
+    task: Option<String>,
     subagents: Vec<SubagentSummary>,
     trace: Option<Vec<Fact>>,
     token_breakdown: Option<TokenBreakdown>,
@@ -429,10 +432,25 @@ fn build_inspect_data(
         None
     };
 
+    // Compute task via 3-level cascade: handoff headline -> parent description -> first user prompt.
+    let task = record
+        .headline
+        .clone()
+        .or_else(|| {
+            if row.session_type == "subagent" {
+                parent_subagent_description_for_inspect(conn, row).ok().flatten()
+            } else {
+                None
+            }
+        })
+        .or_else(|| first_user_prompt_for_inspect(&facts));
+
     Ok(InspectData {
         record,
         parent_id: row.parent_id.clone(),
         session_type: row.session_type.clone(),
+        subagent_type: row.subagent_type.clone(),
+        task,
         subagents,
         trace,
         token_breakdown,
@@ -448,6 +466,8 @@ fn to_json_value(data: InspectData, args: &InspectArgs) -> Result<Value, GaalErr
         record,
         parent_id,
         session_type,
+        subagent_type,
+        task,
         subagents,
         trace,
         token_breakdown,
@@ -470,7 +490,14 @@ fn to_json_value(data: InspectData, args: &InspectArgs) -> Result<Value, GaalErr
 
     // AF2: Always remove status field from JSON output
     map.remove("status");
+    // P1: Add `task` field via 3-level cascade (handoff headline -> parent description -> first user prompt).
+    if let Some(task_value) = task {
+        map.insert("task".to_string(), json!(task_value));
+    }
     map.insert("session_type".to_string(), json!(session_type));
+    if let Some(ref subagent_type) = subagent_type {
+        map.insert("subagent_type".to_string(), json!(subagent_type));
+    }
     if let Some(parent_id) = parent_id {
         map.insert("parent_id".to_string(), json!(parent_id));
     }
@@ -810,7 +837,7 @@ fn get_child_sessions(conn: &Connection, parent_id: &str) -> Result<Vec<SessionR
             "SELECT id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
          parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
          cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-         total_tools, total_turns, peak_context, last_indexed_offset
+         total_tools, total_turns, peak_context, last_indexed_offset, subagent_type
          FROM sessions WHERE parent_id = :parent_id ORDER BY started_at ASC",
         )
         .map_err(GaalError::from)?;
@@ -841,6 +868,7 @@ fn get_child_sessions(conn: &Connection, parent_id: &str) -> Result<Vec<SessionR
                 total_turns: row.get("total_turns")?,
                 peak_context: row.get::<_, Option<i64>>("peak_context")?.unwrap_or(0),
                 last_indexed_offset: row.get("last_indexed_offset")?,
+                subagent_type: row.get::<_, Option<String>>("subagent_type")?.filter(|s| !s.is_empty()),
             })
         })
         .map_err(GaalError::from)?;
@@ -859,6 +887,42 @@ fn first_user_prompt(facts: &[Fact]) -> Option<String> {
             None
         }
     })
+}
+
+/// Extract the first user prompt from already-loaded facts for the task field.
+fn first_user_prompt_for_inspect(facts: &[Fact]) -> Option<String> {
+    first_user_prompt(facts).map(|text| truncate(&text, 60))
+}
+
+/// Look up the parent's toolUseResult description for a subagent session.
+fn parent_subagent_description_for_inspect(
+    conn: &Connection,
+    row: &SessionRow,
+) -> Result<Option<String>, GaalError> {
+    let Some(parent_id) = row.parent_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(parent) = get_session(conn, parent_id)? else {
+        return Ok(None);
+    };
+    let parent_jsonl = Path::new(&parent.jsonl_path);
+    let Some(parent_dir) = parent_jsonl.parent() else {
+        return Ok(None);
+    };
+    let child_path = Path::new(&row.jsonl_path);
+    let summaries =
+        crate::subagent::get_subagent_summaries(parent_jsonl, parent_dir).unwrap_or_default();
+    for summary in summaries {
+        if let Some(path) = summary.jsonl_path.as_deref() {
+            if path == child_path {
+                let desc = summary.meta.description.trim().to_string();
+                if !desc.is_empty() {
+                    return Ok(Some(truncate(&desc, 60)));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn subagent_has_meaningful_content(row: &SessionRow) -> bool {
@@ -956,6 +1020,9 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
         if data.session_type == "subagent" {
             if let Some(parent_id) = &data.parent_id {
                 println!("Parent: {}", parent_id);
+            }
+            if let Some(ref subagent_type) = data.subagent_type {
+                println!("Subagent Type: {}", subagent_type);
             }
         }
         if record.peak_context > 0 {
@@ -1232,6 +1299,7 @@ mod tests {
             total_turns: 1,
             peak_context: 0,
             last_indexed_offset: 0,
+            subagent_type: None,
         };
 
         assert!(!subagent_has_meaningful_content(&empty));

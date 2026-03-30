@@ -26,6 +26,9 @@ pub struct LsArgs {
     /// Filter by session type.
     #[arg(long)]
     pub session_type: Option<String>,
+    /// Filter by subagent type (e.g. gsd-heavy, gsd-coordinator, Explore).
+    #[arg(long)]
+    pub subagent_type: Option<String>,
     /// Lower time bound (`1h`, `3d`, `2w`, `today`, `YYYY-MM-DD`, RFC3339).
     #[arg(long)]
     pub since: Option<String>,
@@ -97,6 +100,11 @@ pub struct SessionSummary {
     pub session_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_type: Option<String>,
+    /// Task description (headline, parent description, or first user prompt).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,6 +331,7 @@ fn build_filter(args: &LsArgs) -> Result<ListFilter, GaalError> {
         limit,
         include_subagents: args.include_subagents || !args.skip_subagents,
         session_type: args.session_type.clone(),
+        subagent_type: args.subagent_type.clone(),
     })
 }
 
@@ -475,9 +484,11 @@ fn build_summary(
         },
         peak_context: clamp_i64_to_u64(row.peak_context),
         tools_used: clamp_i64_to_u64(row.total_tools),
+        task: headline.clone(),
         headline,
         session_type: row.session_type,
         parent_id: row.parent_id,
+        subagent_type: row.subagent_type,
     })
 }
 
@@ -687,7 +698,13 @@ impl HumanReadable for Vec<SessionSummary> {
                 .map(|session| {
                     let id = session.id.chars().take(8).collect::<String>();
                     let type_badge = match session.session_type.as_str() {
-                        "subagent" => "[sub]".to_string(),
+                        "subagent" => {
+                            if let Some(ref st) = session.subagent_type {
+                                format!("[{}]", st)
+                            } else {
+                                "[sub]".to_string()
+                            }
+                        }
                         "coordinator" => "[coord]".to_string(),
                         _ => "-".to_string(),
                     };
@@ -809,6 +826,7 @@ mod tests {
             total_turns: 1,
             peak_context: 100,
             last_indexed_offset: 0,
+            subagent_type: None,
         }
     }
 
@@ -902,6 +920,7 @@ mod tests {
             all: false,
             include_subagents: false,
             skip_subagents: false,
+            subagent_type: None,
         };
 
         let filter = build_filter(&args).expect("build filter");
@@ -913,6 +932,7 @@ mod tests {
         let args = LsArgs {
             engine: None,
             session_type: None,
+            subagent_type: None,
             since: None,
             before: None,
             cwd: None,
@@ -935,6 +955,7 @@ mod tests {
         let args = LsArgs {
             engine: None,
             session_type: Some("coordinator".to_string()),
+            subagent_type: None,
             since: None,
             before: None,
             cwd: None,

@@ -16,6 +16,7 @@ gaal ls [OPTIONS]
 - `--cwd <substring>`
 - `--tag <tag>`: repeatable, AND semantics
 - `--session-type <coordinator|standalone|subagent>`
+- `--subagent-type <type>`: filter by subagent type (e.g. `gsd-heavy`, `gsd-coordinator`, `Explore`, `general-purpose`)
 - `--sort <started|ended|tokens|cost|duration>`
 - `--limit <n>`: default `10`
 - `--aggregate`: return totals instead of session rows
@@ -34,7 +35,7 @@ Default output is an envelope with:
 - optional `total_unfiltered`
 - `sessions`
 
-Each `sessions` row includes the indexed session summary fields shown in the example below, including `id`, `engine`, `model`, `cwd`, timestamps, duration, token totals, `peak_context`, `tools_used`, `headline`, and `session_type`.
+Each `sessions` row includes the indexed session summary fields shown in the example below, including `id`, `engine`, `model`, `cwd`, timestamps, duration, token totals, `peak_context`, `tools_used`, `headline`, `task` (same value as headline), `session_type`, `subagent_type` (when present), and `parent_id` (for subagents).
 
 ## Aggregate Mode
 

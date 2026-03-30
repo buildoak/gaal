@@ -24,6 +24,9 @@ enum Commands {
         /// Filter by session type.
         #[arg(long, value_enum)]
         session_type: Option<SessionTypeFilter>,
+        /// Filter by subagent type (e.g. gsd-heavy, gsd-coordinator, Explore).
+        #[arg(long)]
+        subagent_type: Option<String>,
         /// Lower bound: duration/date (for example: 1d, 2026-03-01).
         #[arg(long)]
         since: Option<String>,
@@ -384,6 +387,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
         Commands::Ls {
             engine,
             session_type,
+            subagent_type,
             since,
             before,
             cwd,
@@ -413,6 +417,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 all,
                 include_subagents,
                 skip_subagents,
+                subagent_type,
             };
             gaal::commands::ls::run(args)
         }

@@ -102,6 +102,26 @@ gaal create-handoff --jsonl "$JSONL"
 
 CRITICAL: `gaal salt` and `gaal find-salt` must be separate tool calls. The JSONL must flush between those calls or `find-salt` may miss the current session.
 
+### Finding GSD dispatches
+
+Use `--subagent-type` to filter sessions by the type of Agent tool dispatch.
+
+```bash
+# All GSD-Heavy dispatches in the last 7 days
+gaal ls --subagent-type gsd-heavy --since 7d -H
+
+# All GSD-coordinator (legacy GSD-Heavy type name) dispatches
+gaal ls --subagent-type gsd-coordinator --since 7d -H
+
+# Explore-type dispatches
+gaal ls --subagent-type Explore --since 7d -H
+
+# Or use tags (auto-applied on indexing)
+gaal ls --tag gsd-heavy -H
+```
+
+The `subagent_type` field is extracted from the Agent `tool_use` input in parent JSONL and populated during `gaal index backfill`. Run `gaal index backfill --force` after upgrading to populate existing sessions.
+
 ### Composable pipelines
 
 Use JSON output as the default transport layer.

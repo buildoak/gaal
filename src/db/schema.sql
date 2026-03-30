@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     total_tools INTEGER DEFAULT 0,
     total_turns INTEGER DEFAULT 0,
     peak_context INTEGER DEFAULT 0,
-    last_indexed_offset INTEGER DEFAULT 0
+    last_indexed_offset INTEGER DEFAULT 0,
+    subagent_type TEXT
 );
 
 CREATE TABLE IF NOT EXISTS facts (
@@ -62,5 +63,6 @@ CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_cwd ON sessions(cwd);
 CREATE INDEX IF NOT EXISTS idx_sessions_engine ON sessions(engine);
 CREATE INDEX IF NOT EXISTS idx_sessions_type ON sessions(session_type);
+CREATE INDEX IF NOT EXISTS idx_sessions_subagent_type ON sessions(subagent_type);
 CREATE INDEX IF NOT EXISTS idx_handoffs_substance ON handoffs(substance);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON session_tags(tag);

@@ -585,6 +585,7 @@ fn find_batch_candidates(
             total_turns: row.get(14).map_err(GaalError::from)?,
             peak_context: 0,
             last_indexed_offset: row.get(15).map_err(GaalError::from)?,
+            subagent_type: None,
         });
     }
     Ok(out)

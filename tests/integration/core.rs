@@ -41,6 +41,7 @@ fn session_row(
         last_event_at: ended_at
             .map(str::to_string)
             .or_else(|| Some(started_at.to_string())),
+        parent_id: None,
         session_type: "standalone".to_string(),
         jsonl_path: format!("/tmp/{id}.jsonl"),
         total_input_tokens: 120,
@@ -52,6 +53,7 @@ fn session_row(
         total_turns: 7,
         peak_context: 0,
         last_indexed_offset: 256,
+        subagent_type: None,
     }
 }
 
@@ -162,6 +164,7 @@ fn session_insert_and_query_roundtrip() {
         ended_at: Some("2026-03-01T10:30:00Z".to_string()),
         exit_signal: Some("ok".to_string()),
         last_event_at: Some("2026-03-01T10:29:10Z".to_string()),
+        parent_id: None,
         session_type: "standalone".to_string(),
         jsonl_path: "/tmp/sess-roundtrip-1.jsonl".to_string(),
         total_input_tokens: 2_000,
@@ -173,6 +176,7 @@ fn session_insert_and_query_roundtrip() {
         total_turns: 21,
         peak_context: 0,
         last_indexed_offset: 4_096,
+        subagent_type: None,
     };
 
     upsert_session(&conn, &session).expect("upsert session");

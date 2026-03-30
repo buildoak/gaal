@@ -30,6 +30,8 @@ pub struct SessionRow {
     pub total_turns: i64,
     pub peak_context: i64,
     pub last_indexed_offset: i64,
+    /// Subagent type from Agent tool_use input (e.g. "gsd-heavy", "Explore").
+    pub subagent_type: Option<String>,
 }
 
 /// Filters for listing sessions.
@@ -44,6 +46,7 @@ pub struct ListFilter {
     pub sort_by: Option<String>,
     pub limit: Option<i64>,
     pub include_subagents: bool,
+    pub subagent_type: Option<String>,
 }
 
 /// Supported fact types for `who` queries and fact filtering.
@@ -139,13 +142,13 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
             parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
             cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-            total_tools, total_turns, peak_context, last_indexed_offset
+            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type
         )
         VALUES (
             :id, :engine, :model, :cwd, :started_at, :ended_at, :exit_signal, :last_event_at,
             :parent_id, :session_type, :jsonl_path, :total_input_tokens, :total_output_tokens,
             :cache_read_tokens, :cache_creation_tokens, :reasoning_tokens,
-            :total_tools, :total_turns, :peak_context, :last_indexed_offset
+            :total_tools, :total_turns, :peak_context, :last_indexed_offset, :subagent_type
         )
         ON CONFLICT(id) DO UPDATE SET
             engine = excluded.engine,
@@ -166,7 +169,8 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             total_tools = excluded.total_tools,
             total_turns = excluded.total_turns,
             peak_context = excluded.peak_context,
-            last_indexed_offset = excluded.last_indexed_offset
+            last_indexed_offset = excluded.last_indexed_offset,
+            subagent_type = excluded.subagent_type
         "#,
         named_params! {
             ":id": &session.id,
@@ -189,6 +193,7 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             ":total_turns": session.total_turns,
             ":peak_context": session.peak_context,
             ":last_indexed_offset": session.last_indexed_offset,
+            ":subagent_type": &session.subagent_type,
         },
     )
     .map_err(db_err)?;
@@ -353,7 +358,7 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<SessionRow>, Ga
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
             parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
             cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-            total_tools, total_turns, peak_context, last_indexed_offset
+            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type
         FROM sessions
         WHERE id = :id
         "#,
@@ -388,7 +393,7 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
             s.id, s.engine, s.model, s.cwd, s.started_at, s.ended_at, s.exit_signal, s.last_event_at,
             s.parent_id, s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens,
             s.cache_read_tokens, s.cache_creation_tokens, s.reasoning_tokens,
-            s.total_tools, s.total_turns, s.peak_context, s.last_indexed_offset
+            s.total_tools, s.total_turns, s.peak_context, s.last_indexed_offset, s.subagent_type
         FROM sessions s
         WHERE (:engine IS NULL OR s.engine = :engine)
           AND (:session_type IS NULL OR s.session_type = :session_type)
@@ -402,6 +407,7 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
               )
           )
           AND (:include_subagents = 1 OR s.session_type != 'subagent')
+          AND (:subagent_type IS NULL OR s.subagent_type = :subagent_type)
         ORDER BY {order_by}
         LIMIT :limit
         "#
@@ -417,6 +423,7 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
             ":cwd_like": cwd_like.as_deref(),
             ":tag": filter.tag.as_deref(),
             ":include_subagents": filter.include_subagents as i64,
+            ":subagent_type": filter.subagent_type.as_deref(),
             ":limit": limit,
         })
         .map_err(db_err)?;
@@ -448,6 +455,7 @@ pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, Gaa
               )
           )
           AND (:include_subagents = 1 OR s.session_type != 'subagent')
+          AND (:subagent_type IS NULL OR s.subagent_type = :subagent_type)
     "#;
 
     let count: i64 = conn
@@ -461,6 +469,7 @@ pub fn count_sessions(conn: &Connection, filter: &ListFilter) -> Result<i64, Gaa
                 ":cwd_like": cwd_like.as_deref(),
                 ":tag": filter.tag.as_deref(),
                 ":include_subagents": filter.include_subagents as i64,
+                ":subagent_type": filter.subagent_type.as_deref(),
             },
             |row| row.get(0),
         )
@@ -869,6 +878,7 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         total_turns: row.get("total_turns")?,
         peak_context: row.get::<_, Option<i64>>("peak_context")?.unwrap_or(0),
         last_indexed_offset: row.get("last_indexed_offset")?,
+        subagent_type: row.get::<_, Option<String>>("subagent_type")?.filter(|s| !s.is_empty()),
     })
 }
 

@@ -77,6 +77,20 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
         }
     }
 
+    // subagent_type column for tracking Agent tool_use subagent_type field.
+    let has_subagent_type: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='subagent_type'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false);
+    if !has_subagent_type {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN subagent_type TEXT;")
+            .ok();
+    }
+
     conn.execute_batch(DB_SCHEMA).map_err(map_db_err)?;
     Ok(())
 }

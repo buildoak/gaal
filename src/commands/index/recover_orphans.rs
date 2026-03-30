@@ -198,6 +198,7 @@ pub fn run_recover_orphans(args: RecoverOrphansArgs) -> Result<(), GaalError> {
                 total_turns: 0,
                 peak_context: 0,
                 last_indexed_offset: 0,
+                subagent_type: None,
             };
             upsert_session(&conn, &ghost)?;
             add_tag(&conn, &parent_short_id, "_recovered")?;
@@ -279,6 +280,7 @@ pub fn run_recover_orphans(args: RecoverOrphansArgs) -> Result<(), GaalError> {
                 total_turns: i64::from(parsed.total_turns),
                 peak_context: parsed.peak_context,
                 last_indexed_offset,
+                subagent_type: None, // orphan recovery doesn't have parent context
             };
 
             let tx = match conn.savepoint_with_name("recover_orphan") {

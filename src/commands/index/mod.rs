@@ -583,6 +583,7 @@ fn index_subagents(
             total_turns: i64::from(parsed.total_turns),
             peak_context: parsed.peak_context,
             last_indexed_offset,
+            subagent_type: summary.meta.subagent_type.clone(),
         };
 
         let tx = match conn.savepoint_with_name("index_subagent") {
@@ -596,6 +597,7 @@ fn index_subagents(
             }
         };
 
+        let subagent_type_for_tag = summary.meta.subagent_type.clone();
         let save_result: Result<(), GaalError> = (|| {
             tx.execute(
                 "DELETE FROM facts WHERE session_id = :session_id",
@@ -605,6 +607,12 @@ fn index_subagents(
             upsert_session(&tx, &child_row)?;
             if !child_facts.is_empty() {
                 insert_facts_batch(&tx, &child_facts)?;
+            }
+            // P2: Auto-tag subagent_type so `gaal ls --tag gsd-heavy` works.
+            if let Some(ref st) = subagent_type_for_tag {
+                if !st.is_empty() {
+                    crate::db::queries::add_tag(&tx, &child_id, st)?;
+                }
             }
             tx.commit().map_err(GaalError::from)?;
             Ok(())
@@ -760,6 +768,7 @@ fn build_full_session_row(
         total_turns: i64::from(parsed.total_turns),
         peak_context: parsed.peak_context,
         last_indexed_offset,
+        subagent_type: None, // standalone sessions don't have a subagent_type
     }
 }
 
@@ -807,6 +816,7 @@ fn build_incremental_session_row(
         total_turns: existing.total_turns + i64::from(parsed_delta.total_turns),
         peak_context: existing.peak_context.max(parsed_delta.peak_context),
         last_indexed_offset: u64_to_i64(new_offset)?,
+        subagent_type: existing.subagent_type.clone(),
     })
 }
 
@@ -1098,6 +1108,7 @@ fn build_eywa_session_stub(entry: &EywaEntry) -> SessionRow {
         total_turns: 0,
         peak_context: 0,
         last_indexed_offset: 0,
+        subagent_type: None,
     }
 }
 

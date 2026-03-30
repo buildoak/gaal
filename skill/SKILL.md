@@ -40,6 +40,7 @@ Every gaal command answers exactly one question:
 | Question | Command |
 |----------|---------|
 | What sessions exist? | `gaal ls` |
+| Which GSD dispatches happened? | `gaal ls --subagent-type gsd-heavy` |
 | What happened in this session? | `gaal inspect <id>` |
 | Which sessions touched this? | `gaal who <verb> <target>` |
 | Where does this text appear? | `gaal search <query>` |

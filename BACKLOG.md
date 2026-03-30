@@ -15,6 +15,7 @@
 | BACKLOG.md reconciliation | 2026-03-29 | [commit: 1cc1b1d] |
 | SKILL.md audit: verified against current command surface and binary behavior | 2026-03-29 | [commit: 3cd740a] |
 | Orphan recovery: `gaal index recover-orphans` — recovered 3,437 subagents from 4,173 orphan files across 400 parent groups. 9 ghost parents created with `_recovered` tag. 736 collisions (prompt_suggestion noise). Symlink dedup, FK-safe ghost insertion, savepoint-per-orphan. | 2026-03-29 | [session: 0e49b03c] |
+| `subagent_type` indexing (P0): Extract from Agent tool_use input via prompt-matching correlation. New `subagent_type` column in sessions table, `--subagent-type` filter on `ls`, shown in inspect human/JSON. Auto-tag on ingest (P2). `task` field in ls/inspect JSON (P1). | 2026-03-30 | |
 
 ---
 
@@ -23,6 +24,7 @@
 | Priority | Item | Description |
 |----------|------|-------------|
 | ~~P0~~ | ~~Orphan recovery~~ | **SHIPPED** 2026-03-29. `gaal index recover-orphans` — 3,437 subagents recovered, 9 ghost parents, 736 prompt_suggestion collisions (expected). |
+| ~~P0~~ | ~~subagent_type indexing~~ | **SHIPPED** 2026-03-30. `subagent_type` extracted from Agent tool_use input, stored in sessions table, filterable via `--subagent-type`, auto-tagged on ingest. `task` field populated in both ls and inspect JSON via 3-level cascade. |
 | P0 | SKILL.md rewrite | Philosophy-first rewrite. Kill eywa (~20% of current content), add vision/mission/design principles. Operational manual moves to reference/ material. Needs Opus 4.6 writer. |
 | P1 | AX harness sandbox fix | Use `--sandbox none` for AX test workers (our own code, not untrusted). Fixes SQLite lockfile failures in Layer 2 tasks. Dispatch config issue, not a gaal code fix. Note: AX layer2 failures on salt/find-salt were caused by Codex sandboxing (SQLite lockfile + HOME remapping), not by the salt logic itself. Salt is reliable. |
 | P1 | Subagent Phase 4 polish | ~~Orphan handling~~ (shipped), zero-turn subagents, Task column parent-description preference for v2.1.86+ sessions where `user_prompt` is not the task description. |
