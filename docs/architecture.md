@@ -183,6 +183,103 @@ The path is deterministic:
 
 This split exists because the database is optimized for fast structured queries, while the raw files remain the authoritative detail source for transcript rendering, salt discovery, and subagent trace recovery.
 
+## Codex Subagent Model
+
+Codex subagents do not use Claude's `toolUseResult.agentId -> subagents/agent-*.jsonl`
+layout. The child is its own top-level rollout JSONL under `~/.codex/sessions/...`, and the
+parent-child relationship is reconstructed from metadata embedded in both the child and parent
+session streams.
+
+The child rollout is identified from its own `session_meta` record. Real Codex child sessions
+carry both a canonical `forked_from_id` field and a richer `source.subagent` block:
+
+```json
+{
+  "type": "session_meta",
+  "payload": {
+    "id": "019d261e-6e93-78d0-8f2c-29279b9e8252",
+    "forked_from_id": "019d261d-dffa-7d21-b0df-5893b4ca9aaf",
+    "source": {
+      "subagent": {
+        "thread_spawn": {
+          "parent_thread_id": "019d261d-dffa-7d21-b0df-5893b4ca9aaf",
+          "agent_role": "explorer",
+          "agent_nickname": "Schrodinger"
+        }
+      }
+    }
+  }
+}
+```
+
+For indexing, `forked_from_id` is the canonical linkage key. It is cheap to discover from the
+file head, stable across the pipeline, and maps directly onto the session row fields
+`session_type = 'subagent'` and `parent_id = truncate_codex_id(forked_from_id)`. The
+`source.subagent` block is still useful as corroborating evidence that the session is a spawned
+Codex child and as a source of role or nickname context, but parent-child linking does not depend
+on parsing that nested object.
+
+Parent-child linking in the Codex backfill pipeline happens in three stages:
+
+1. Discovery scans `~/.codex/sessions` for `rollout-*.jsonl` files and reads the file head.
+   If `forked_from_id` is present, the discovered session is marked as a child candidate before
+   full parsing starts.
+2. Indexing parses the session and writes the child row immediately. `apply_codex_subagent_link()`
+   sets `session_type = 'subagent'`, stores the truncated parent ID in `parent_id`, and carries
+   `agent_role` into `subagent_type` when present.
+3. Coordinator promotion runs after session rows exist. Any Codex session whose short ID appears
+   as a `parent_id` on one or more child rows is promoted from `standalone` to `coordinator`.
+
+That ordering matters. Codex does not require the parent rollout to be processed first. A child
+can be indexed with `parent_id` already populated even if the parent row has not been seen yet.
+Promotion is a second pass over the indexed rows, so the parent becomes a coordinator once its own
+session appears in the database and its short ID matches one or more children.
+
+This differs from Claude's Agent tool model. Claude coordinator sessions expose subagent metadata
+through parent-side `toolUseResult` blocks, where `agentId` is the durable key and the subagent
+trace lives at a deterministic child path:
+
+`Parent JSONL -> toolUseResult.agentId -> {session_dir}/subagents/agent-{agentId}.jsonl`
+
+Codex does not have that file layout or that identifier path. Instead:
+
+- Child identity comes from the child's own `session_meta`, especially `forked_from_id`.
+- Parent fleet metadata comes from parent `response_item` records containing `spawn_agent`,
+  `wait_agent`, and `close_agent` function calls and outputs.
+
+In other words, Claude is parent-first for identity and summary metadata, while Codex is child-first
+for identity and parent-assisted for summary metadata.
+
+The Codex implementation therefore uses a two-source pattern specific to Codex:
+
+1. Child `session_meta` in the child's own JSONL provides identity. This is where `id`,
+   `forked_from_id`, `agent_role`, and `agent_nickname` originate.
+2. Parent function-call history provides fleet metadata. `spawn_agent` yields the dispatched
+   prompt and `agent_type`; `close_agent` yields terminal status; `wait_agent` records lifecycle
+   progress even though it is not the primary identity source.
+
+The practical split is:
+
+- Use the child JSONL when the question is "who is this child attached to?"
+- Use the parent JSONL when the question is "what was this child asked to do and how did it end?"
+
+That matches the current parser and indexer. `extract_codex_spawn_summaries()` walks the parent
+rollout, pairs `spawn_agent` function calls with their outputs to recover the spawned `agent_id`,
+copies the parent prompt into `SubagentMeta.prompt`, records `agent_type` as `subagent_type`, and
+later updates `status` when the matching `close_agent` output arrives.
+
+Two edge cases are important:
+
+- If `forked_from_id` is absent, the session is indexed as `standalone`. No Codex child link is
+  inferred from parent-side tool traffic alone.
+- If the child is indexed before the parent exists in the database, the child still keeps its
+  `parent_id`. Coordinator linking is deferred until the parent session is indexed and the
+  promotion pass can flip that parent row to `session_type = 'coordinator'`.
+
+This keeps the Codex model resilient to out-of-order discovery while preserving the same core rule
+as the Claude model: identity comes from the most authoritative source, and descriptive metadata is
+merged in from the complementary source that actually records it.
+
 ## Session Lifecycle
 
 The common operator workflow is:
