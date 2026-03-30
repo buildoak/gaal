@@ -43,7 +43,8 @@ Every gaal command answers exactly one question:
 | What happened in this session? | `gaal inspect <id>` |
 | Which sessions touched this? | `gaal who <verb> <target>` |
 | Where does this text appear? | `gaal search <query>` |
-| What past context is relevant? | `gaal recall [topic]` or `gaal recall --id <session-id>` |
+| What past context is relevant (by topic)? | `gaal recall [topic]` |
+| What's the handoff for a specific session? | `gaal recall --id <session-id>` |
 | How do I create continuity? | `gaal create-handoff` |
 
 Supporting commands: `transcript` (rendered markdown of a session), `salt`/`find-salt` (self-identification), `index` (maintenance), `tag` (annotation).
@@ -75,7 +76,8 @@ subagent      — child spawned by a coordinator
 
 **Start of session** — pull relevant context:
 ```bash
-gaal recall "topic" --format brief --limit 5
+gaal recall "topic" --format brief --limit 5    # search by topic
+gaal recall --id abc12345 --format brief         # get handoff for a specific session
 ```
 
 **End of session** — generate a handoff for the next agent:
