@@ -55,12 +55,14 @@ If you're unsure which command to reach for, match your intent to one of these s
 ## Quick Start
 
 ```bash
-gaal ls -H                              # fleet overview
-gaal inspect latest --tokens -H         # drill into newest session
-gaal who wrote CLAUDE.md                # attribution
-gaal search "auth refactor" --limit 5   # free-text search
-gaal recall --format brief              # continuity recall
-gaal create-handoff latest              # generate handoff
+gaal ls -H                                        # fleet overview
+gaal ls --session-type coordinator --since 1d -H   # parent sessions today
+gaal ls --subagent-type gsd-heavy --since 3d       # GSD dispatches
+gaal inspect latest --tokens -H                    # drill into newest session
+gaal who wrote CLAUDE.md                           # attribution
+gaal search "auth refactor" --limit 5              # free-text search
+gaal recall "topic" --format brief --limit 5       # continuity recall
+gaal create-handoff latest                         # generate handoff (costs $)
 ```
 
 ## Session Taxonomy
@@ -71,7 +73,7 @@ coordinator   — parent that spawned subagents via Agent tool
 subagent      — child spawned by a coordinator
 ```
 
-`gaal ls` hides subagents by default. `--include-subagents` or `--session-type subagent` to surface them. `inspect` shows a Subagents table for coordinators, parent linkage for subagents. Attribution via `who` flows through the chain — if a subagent wrote a file, gaal traces it back through the parent.
+`gaal ls` shows all session types by default. `--skip-subagents` hides subagent sessions. `--session-type subagent` restricts to subagents only. `inspect` shows a Subagents table for coordinators, parent linkage for subagents. Attribution via `who` flows through the chain — if a subagent wrote a file, gaal traces it back through the parent.
 
 ## Continuity Protocol
 
@@ -83,7 +85,8 @@ gaal recall --id abc12345 --format brief         # get handoff for a specific se
 
 **End of session** — generate a handoff for the next agent:
 ```bash
-gaal create-handoff
+gaal create-handoff                     # costs real $ (LLM dispatch via agent-mux)
+gaal create-handoff --dry-run           # preview without spending
 ```
 
 Recall quality depends on indexed handoffs. If recall returns nothing useful, check `gaal index status` — you may need `gaal index backfill`.
@@ -92,17 +95,24 @@ Recall quality depends on indexed handoffs. If recall returns nothing useful, ch
 
 When an agent needs to identify its own running session:
 
+**Step 1** — one Bash tool call:
 ```bash
-SALT=$(gaal salt)
-echo "$SALT"
-# find-salt returns full session context in one call: model, type, tokens, transcript, handoff
-gaal find-salt "$SALT"
-# Or with jq to extract specific fields:
-JSONL=$(gaal find-salt "$SALT" | jq -r .jsonl_path)
-gaal create-handoff --jsonl "$JSONL"
+gaal salt
+```
+Prints `GAAL_SALT_<hex>` to stdout. Claude Code records this in the session JSONL automatically. Read the token from the tool result.
+
+**Step 2** — separate Bash tool call (JSONL must flush between steps):
+```bash
+gaal find-salt GAAL_SALT_<hex>
+```
+Substitute the literal token from step 1. Returns full session context in one call.
+
+To chain into handoff creation:
+```bash
+gaal find-salt GAAL_SALT_<hex> | jq -r .jsonl_path | xargs gaal create-handoff --jsonl
 ```
 
-`salt` and `find-salt` must be separate tool calls — the JSONL must flush between them.
+Shell variables do NOT persist between Bash tool calls — always pass the literal token, never `$SALT`.
 
 `find-salt` returns enriched output when the session is indexed: `model`, `session_type`, `cwd`, `turns`, `total_tokens`, `transcript_path`, `transcript_exists`, and `handoff` status. If not indexed, it falls back to `session_id`, `engine`, `jsonl_path`, and `"indexed": false`.
 

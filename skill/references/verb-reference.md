@@ -37,6 +37,8 @@ Fleet view across sessions.
 | Flag | Meaning |
 |------|---------|
 | `--engine <ENGINE>` | Filter by `claude` or `codex` |
+| `--session-type <TYPE>` | Filter by `coordinator`, `standalone`, or `subagent` |
+| `--subagent-type <TYPE>` | Filter by subagent type (e.g. `gsd-heavy`, `gsd-coordinator`, `Explore`) |
 | `--since <SINCE>` | Lower bound; supports durations/dates such as `1d` or `2026-03-01` |
 | `--before <BEFORE>` | Upper bound date/time |
 | `--cwd <CWD>` | Restrict by working directory substring |
@@ -45,6 +47,7 @@ Fleet view across sessions.
 | `--limit <LIMIT>` | Max number of results |
 | `--aggregate` | Return totals instead of individual sessions |
 | `--all` | Include noisy sessions (0 tool calls and <30s duration) |
+| `--skip-subagents` | Hide subagent sessions, show only standalone/coordinator |
 | `-H, --human` | Human-readable output |
 
 ### Notes
@@ -57,6 +60,8 @@ Fleet view across sessions.
 
 ```bash
 gaal ls --engine claude --since 3d --limit 5 -H
+gaal ls --session-type coordinator --since 1d -H
+gaal ls --subagent-type gsd-heavy --since 3d
 gaal ls --since 2026-03-20 --before 2026-03-21 --all
 gaal ls --aggregate --since 7d
 ```
@@ -80,6 +85,7 @@ older `show` docs.
 | `--tokens` | Token usage breakdown |
 | `--trace` | Full event timeline |
 | `--source` | Raw JSONL source path |
+| `--include-empty` | Include empty/low-signal subagents in coordinator views |
 | `--ids <IDS>` | Batch IDs in comma-delimited form |
 | `--tag <TAG>` | Batch filter by tag |
 | `-F, --full` | Include full arrays and detail fields |
@@ -245,6 +251,7 @@ LLM-powered handoff generation.
 | `--parallel <PARALLEL>` | Max concurrent batch workers |
 | `--min-turns <MIN_TURNS>` | Minimum turns required for batch candidates |
 | `--this` | Prefer nearest detected session over parent session |
+| `--effort <EFFORT>` | Effort level: `low`, `medium`, `high`, `xhigh`. Overrides config |
 | `--dry-run` | Preview candidates without processing |
 | `-H, --human` | Human-readable output |
 
@@ -331,5 +338,5 @@ Find the first JSONL file containing the provided salt token.
 ### Example
 
 ```bash
-gaal find-salt "$SALT"
+gaal find-salt GAAL_SALT_abc123    # use the literal token from `gaal salt`, never a shell variable
 ```
