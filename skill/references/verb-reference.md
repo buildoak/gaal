@@ -23,6 +23,7 @@ Current top-level commands:
 9. `create-handoff` — LLM extraction into handoff markdown
 10. `index` — index maintenance
 11. `tag` — apply/remove tags
+12. `resolve` — resolve short ID to full paths and metadata
 
 There is **no separate `active` command** in the current binary.
 
@@ -308,6 +309,41 @@ Apply or remove tags on a session.
 gaal tag 249aad1e "research"
 gaal tag 249aad1e --remove "research"
 gaal tag ls
+```
+
+---
+
+## 12. `resolve`
+
+Resolve a short session ID to full session paths and metadata.
+
+### Flags
+
+| Flag | Meaning |
+|------|---------|
+| `--engine <ENGINE>` | Filter by `claude` or `codex` to disambiguate |
+
+### JSON Output
+
+| Field | Meaning |
+|-------|---------|
+| `session_id` | Full session ID |
+| `short_id` | Resolved short ID |
+| `engine` | Source engine |
+| `jsonl_path` | Full path to the source JSONL |
+| `transcript_path` | Full path to the rendered transcript markdown |
+| `transcript_exists` | Whether the transcript file exists |
+| `handoff_path` | Full path to the handoff markdown |
+| `handoff_exists` | Whether the handoff file exists |
+| `session_type` | Session taxonomy value |
+| `model` | Recorded model name |
+
+### Examples
+
+```bash
+gaal resolve dc5e98dc
+gaal resolve dc5e98dc -H
+gaal resolve dc5e98dc --engine claude
 ```
 
 ---

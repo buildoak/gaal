@@ -104,6 +104,77 @@ JSONL:   /path/to/session.jsonl
 Status:  not indexed (run 'gaal index backfill' to index)
 ```
 
+# `gaal resolve`
+
+Purpose: resolve a short session ID to session metadata and derived artifact paths.
+
+## Usage
+
+```bash
+gaal resolve [OPTIONS] [ID]
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `-H`, `--human` | Human-readable output (otherwise JSON) |
+| `--engine <claude|codex>` | Filter by engine to disambiguate |
+
+## JSON Output
+
+- `session_id` — full session identifier from the index
+- `short_id` — first 8 characters of `session_id`
+- `engine` — `claude` or `codex`
+- `jsonl_path` — absolute path to the source JSONL file
+- `transcript_path` — expected rendered transcript markdown path
+- `transcript_exists` — whether the transcript file exists on disk
+- `handoff_path` — expected handoff markdown path
+- `handoff_exists` — whether the handoff file exists on disk
+- `session_type` — `standalone`, `coordinator`, or `subagent`
+- `model` — model name (for example `claude-opus-4-6`)
+
+## Real Examples
+
+JSON output:
+
+```bash
+$ target/release/gaal resolve dc5e98dc
+{
+  "session_id": "dc5e98dc",
+  "short_id": "dc5e98dc",
+  "engine": "claude",
+  "jsonl_path": "/Users/otonashi/.claude/projects/-Users-otonashi-thinking-pratchett-os-coordinator/dc5e98dc-5ed4-4de3-a440-d92defaeb9b1.jsonl",
+  "transcript_path": "/Users/otonashi/.gaal/data/claude/sessions/2026/03/30/dc5e98dc.md",
+  "transcript_exists": true,
+  "handoff_path": "/Users/otonashi/.gaal/data/claude/handoffs/2026/03/30/dc5e98dc.md",
+  "handoff_exists": false,
+  "session_type": "coordinator",
+  "model": "claude-opus-4-6"
+}
+```
+
+Human-readable output (`-H`):
+
+```bash
+$ target/release/gaal resolve dc5e98dc -H
+Session:    dc5e98dc (claude-opus-4-6, coordinator)
+JSONL:      ~/.claude/projects/-Users-otonashi-thinking-pratchett-os-coordinator/dc5e98dc-5ed4-4de3-a440-d92defaeb9b1.jsonl
+Transcript: ~/.gaal/data/claude/sessions/2026/03/30/dc5e98dc.md [ok]
+Handoff:    ~/.gaal/data/claude/handoffs/2026/03/30/dc5e98dc.md [not generated]
+```
+
+## Exit Codes
+
+- `0` — found
+- `2` — ambiguous
+- `3` — not found
+
+## Related Commands
+
+- [`gaal inspect`](./drill-down.md)
+- [`gaal find-salt`](./self-id.md)
+
 ## Self-Handoff Protocol
 
 1. Run `gaal salt` and capture the emitted token.

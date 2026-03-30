@@ -21,7 +21,7 @@ gaal recall "auth refactor" --format brief
   - [Attribution: who](commands/attribution.md)
   - [Search & Recall: search, recall](commands/search-recall.md)
   - [Handoff: create-handoff](commands/handoff.md)
-  - [Self-Identification: salt, find-salt](commands/self-id.md)
+  - [Self-Identification: salt, find-salt, resolve](commands/self-id.md)
   - [Index & Tags: index, tag](commands/index-tags.md)
 - [Agent Guide](agent-guide.md) -- how agents should consume gaal output
 - [Formats Reference](formats.md) -- output formats, exit codes

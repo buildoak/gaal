@@ -18,6 +18,7 @@
 | `latest` selector in `tag`: `gaal tag latest add/remove/ls` — latest resolution extended to tag command, parity with inspect/transcript | 2026-03-30 | [commit: 29826b7, session: 0e49b03c] |
 | Orphan recovery: `gaal index recover-orphans` — recovered 3,437 subagents from 4,173 orphan files across 400 parent groups. 9 ghost parents created with `_recovered` tag. 736 collisions (prompt_suggestion noise). Symlink dedup, FK-safe ghost insertion, savepoint-per-orphan. | 2026-03-29 | [session: 0e49b03c] |
 | `subagent_type` indexing (P0): Extract from Agent tool_use input via prompt-matching correlation. New `subagent_type` column in sessions table, `--subagent-type` filter on `ls`, shown in inspect human/JSON. Auto-tag on ingest (P2). `task` field in ls/inspect JSON (P1). | 2026-03-30 | |
+| `gaal resolve` command: short ID to full paths/metadata. DB-only lookup, path construction, existence checks. JSON default, -H human. Exit codes 0/2/3. | 2026-03-30 | |
 
 ---
 

@@ -8,7 +8,7 @@ description: |
   session search, who wrote, who read, who ran, fleet view, inspect session, recall context,
   transcript, tag management, self-identification, salt token, subagents, token accounting,
   cache tokens, continuity, prior context, attribution, handoff.
-  11 commands. JSON default, -H for human. AX errors teach agents what went wrong + how to recover.
+  12 commands. JSON default, -H for human. AX errors teach agents what went wrong + how to recover.
 ---
 
 # gaal
@@ -42,6 +42,7 @@ Every gaal command answers exactly one question:
 | What sessions exist? | `gaal ls` |
 | Which GSD dispatches happened? | `gaal ls --subagent-type gsd-heavy` |
 | What happened in this session? | `gaal inspect <id>` |
+| What is the full path for this session ID? | `gaal resolve <id>` |
 | Which sessions touched this? | `gaal who <verb> <target>` |
 | Where does this text appear? | `gaal search <query>` |
 | What past context is relevant (by topic)? | `gaal recall [topic]` |
@@ -59,6 +60,7 @@ gaal ls -H                                        # fleet overview
 gaal ls --session-type coordinator --since 1d -H   # parent sessions today
 gaal ls --subagent-type gsd-heavy --since 3d       # GSD dispatches
 gaal inspect latest --tokens -H                    # drill into newest session
+gaal resolve dc5e98dc                              # resolve ID to paths
 gaal who wrote CLAUDE.md                           # attribution
 gaal search "auth refactor" --limit 5              # free-text search
 gaal recall "topic" --format brief --limit 5       # continuity recall

@@ -124,7 +124,7 @@ Path from parent to subagent file is deterministic:
 
 ## v0.1.0 Scope
 
-Eleven commands. Core session observability without monitoring features.
+Twelve commands. Core session observability without monitoring features.
 
 | # | Command | What it does |
 |---|---------|-------------|
@@ -139,8 +139,9 @@ Eleven commands. Core session observability without monitoring features.
 | 9 | `gaal find-salt <token>` | Find JSONL file by salt token. Content-addressed discovery. |
 | 10 | `gaal index <sub>` | Index maintenance: backfill, reindex, prune, import-eywa, status. |
 | 11 | `gaal tag` | Tag management: add, remove, ls. |
+| 12 | `gaal resolve <id>` | Resolve short ID to full session paths and metadata. |
 
-**What's in:** Query, search, inspect, transcript, handoff generation, self-identification, tagging, subagent indexing/attribution, dual Claude+Codex support, AX error messages.
+**What's in:** Query, search, inspect, resolve, transcript, handoff generation, self-identification, tagging, subagent indexing/attribution, dual Claude+Codex support, AX error messages.
 
 **What's out:** Process monitoring, live tailing, real-time status, cross-session injection, daemon mode, web UI. See Feature Kill List.
 
