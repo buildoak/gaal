@@ -21,6 +21,11 @@ use crate::parser::{claude, codex, detect_engine};
 // Dubai timezone: UTC+4.
 const DUBAI_OFFSET_SECS: i32 = 4 * 3600;
 
+/// Render format version. Bump when the output format changes materially
+/// (e.g., adding Agent tool result rendering, changing frontmatter fields).
+/// Cached transcripts with a different version are considered stale and re-rendered.
+pub const RENDER_VERSION: u32 = 2;
+
 /// Default truncation limit for turn content (chars).
 const TRUNCATION_LIMIT: usize = 100_000;
 /// Preview size when truncation applies.
@@ -1550,12 +1555,13 @@ fn render_frontmatter(session: &SessionData) -> String {
         .unwrap_or_else(|| "unknown".to_string());
 
     format!(
-        "---\nsession_id: {sid}\ndate: {date_str}\nstart: {start_str}\nend: {end_str}\nduration: {duration_str}\nmodel: {model_str}\nturns: {}\ntotal_input_tokens: {}\ntotal_output_tokens: {}\ncache_read_tokens: {}\ncache_creation_tokens: {}\n---",
+        "---\nsession_id: {sid}\ndate: {date_str}\nstart: {start_str}\nend: {end_str}\nduration: {duration_str}\nmodel: {model_str}\nturns: {}\ntotal_input_tokens: {}\ntotal_output_tokens: {}\ncache_read_tokens: {}\ncache_creation_tokens: {}\nrender_version: {}\n---",
         session.turns.len(),
         session.total_input_tokens,
         session.total_output_tokens,
         session.cache_read_tokens,
-        session.cache_creation_tokens
+        session.cache_creation_tokens,
+        RENDER_VERSION
     )
 }
 

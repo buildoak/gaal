@@ -95,11 +95,11 @@ fn resolve_markdown_path(
     force: bool,
 ) -> Result<PathBuf, GaalError> {
     if !force {
-        if paths.gaal_path.exists() {
+        if paths.gaal_path.exists() && !is_stale_render(&paths.gaal_path) {
             return Ok(paths.gaal_path.clone());
         }
         if let Some(external_path) = &paths.external_path {
-            if external_path.exists() {
+            if external_path.exists() && !is_stale_render(external_path) {
                 return Ok(external_path.clone());
             }
         }
@@ -108,6 +108,44 @@ fn resolve_markdown_path(
     let markdown = render_markdown(session, Some(conn))?;
     write_markdown_file(&paths.gaal_path, &markdown)?;
     Ok(paths.gaal_path.clone())
+}
+
+/// Check if a cached transcript was rendered with an older version.
+/// Reads the first 20 lines looking for `render_version: N` in frontmatter.
+/// Missing version field means pre-versioning cache (always stale).
+fn is_stale_render(path: &Path) -> bool {
+    use std::io::{BufRead, BufReader};
+    let Ok(file) = fs::File::open(path) else {
+        return true;
+    };
+    let reader = BufReader::new(file);
+    let mut in_frontmatter = false;
+    for (i, line) in reader.lines().enumerate() {
+        if i > 20 {
+            break;
+        }
+        let Ok(line) = line else {
+            break;
+        };
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            if !in_frontmatter {
+                in_frontmatter = true;
+                continue;
+            } else {
+                // End of frontmatter — no render_version found.
+                return true;
+            }
+        }
+        if in_frontmatter {
+            if let Some(version_str) = trimmed.strip_prefix("render_version:") {
+                let version: u32 = version_str.trim().parse().unwrap_or(0);
+                return version != crate::render::session_md::RENDER_VERSION;
+            }
+        }
+    }
+    // No frontmatter or no render_version field found.
+    true
 }
 
 fn render_markdown(session: &SessionRow, conn: Option<&Connection>) -> Result<String, GaalError> {
