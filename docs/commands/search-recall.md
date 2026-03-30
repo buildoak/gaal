@@ -70,6 +70,7 @@ gaal recall [OPTIONS] [QUERY]
 
 ## Flags
 
+- `--id <session-id>`: direct handoff lookup by session ID (bypasses semantic search). Supports prefix and `latest`. Mutually exclusive with positional QUERY.
 - `--days-back <n>`: default `14`
 - `--limit <n>`: default `3`
 - `--format <summary|handoff|brief|full|eywa>`: default `brief`
@@ -84,9 +85,11 @@ gaal recall [OPTIONS] [QUERY]
 - `full`: summary plus handoff, files, and errors.
 - `eywa`: legacy markdown-oriented layout.
 
-If no query is passed, `recall` prints usage help and exits successfully.
+If no query and no `--id` is passed, `recall` prints usage help and exits successfully.
 
-## Real Example
+## Real Examples
+
+### Semantic search (default)
 
 ```bash
 $ gaal recall subagent --limit 2 -H
@@ -96,6 +99,19 @@ Projects: gaal, coordinator
 Keywords: gaal, subagent, transcript, who, BACKLOG.md
 Substance: 3 | Duration: 327m | Score: 44.9
 ```
+
+### Direct lookup by session ID
+
+```bash
+$ gaal recall --id 66ce8874 --format brief -H
+━━━ Session 66ce8874 (2026-03-29) ━━━
+Headline: Coordinated agent-mux and gaal workstreams, shipped the gaal AX harness...
+Projects: coordinator, gaal, tg-bot-ts-v2
+Keywords: agent-mux, gaal, AX testing, LaunchAgent, Telegram bot
+Substance: 3 | Duration: 532m | Score: 0.0
+```
+
+Direct lookup bypasses semantic search entirely — it queries the handoffs table by session ID. No scoring, no recency weighting, no query tokenization. Supports prefix matching and `latest`.
 
 ## Related Commands
 

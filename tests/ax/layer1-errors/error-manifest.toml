@@ -182,6 +182,30 @@ command = "gaal recall 'xyzzy_nonexistent_impossible_term_999'"
 expected_exit = 0
 description = "Recall with gibberish still fuzzy-matches — returns low-score results (exit 0)"
 
+[[errors]]
+name = "recall-id-not-found"
+command = "gaal recall --id zzzzzzzz"
+expected_exit = 3
+description = "recall --id with nonexistent session ID"
+
+[[errors]]
+name = "recall-id-not-found-human"
+command = "gaal recall --id zzzzzzzz -H"
+expected_exit = 3
+description = "recall --id with nonexistent session ID (human mode)"
+
+[[errors]]
+name = "recall-id-and-query-conflict"
+command = "gaal recall --id abc12345 'some query'"
+expected_exit = 11
+description = "recall --id and positional QUERY are mutually exclusive"
+
+[[errors]]
+name = "recall-id-and-query-conflict-human"
+command = "gaal recall --id abc12345 'some query' -H"
+expected_exit = 11
+description = "recall --id and positional QUERY are mutually exclusive (human mode)"
+
 # ─── Exit code 0: Success paths that are edge cases ───────────────────────────
 
 [[errors]]

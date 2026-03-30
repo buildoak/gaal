@@ -7,8 +7,9 @@ use clap::{Args, ValueEnum};
 use rusqlite::Connection;
 use serde::Serialize;
 
+use crate::commands::inspect::{find_latest_session_id, find_session_ids_by_prefix};
 use crate::db::open_db_readonly;
-use crate::db::queries::get_facts;
+use crate::db::queries::{get_facts, get_handoff};
 use crate::error::GaalError;
 use crate::model::{Fact, FactType, HandoffRecord};
 use crate::output::json::print_json;
@@ -18,6 +19,9 @@ use crate::output::json::print_json;
 pub struct RecallArgs {
     /// Query text for semantic session lookup.
     pub query: Option<String>,
+    /// Direct handoff lookup by session ID. Bypasses semantic search.
+    /// Supports ID prefix and `latest`. Mutually exclusive with QUERY.
+    pub id: Option<String>,
     /// Recency window in days.
     #[arg(long, default_value_t = 14)]
     pub days_back: i64,
@@ -110,6 +114,18 @@ struct ErrorOutput {
 
 /// Execute `gaal recall`.
 pub fn run(args: RecallArgs) -> Result<(), GaalError> {
+    // --id and QUERY are mutually exclusive
+    if args.id.is_some() && args.query.is_some() {
+        return Err(GaalError::ParseError(
+            "recall --id and QUERY are mutually exclusive; use one or the other".to_string(),
+        ));
+    }
+
+    // Direct lookup by session ID
+    if let Some(ref raw_id) = args.id {
+        return run_by_id(raw_id, &args);
+    }
+
     if args.query.is_none() {
         print_recall_help();
         return Ok(());
@@ -135,6 +151,64 @@ pub fn run(args: RecallArgs) -> Result<(), GaalError> {
     if ranked.is_empty() {
         return Err(GaalError::NoResults);
     }
+
+    match args.format {
+        RecallFormat::Summary => render_summary(&ranked, args.human),
+        RecallFormat::Brief => render_brief(&ranked, args.human),
+        RecallFormat::Handoff => render_handoff(&ranked, args.human),
+        RecallFormat::Full => render_full(&conn, &ranked, args.human),
+        RecallFormat::Eywa => render_eywa(&ranked, args.human),
+    }
+}
+
+/// Direct handoff retrieval by session ID. Bypasses semantic search entirely.
+fn run_by_id(raw_id: &str, args: &RecallArgs) -> Result<(), GaalError> {
+    let conn = open_db_readonly()?;
+
+    // Resolve the session ID: support `latest` and prefix matching
+    let session_id = if raw_id == "latest" {
+        find_latest_session_id(&conn)?
+    } else {
+        let matches = find_session_ids_by_prefix(&conn, raw_id)?;
+        match matches.len() {
+            0 => return Err(GaalError::NotFound(raw_id.to_string())),
+            1 => matches.into_iter().next().unwrap(),
+            _ => return Err(GaalError::AmbiguousId(raw_id.to_string())),
+        }
+    };
+
+    // Look up the handoff for this session
+    let handoff = get_handoff(&conn, &session_id)?;
+    let Some(handoff) = handoff else {
+        return Err(GaalError::NotFound(format!(
+            "handoff:{session_id}"
+        )));
+    };
+
+    // Build a started_at from the sessions table for date display
+    let started_at: String = conn
+        .query_row(
+            "SELECT started_at FROM sessions WHERE id = ?1",
+            [&session_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| String::new());
+    let session_date =
+        parse_session_date(&started_at).unwrap_or_else(|| Utc::now().date_naive());
+
+    let recall_session = RecallSession {
+        handoff,
+        started_at,
+        session_date,
+        project_tokens: HashSet::new(),
+        keyword_tokens: HashSet::new(),
+        headline_tokens: HashSet::new(),
+    };
+    let scored = ScoredSession {
+        session: recall_session,
+        score: 0.0,
+    };
+    let ranked = vec![scored];
 
     match args.format {
         RecallFormat::Summary => render_summary(&ranked, args.human),
@@ -678,8 +752,10 @@ fn print_recall_help() {
     eprintln!("gaal recall — Ranked session retrieval for continuity and context");
     eprintln!();
     eprintln!("Usage: gaal recall <query> [flags]");
+    eprintln!("       gaal recall --id <session-id> [flags]");
     eprintln!();
     eprintln!("Flags:");
+    eprintln!("  --id <id>          Direct handoff lookup by session ID (bypasses search)");
     eprintln!("  --days-back <n>    Recency window in days (default: 14)");
     eprintln!("  --limit <n>        Max number of sessions to return (default: 3)");
     eprintln!(
@@ -692,6 +768,8 @@ fn print_recall_help() {
     eprintln!("  gaal recall \"gaussian moat\" -H");
     eprintln!("  gaal recall \"auth migration\" --days-back 30 --limit 5");
     eprintln!("  gaal recall \"deploy\" --format handoff");
+    eprintln!("  gaal recall --id abc12345 --format brief -H");
+    eprintln!("  gaal recall --id latest -H");
 }
 
 const STOPWORDS: &[&str] = &[

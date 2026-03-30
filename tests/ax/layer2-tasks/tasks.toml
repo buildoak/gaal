@@ -77,6 +77,13 @@ agents_per_task = 3
 category = "recall"
 
 [[tasks]]
+name = "recall-by-id"
+prompt = "I know session 66ce8874 had the work I need. Retrieve its handoff document directly."
+expected_command_pattern = "gaal recall --id 66ce8874"
+agents_per_task = 3
+category = "recall"
+
+[[tasks]]
 name = "multi-session-compare"
 prompt = "Compare the token usage of the last 5 sessions. Which one was most expensive?"
 expected_command_pattern = "gaal ls.*(--sort.*(tokens|cost)|--limit 5)"

@@ -158,6 +158,19 @@ fn no_results_message(command: &str) -> (String, String, String) {
 
 fn not_found_message(command: &str, target: &str) -> (String, String, String) {
     match command {
+        "recall" if target.starts_with("handoff:") => {
+            let session_id = &target["handoff:".len()..];
+            (
+                format!("No handoff found for session `{session_id}`."),
+                format!("gaal recall --id {session_id} --format brief -H", session_id = &session_id[..session_id.len().min(8)]),
+                format!("Generate one with: `gaal create-handoff {session_id}`", session_id = &session_id[..session_id.len().min(8)]),
+            )
+        }
+        "recall" => (
+            format!("Session `{target}` was not found."),
+            "gaal recall --id latest -H".to_string(),
+            "List recent sessions with `gaal ls --since 7d -H` to find a valid session ID.".to_string(),
+        ),
         "transcript" => (
             format!("Session `{target}` was not found, so no transcript could be generated."),
             "gaal transcript latest -H".to_string(),
@@ -222,6 +235,11 @@ fn parse_error_message(command: &str, detail: &str) -> (String, String, String) 
             format!("The tag command arguments are invalid: {detail}"),
             "gaal tag 249aad1e deployment".to_string(),
             "Pass at least one tag to add, or use `--remove` with one or more tags to delete.".to_string(),
+        ),
+        "recall" if detail.contains("mutually exclusive") => (
+            "The `--id` flag and a positional QUERY cannot be used together.".to_string(),
+            "gaal recall --id abc12345 --format brief -H".to_string(),
+            "Use `--id <session-id>` for direct lookup or a positional query for semantic search, but not both.".to_string(),
         ),
         "index" => (
             format!("The index command arguments are invalid: {detail}"),

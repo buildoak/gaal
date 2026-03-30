@@ -71,11 +71,13 @@ Smallest defensible rule: use short IDs when you have them, and use `latest` whe
 
 ### Recall at session start
 
-Use `recall` when you are resuming work and want continuity, not when you need raw session facts.
+Use `recall` when you are resuming work and want continuity, not when you need raw session facts. Use `recall --id <session-id>` when you know which session's handoff you want. Use `recall <query>` when searching by topic.
 
 ```bash
 gaal recall --format eywa
 gaal recall 'topic' --format eywa --limit 5
+gaal recall --id abc12345 --format brief -H
+gaal recall --id latest --format handoff
 ```
 
 ### Handoff at session end

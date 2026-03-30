@@ -173,6 +173,9 @@ enum Commands {
     Recall {
         /// Optional topic query.
         query: Option<String>,
+        /// Direct handoff lookup by session ID (bypasses search). Supports prefix, `latest`.
+        #[arg(long)]
+        id: Option<String>,
         /// Recency window in days.
         #[arg(long = "days-back", default_value_t = 14)]
         days_back: u32,
@@ -505,6 +508,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
         }
         Commands::Recall {
             query,
+            id,
             days_back,
             limit,
             format,
@@ -512,6 +516,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
         } => {
             let args = gaal::commands::recall::RecallArgs {
                 query,
+                id,
                 days_back: i64::from(days_back),
                 limit,
                 format: convert_recall_format(format),
