@@ -104,3 +104,74 @@ These commands rebuild Tantivy:
 - `index reindex`
 - `index prune`
 - `index import-eywa`
+
+## Codex Subagent JSONL Schema
+
+Codex subagent tracking uses two JSONL surfaces: the child rollout's own
+`session_meta` record for identity, and the parent rollout's `response_item`
+function-call records for lifecycle metadata.
+
+### Child Side: `session_meta`
+
+Each spawned child rollout should carry a `session_meta` record near the head of
+its JSONL:
+
+```json
+{"type":"session_meta","payload":{"id":"019d261e-6e93-78d0-8f2c-29279b9e8252","forked_from_id":"019d261d-dffa-7d21-b0df-5893b4ca9aaf","source":{"subagent":{"role":"worker","nickname":"Atlas"}},"model":"gpt-5.4","cwd":"/Users/otonashi/thinking/building/gaal"}}
+```
+
+Interpretation:
+
+- `payload.id` is the child session ID.
+- `payload.forked_from_id` identifies the parent session.
+- `payload.source.subagent.role` is the child-side subagent role hint.
+- `payload.source.subagent.nickname` is the child-side nickname hint.
+- `payload.model` and `payload.cwd` describe the child rollout environment.
+
+### Parent Side: `spawn_agent`
+
+The parent rollout records subagent creation as a `response_item` with
+`payload.type = "function_call"`, followed by a matching
+`function_call_output` that returns the created agent ID.
+
+Spawn request:
+
+```json
+{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"call_spawn","arguments":"{\"agent_type\":\"worker\",\"message\":\"Investigate the failing index path\"}"}}
+```
+
+Spawn result:
+
+```json
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_spawn","output":"{\"agent_id\":\"019d2e57-8e18-7851-bbc1-93c2458fb749\",\"nickname\":\"Atlas\"}"}}
+```
+
+Interpretation:
+
+- `payload.call_id` links the output back to the original `spawn_agent` call.
+- `arguments.agent_type` is the requested Codex subagent role.
+- `arguments.message` is the prompt sent to the child.
+- `output.agent_id` is the durable child identifier returned to the parent.
+
+### Parent Side: `close_agent`
+
+The parent records subagent shutdown the same way: a `close_agent` function call
+plus a paired output record.
+
+Close request:
+
+```json
+{"type":"response_item","payload":{"type":"function_call","name":"close_agent","call_id":"call_close","arguments":"{\"target\":\"019d2e57-8e18-7851-bbc1-93c2458fb749\"}"}}
+```
+
+Close result:
+
+```json
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_close","output":"{\"previous_status\":{\"completed\":\"done\"}}"}}
+```
+
+Interpretation:
+
+- `arguments.target` names the child agent being closed.
+- `output.previous_status` reports the status observed before shutdown.
+- As with `spawn_agent`, `call_id` is the join key between request and output.
