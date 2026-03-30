@@ -369,6 +369,61 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<SessionRow>, Ga
     .map_err(db_err)
 }
 
+/// Resolve sessions by an ID prefix, optionally filtering by engine.
+pub fn resolve_by_prefix(
+    conn: &Connection,
+    prefix: &str,
+    engine: Option<&str>,
+) -> Result<Vec<SessionRow>, GaalError> {
+    let like_pattern = format!("{prefix}%");
+    let sql_with_engine = r#"
+        SELECT
+            id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
+            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
+            cache_read_tokens, cache_creation_tokens, reasoning_tokens,
+            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type
+        FROM sessions
+        WHERE id LIKE :prefix AND engine = :engine
+        ORDER BY started_at DESC
+        "#;
+    let sql_without_engine = r#"
+        SELECT
+            id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
+            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
+            cache_read_tokens, cache_creation_tokens, reasoning_tokens,
+            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type
+        FROM sessions
+        WHERE id LIKE :prefix
+        ORDER BY started_at DESC
+        "#;
+
+    let mut stmt = conn
+        .prepare(if engine.is_some() {
+            sql_with_engine
+        } else {
+            sql_without_engine
+        })
+        .map_err(db_err)?;
+    let mut rows = if let Some(engine) = engine {
+        stmt.query(named_params! {
+            ":prefix": &like_pattern,
+            ":engine": engine,
+        })
+        .map_err(db_err)?
+    } else {
+        stmt.query(named_params! {
+            ":prefix": &like_pattern,
+        })
+        .map_err(db_err)?
+    };
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(db_err)? {
+        out.push(row_to_session(row).map_err(db_err)?);
+    }
+    Ok(out)
+}
+
 /// List sessions with DB-level filtering.
 pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<SessionRow>, GaalError> {
     let cwd_like = filter.cwd.as_ref().map(|value| format!("%{value}%"));

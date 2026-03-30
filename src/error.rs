@@ -118,6 +118,7 @@ fn command_example(command: &str) -> String {
         "who" => "gaal who ran cargo --since 7d -H".to_string(),
         "search" => "gaal search \"database migration\" -H".to_string(),
         "recall" => "gaal recall \"auth migration\" -H".to_string(),
+        "resolve" => "gaal resolve dc5e98dc".to_string(),
         "find-salt" => "gaal find-salt GAAL_SALT_abc123".to_string(),
         "create-handoff" => "gaal create-handoff latest".to_string(),
         "index" => "gaal index backfill".to_string(),
@@ -181,6 +182,11 @@ fn not_found_message(command: &str, target: &str) -> (String, String, String) {
             "gaal inspect latest -H".to_string(),
             "List recent sessions with `gaal ls --since 7d -H`, then rerun `gaal inspect` with a valid 8-character ID prefix.".to_string(),
         ),
+        "resolve" => (
+            format!("No session matches ID `{target}`."),
+            "gaal resolve dc5e98dc".to_string(),
+            "Check the ID with `gaal ls -H` or use a longer prefix.".to_string(),
+        ),
         "find-salt" => (
             format!("No session JSONL file contains salt token `{target}`."),
             "gaal find-salt GAAL_SALT_abc123".to_string(),
@@ -215,6 +221,11 @@ fn parse_error_message(command: &str, detail: &str) -> (String, String, String) 
             "The inspect command needs a session selector.".to_string(),
             "gaal inspect latest -H".to_string(),
             "Pass a session ID, `latest`, `--ids`, or `--tag` to select at least one session.".to_string(),
+        ),
+        "resolve" if detail.contains("session") || detail.contains("requires") => (
+            "The resolve command needs a session ID.".to_string(),
+            "gaal resolve dc5e98dc".to_string(),
+            "Pass an 8-character session ID prefix.".to_string(),
         ),
         "who" if detail.contains("verb") => (
             "The `who` command needs a verb such as `read`, `wrote`, or `ran`.".to_string(),

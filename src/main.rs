@@ -193,6 +193,15 @@ enum Commands {
         substance: u8,
     },
 
+    /// Resolve a short session ID to paths and metadata.
+    Resolve {
+        /// Short session ID (8-char prefix).
+        id: Option<String>,
+        /// Filter by engine to disambiguate.
+        #[arg(long)]
+        engine: Option<Engine>,
+    },
+
     /// Generate a random salt token for session identification.
     Salt,
 
@@ -533,6 +542,17 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             };
             gaal::commands::recall::run(args)
         }
+        Commands::Resolve { id, engine } => {
+            let id = id.ok_or_else(|| {
+                GaalError::ParseError("resolve requires a session ID".to_string())
+            })?;
+            let args = gaal::commands::resolve::ResolveArgs {
+                id,
+                engine: engine.map(convert_engine_string),
+                human,
+            };
+            gaal::commands::resolve::run(args)
+        }
         Commands::Salt => gaal::commands::salt::run(),
         Commands::FindSalt { salt } => {
             let salt = salt.ok_or_else(|| {
@@ -733,6 +753,7 @@ fn current_command_name() -> &'static str {
             "who" => return "who",
             "search" => return "search",
             "recall" => return "recall",
+            "resolve" => return "resolve",
             "salt" => return "salt",
             "find-salt" => return "find-salt",
             "create-handoff" => return "create-handoff",

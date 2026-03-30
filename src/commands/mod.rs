@@ -4,6 +4,7 @@ pub mod index;
 pub mod inspect;
 pub mod ls;
 pub mod recall;
+pub mod resolve;
 pub mod runtime;
 pub mod salt;
 pub mod search;
