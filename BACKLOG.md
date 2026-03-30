@@ -14,6 +14,8 @@
 | CLAUDE.md rewrite with AX convention, verification protocol, feature kill list | 2026-03-29 | [commit: 1d2a70d] |
 | BACKLOG.md reconciliation | 2026-03-29 | [commit: 1cc1b1d] |
 | SKILL.md audit: verified against current command surface and binary behavior | 2026-03-29 | [commit: 3cd740a] |
+| SKILL.md rewrite: philosophy-first rewrite, eywa content killed, vision/mission/design principles added, operational manual moved to reference material | 2026-03-30 | [commit: 3cd740a, session: 0e49b03c] |
+| `latest` selector in `tag`: `gaal tag latest add/remove/ls` — latest resolution extended to tag command, parity with inspect/transcript | 2026-03-30 | [commit: 29826b7, session: 0e49b03c] |
 | Orphan recovery: `gaal index recover-orphans` — recovered 3,437 subagents from 4,173 orphan files across 400 parent groups. 9 ghost parents created with `_recovered` tag. 736 collisions (prompt_suggestion noise). Symlink dedup, FK-safe ghost insertion, savepoint-per-orphan. | 2026-03-29 | [session: 0e49b03c] |
 | `subagent_type` indexing (P0): Extract from Agent tool_use input via prompt-matching correlation. New `subagent_type` column in sessions table, `--subagent-type` filter on `ls`, shown in inspect human/JSON. Auto-tag on ingest (P2). `task` field in ls/inspect JSON (P1). | 2026-03-30 | |
 
@@ -25,13 +27,13 @@
 |----------|------|-------------|
 | ~~P0~~ | ~~Orphan recovery~~ | **SHIPPED** 2026-03-29. `gaal index recover-orphans` — 3,437 subagents recovered, 9 ghost parents, 736 prompt_suggestion collisions (expected). |
 | ~~P0~~ | ~~subagent_type indexing~~ | **SHIPPED** 2026-03-30. `subagent_type` extracted from Agent tool_use input, stored in sessions table, filterable via `--subagent-type`, auto-tagged on ingest. `task` field populated in both ls and inspect JSON via 3-level cascade. |
-| P0 | SKILL.md rewrite | Philosophy-first rewrite. Kill eywa (~20% of current content), add vision/mission/design principles. Operational manual moves to reference/ material. Needs Opus 4.6 writer. |
+| ~~P0~~ | ~~SKILL.md rewrite~~ | **SHIPPED** 2026-03-30. Philosophy-first rewrite. Eywa content killed. Vision/mission/design principles added. [commit: 3cd740a, session: 0e49b03c] |
 | P1 | AX harness sandbox fix | Use `--sandbox none` for AX test workers (our own code, not untrusted). Fixes SQLite lockfile failures in Layer 2 tasks. Dispatch config issue, not a gaal code fix. Note: AX layer2 failures on salt/find-salt were caused by Codex sandboxing (SQLite lockfile + HOME remapping), not by the salt logic itself. Salt is reliable. |
-| P1 | Subagent Phase 4 polish | ~~Orphan handling~~ (shipped), zero-turn subagents, Task column parent-description preference for v2.1.86+ sessions where `user_prompt` is not the task description. |
+| P1 | Subagent Phase 4 polish | ~~Orphan handling~~ (shipped). **Parent-description preference logic is implemented** but has an ID mismatch bug being fixed separately [session: agent-a55f90b5625e4ac74]. **Zero-turn subagent handling: NOT STARTED.** |
 | P2 | Codex subagent audit | Verify Codex parser handles subagent JSONL correctly. Test coverage for Codex coordinator→subagent flows. No confirmed bugs yet — needs investigation. |
-| P2 | `latest` selector in tag | `gaal tag latest add <tag>` — extend latest resolution beyond inspect/transcript to the tag command. |
+| ~~P2~~ | ~~`latest` selector in tag~~ | **SHIPPED** 2026-03-30. `gaal tag latest add/remove/ls` works. [commit: 29826b7, session: 0e49b03c] |
 | P2 | Agent-mux worker visibility | Workers dispatched via Bash have no `toolUseResult`, no subagent JSONL. Needs new metadata format from agent-mux side — not a gaal code problem until agent-mux emits it. |
-| P3 | Incremental parsing | SHA-256 prefix trust layer on byte-offset resume. Prevents silent corruption when session files are rewritten from start. Framework exists (`parse_session_incremental()`); needs fingerprint computation + trust gate. |
+| P3 | Incremental parsing | **Byte-offset resume is fully working and actively used.** Remaining work: SHA-256 prefix trust gate — fingerprint computation + corruption guard to prevent silent data loss when session files are rewritten from start. Framework exists (`parse_session_incremental()`). |
 
 ---
 
