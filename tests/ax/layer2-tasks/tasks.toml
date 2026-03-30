@@ -50,7 +50,7 @@ category = "handoff"
 
 [[tasks]]
 name = "self-identification"
-prompt = "You are an agent running inside a session. Identify your own session's JSONL file path so you could generate a self-handoff. Describe the exact commands you would run."
+prompt = "You are an agent running inside a session. Identify your own session — get its JSONL path, model, session type, and token usage. Describe the exact commands you would run."
 expected_command_pattern = "gaal salt.*gaal find-salt"
 agents_per_task = 3
 category = "self-id"

@@ -27,7 +27,7 @@ GAAL_SALT_d0a6e1d5530bf6c9
 
 # `gaal find-salt`
 
-Purpose: scan Claude and Codex JSONL trees and return the first file containing a salt token.
+Purpose: scan Claude and Codex JSONL trees and return the first file containing a salt token. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
 
 ## Usage
 
@@ -41,27 +41,75 @@ gaal find-salt [OPTIONS] [SALT]
 
 ## JSON Output
 
-- `session_id`
-- `engine`
-- `jsonl_path`
+When the session is indexed (has been processed by `gaal index backfill`):
+
+- `session_id` — raw filename-derived session identifier
+- `engine` — `claude` or `codex`
+- `jsonl_path` — absolute path to the JSONL file
+- `indexed` — `true`
+- `model` — model name (e.g. `claude-opus-4-6`)
+- `cwd` — working directory of the session
+- `session_type` — `standalone`, `coordinator`, or `subagent`
+- `last_event_at` — timestamp of most recent event
+- `turns` — total conversation turns
+- `total_tokens` — combined input + output tokens
+- `input_tokens` — input tokens only
+- `output_tokens` — output tokens only
+- `transcript_path` — expected path to rendered transcript markdown
+- `transcript_exists` — whether the transcript file exists on disk
+- `handoff.exists` — whether a handoff has been generated
+- `handoff.generated_at` — handoff generation timestamp (if exists)
+
+When not indexed:
+
+- `session_id`, `engine`, `jsonl_path` — same as above
+- `indexed` — `false`
 
 Notes:
 
 - The returned `session_id` is derived from the JSONL filename stem, so Codex and Claude shapes differ.
 - This command scans `~/.claude/projects/` and `~/.codex/`.
+- Enrichment is best-effort: if the DB is unavailable or the session is not indexed, the command still succeeds with the base 3 fields plus `"indexed": false`.
 
-## Real Example
+## Real Examples
+
+Enriched output (indexed session):
 
 ```bash
-$ gaal find-salt GAAL_SALT_d0a6e1d5530bf6c9
-{"engine":"codex","jsonl_path":"/Users/otonashi/.codex/sessions/2026/03/29/rollout-2026-03-29T14-46-13-019d3933-90c8-7cc3-b974-a910ab3f2e83.jsonl","session_id":"rollout-2026-03-29T14-46-13-019d3933-90c8-7cc3-b974-a910ab3f2e83"}
+$ gaal find-salt GAAL_SALT_40e4d9ceb25e0dd1
+{"cwd":"/Users/otonashi/thinking/pratchett-os/coordinator","engine":"claude","handoff":{"exists":true,"generated_at":"2026-03-27T09:45:04Z"},"indexed":true,"input_tokens":883,"jsonl_path":"/Users/otonashi/.claude/projects/.../5e54db27-a30e-455c-af24-26a3c55e511e.jsonl","last_event_at":"2026-03-27T09:45:20Z","model":"claude-opus-4-6","output_tokens":1400,"session_id":"5e54db27-a30e-455c-af24-26a3c55e511e","session_type":"coordinator","total_tokens":2283,"transcript_exists":true,"transcript_path":"/Users/otonashi/.gaal/data/claude/sessions/2026/03/27/5e54db27.md","turns":31}
+```
+
+Human-readable output (`-H`):
+
+```bash
+$ gaal find-salt GAAL_SALT_40e4d9ceb25e0dd1 -H
+Session: 5e54db27-a30e-455c-af24-26a3c55e511e
+Engine:  claude (claude-opus-4-6)
+Type:    coordinator
+CWD:     /Users/otonashi/thinking/pratchett-os/coordinator
+Tokens:  2K (883 in / 1K out) | 31 turns
+Last:    2026-03-27T09:45:20.375Z
+JSONL:   /Users/otonashi/.claude/projects/.../5e54db27-a30e-455c-af24-26a3c55e511e.jsonl
+Transcript: /Users/otonashi/.gaal/data/claude/sessions/2026/03/27/5e54db27.md
+Handoff: yes (generated 2026-03-27T09:45:04Z)
+```
+
+Non-indexed session (`-H`):
+
+```
+Session: abc12345-defg-...
+Engine:  claude
+JSONL:   /path/to/session.jsonl
+Status:  not indexed (run 'gaal index backfill' to index)
 ```
 
 ## Self-Handoff Protocol
 
 1. Run `gaal salt` and capture the emitted token.
 2. Echo that token into the live session so it is flushed into the session JSONL.
-3. Run `gaal find-salt <token>` to resolve the JSONL path, then `gaal create-handoff --jsonl <path>`.
+3. Run `gaal find-salt <token>` — this now returns full session context including JSONL path, model, session type, token counts, transcript path, and handoff status.
+4. If a handoff is needed: `gaal create-handoff --jsonl <jsonl_path>`.
 
 These must be separate tool calls because `salt` output has to be written into the session log before `find-salt` scans for it. If `find-salt` runs before the tool result is flushed, discovery can miss the active session.
 

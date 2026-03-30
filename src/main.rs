@@ -535,7 +535,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             let salt = salt.ok_or_else(|| {
                 GaalError::ParseError("find-salt requires a salt token".to_string())
             })?;
-            let args = gaal::commands::find::FindArgs { salt };
+            let args = gaal::commands::find::FindArgs { salt, human };
             gaal::commands::find::run(args)
         }
         Commands::CreateHandoff {

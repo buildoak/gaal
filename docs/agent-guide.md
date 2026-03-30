@@ -91,13 +91,19 @@ gaal create-handoff --batch --since 1d --dry-run
 
 ### Self-handoff protocol
 
-Use this when the agent must identify its own current session and generate a handoff from that exact JSONL.
+Use this when the agent must identify its own current session and generate a handoff from that exact JSONL. `find-salt` returns enriched session context (model, type, tokens, transcript path, handoff status) when the session is indexed, so you get full self-identification in one call.
 
 ```bash
 SALT=$(gaal salt)
 echo "$SALT"
-JSONL=$(gaal find-salt "$SALT" | jq -r .jsonl_path)
-gaal create-handoff --jsonl "$JSONL"
+# find-salt returns full session context: model, type, tokens, transcript, handoff status
+RESULT=$(gaal find-salt "$SALT")
+JSONL=$(echo "$RESULT" | jq -r .jsonl_path)
+# Check if handoff already exists before generating
+HAS_HANDOFF=$(echo "$RESULT" | jq -r .handoff.exists)
+if [ "$HAS_HANDOFF" != "true" ]; then
+  gaal create-handoff --jsonl "$JSONL"
+fi
 ```
 
 CRITICAL: `gaal salt` and `gaal find-salt` must be separate tool calls. The JSONL must flush between those calls or `find-salt` may miss the current session.

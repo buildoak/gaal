@@ -95,11 +95,16 @@ When an agent needs to identify its own running session:
 ```bash
 SALT=$(gaal salt)
 echo "$SALT"
+# find-salt returns full session context in one call: model, type, tokens, transcript, handoff
+gaal find-salt "$SALT"
+# Or with jq to extract specific fields:
 JSONL=$(gaal find-salt "$SALT" | jq -r .jsonl_path)
 gaal create-handoff --jsonl "$JSONL"
 ```
 
 `salt` and `find-salt` must be separate tool calls — the JSONL must flush between them.
+
+`find-salt` returns enriched output when the session is indexed: `model`, `session_type`, `cwd`, `turns`, `total_tokens`, `transcript_path`, `transcript_exists`, and `handoff` status. If not indexed, it falls back to `session_id`, `engine`, `jsonl_path`, and `"indexed": false`.
 
 Fallback if salt scanning fails (sandbox environments, unflushed logs): `gaal inspect latest --source` gives the most recent session's JSONL path.
 
