@@ -438,7 +438,9 @@ fn build_inspect_data(
         .clone()
         .or_else(|| {
             if row.session_type == "subagent" {
-                parent_subagent_description_for_inspect(conn, row).ok().flatten()
+                parent_subagent_description_for_inspect(conn, row)
+                    .ok()
+                    .flatten()
             } else {
                 None
             }
@@ -868,7 +870,9 @@ fn get_child_sessions(conn: &Connection, parent_id: &str) -> Result<Vec<SessionR
                 total_turns: row.get("total_turns")?,
                 peak_context: row.get::<_, Option<i64>>("peak_context")?.unwrap_or(0),
                 last_indexed_offset: row.get("last_indexed_offset")?,
-                subagent_type: row.get::<_, Option<String>>("subagent_type")?.filter(|s| !s.is_empty()),
+                subagent_type: row
+                    .get::<_, Option<String>>("subagent_type")?
+                    .filter(|s| !s.is_empty()),
             })
         })
         .map_err(GaalError::from)?;

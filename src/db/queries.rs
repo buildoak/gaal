@@ -878,7 +878,9 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         total_turns: row.get("total_turns")?,
         peak_context: row.get::<_, Option<i64>>("peak_context")?.unwrap_or(0),
         last_indexed_offset: row.get("last_indexed_offset")?,
-        subagent_type: row.get::<_, Option<String>>("subagent_type")?.filter(|s| !s.is_empty()),
+        subagent_type: row
+            .get::<_, Option<String>>("subagent_type")?
+            .filter(|s| !s.is_empty()),
     })
 }
 
@@ -894,8 +896,6 @@ fn cost_rates(model: &str) -> (f64, f64, f64, f64) {
         (15.0, 75.0, 1.5, 18.75)
     } else if m.contains("haiku") {
         (0.25, 1.25, 0.025, 0.3)
-    } else if m.contains("sonnet") {
-        (3.0, 15.0, 0.3, 3.75)
     } else {
         (3.0, 15.0, 0.3, 3.75) // default sonnet
     }

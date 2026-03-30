@@ -327,7 +327,7 @@ fn fmt_model(model: &str) -> String {
         return "Codex".to_string();
     }
     // o-series models (e.g. "o4-mini", "o3").
-    if lower.starts_with("o") && lower.chars().nth(1).map_or(false, |c| c.is_ascii_digit()) {
+    if lower.starts_with("o") && lower.chars().nth(1).is_some_and(|c| c.is_ascii_digit()) {
         return model.to_string();
     }
     if model.contains('-') {
@@ -444,7 +444,7 @@ fn format_with_commas(n: i64) -> String {
     }
     let mut result = String::with_capacity(len + len / 3);
     for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(b as char);
@@ -642,7 +642,7 @@ fn collect_files(turns: &[Turn]) -> (Vec<String>, Vec<(String, String)>) {
             };
             if input
                 .as_object()
-                .map_or(false, |o| o.contains_key("_truncated"))
+                .is_some_and(|o| o.contains_key("_truncated"))
             {
                 continue;
             }
@@ -1188,10 +1188,11 @@ fn load_first_user_prompt(conn: &Connection, session_id: &str) -> Option<String>
     })
 }
 
-fn load_child_sessions(
-    conn: &Connection,
-    parent_id: &str,
-) -> Option<Vec<(String, i64, i64, i64, String, Option<String>)>> {
+type ChildSessionRow = (String, i64, i64, i64, String, Option<String>);
+type FileWriteRow = (String, String);
+type ChildFacts = (Vec<String>, Vec<FileWriteRow>, Vec<String>);
+
+fn load_child_sessions(conn: &Connection, parent_id: &str) -> Option<Vec<ChildSessionRow>> {
     let mut stmt = conn
         .prepare(
             "SELECT id, total_input_tokens, total_output_tokens, total_tools, started_at, ended_at
@@ -1217,10 +1218,7 @@ fn load_child_sessions(
     rows.collect::<std::result::Result<Vec<_>, _>>().ok()
 }
 
-fn load_child_facts(
-    conn: &Connection,
-    child_id: &str,
-) -> Option<(Vec<String>, Vec<(String, String)>, Vec<String>)> {
+fn load_child_facts(conn: &Connection, child_id: &str) -> Option<ChildFacts> {
     let mut stmt = conn
         .prepare(
             "SELECT fact_type, subject, detail

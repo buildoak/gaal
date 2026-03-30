@@ -180,9 +180,7 @@ fn run_by_id(raw_id: &str, args: &RecallArgs) -> Result<(), GaalError> {
     // Look up the handoff for this session
     let handoff = get_handoff(&conn, &session_id)?;
     let Some(handoff) = handoff else {
-        return Err(GaalError::NotFound(format!(
-            "handoff:{session_id}"
-        )));
+        return Err(GaalError::NotFound(format!("handoff:{session_id}")));
     };
 
     // Build a started_at from the sessions table for date display
@@ -193,8 +191,7 @@ fn run_by_id(raw_id: &str, args: &RecallArgs) -> Result<(), GaalError> {
             |row| row.get(0),
         )
         .unwrap_or_else(|_| String::new());
-    let session_date =
-        parse_session_date(&started_at).unwrap_or_else(|| Utc::now().date_naive());
+    let session_date = parse_session_date(&started_at).unwrap_or_else(|| Utc::now().date_naive());
 
     let recall_session = RecallSession {
         handoff,

@@ -53,10 +53,8 @@ pub fn extract_subagent_summaries(parent_jsonl: &Path) -> Result<Vec<SubagentMet
                         if let Some(input) = block.get("input") {
                             if let Some(st) = input.get("subagent_type").and_then(|v| v.as_str()) {
                                 if !st.is_empty() {
-                                    let prompt_key = input
-                                        .get("prompt")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("");
+                                    let prompt_key =
+                                        input.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
                                     let key = prompt_match_key(prompt_key);
                                     prompt_to_subagent_type.insert(key, st.to_string());
                                 }
@@ -391,10 +389,7 @@ mod tests {
 
         let summaries = extract_subagent_summaries(&path).expect("parse");
         assert_eq!(summaries.len(), 1);
-        assert_eq!(
-            summaries[0].subagent_type.as_deref(),
-            Some("gsd-heavy")
-        );
+        assert_eq!(summaries[0].subagent_type.as_deref(), Some("gsd-heavy"));
         assert_eq!(summaries[0].description, "Build the auth module");
     }
 
@@ -427,7 +422,10 @@ mod tests {
             "019d2e57-8e18-7851-bbc1-93c2458fb749"
         );
         assert_eq!(summaries[0].prompt, "Investigate the failing index path");
-        assert_eq!(summaries[0].description, "Investigate the failing index path");
+        assert_eq!(
+            summaries[0].description,
+            "Investigate the failing index path"
+        );
         assert_eq!(summaries[0].status, "completed");
         assert_eq!(summaries[0].subagent_type.as_deref(), Some("explorer"));
         assert_eq!(summaries[0].total_tokens, 0);

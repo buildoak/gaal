@@ -206,20 +206,24 @@ fn print_human(session_id: &str, engine: &str, jsonl_path: &Path, enriched: &Opt
             println!("Engine:  {engine} ({model_label})");
             println!("Type:    {}", e.session_type);
             println!("CWD:     {cwd_label}");
-            println!("Tokens:  {total_k} ({in_k} in / {out_k} out) | {} turns", e.turns);
+            println!(
+                "Tokens:  {total_k} ({in_k} in / {out_k} out) | {} turns",
+                e.turns
+            );
             println!("Last:    {last_label}");
             println!("JSONL:   {}", jsonl_path.display());
 
             if let Some(tp) = &e.transcript_path {
-                let exists_label = if e.transcript_exists { "" } else { " (not rendered)" };
+                let exists_label = if e.transcript_exists {
+                    ""
+                } else {
+                    " (not rendered)"
+                };
                 println!("Transcript: {tp}{exists_label}");
             }
 
             let handoff_label = if e.handoff_exists {
-                let gen = e
-                    .handoff_generated_at
-                    .as_deref()
-                    .unwrap_or("unknown time");
+                let gen = e.handoff_generated_at.as_deref().unwrap_or("unknown time");
                 format!("yes (generated {gen})")
             } else {
                 "no".to_string()

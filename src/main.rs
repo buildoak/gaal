@@ -724,8 +724,7 @@ fn single_or_none(flag: &str, values: Vec<String>) -> Result<Option<String>, Gaa
 }
 
 fn current_command_name() -> &'static str {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
+    for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-H" | "--human" => continue,
             "ls" => return "ls",

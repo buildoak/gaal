@@ -664,6 +664,7 @@ fn classify_engine(pid: u32, binary_path: Option<&str>) -> Option<Engine> {
 ///
 /// On macOS, KERN_PROCARGS2 returns: argc (i32) + exec_path (null-terminated)
 /// + padding nulls + argv strings (null-terminated each).
+///
 /// This is a standard macOS API — no special permissions needed for own-user
 /// processes.
 #[cfg(target_os = "macos")]
@@ -1361,13 +1362,13 @@ fn extract_first_user_prompt(path: &Path) -> Option<String> {
         }
 
         // Codex format: type == "message" with role == "user"
-        if msg_type == Some("message") {
-            if record.get("role").and_then(serde_json::Value::as_str) == Some("user") {
-                if let Some(text) = record.get("content").and_then(serde_json::Value::as_str) {
-                    let truncated = truncate_summary(text, 60);
-                    if !truncated.is_empty() {
-                        return Some(truncated);
-                    }
+        if msg_type == Some("message")
+            && record.get("role").and_then(serde_json::Value::as_str) == Some("user")
+        {
+            if let Some(text) = record.get("content").and_then(serde_json::Value::as_str) {
+                let truncated = truncate_summary(text, 60);
+                if !truncated.is_empty() {
+                    return Some(truncated);
                 }
             }
         }
@@ -1534,7 +1535,7 @@ fn is_last_event_stale(path: &Path, threshold: std::time::Duration) -> bool {
         if let Some(ts_str) = ts_str {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
                 let dt_utc = dt.with_timezone(&chrono::Utc);
-                if latest_ts.map_or(true, |prev| dt_utc > prev) {
+                if latest_ts.is_none_or(|prev| dt_utc > prev) {
                     latest_ts = Some(dt_utc);
                 }
             }

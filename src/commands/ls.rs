@@ -616,7 +616,7 @@ fn u64_to_i64_saturating(value: u64) -> i64 {
 }
 
 fn estimate_cost_usd_for_rows(rows: &[SessionRow]) -> f64 {
-    let total: f64 = rows.iter().map(|r| queries::estimate_session_cost(r)).sum();
+    let total: f64 = rows.iter().map(queries::estimate_session_cost).sum();
     (total * 100.0).round() / 100.0
 }
 
@@ -656,7 +656,7 @@ fn build_query_window(conn: &Connection, filter: &ListFilter) -> Result<QueryWin
 fn get_earliest_session_date(conn: &Connection) -> Result<Option<String>, GaalError> {
     let mut stmt =
         conn.prepare("SELECT started_at FROM sessions ORDER BY started_at ASC LIMIT 1")?;
-    let mut rows = stmt.query_map([], |row| Ok(row.get::<_, String>("started_at")?))?;
+    let mut rows = stmt.query_map([], |row| row.get::<_, String>("started_at"))?;
 
     if let Some(row) = rows.next() {
         Ok(Some(row?))

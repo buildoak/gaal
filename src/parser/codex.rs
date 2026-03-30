@@ -164,12 +164,12 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                             .pointer("/payload/model")
                             .and_then(Value::as_str)
                             .map(str::to_string);
-                        let stop_reason = Some(extract_codex_stop_reason(&record));
+                        let stop_reason = extract_codex_stop_reason(&record);
 
                         // Deduplicate: task_complete's last_agent_message often
                         // repeats the preceding agent_message. Only emit an
                         // AssistantMessage if the text is new.
-                        let is_duplicate = assistant_text.as_ref().map_or(true, |text| {
+                        let is_duplicate = assistant_text.as_ref().is_none_or(|text| {
                             events.iter().rev().any(|ev| {
                                 if let EventKind::AssistantMessage { content, .. } = &ev.kind {
                                     content.iter().any(|block| {
@@ -194,7 +194,7 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                                 kind: EventKind::AssistantMessage {
                                     content,
                                     model,
-                                    stop_reason: stop_reason.clone(),
+                                    stop_reason: Some(stop_reason.clone()),
                                 },
                             });
                         }
@@ -202,7 +202,7 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                         events.push(SessionEvent {
                             timestamp: ts.clone(),
                             kind: EventKind::StopSignal {
-                                reason: stop_reason.unwrap_or_else(|| "task_complete".to_string()),
+                                reason: stop_reason,
                             },
                         });
                     }
@@ -462,12 +462,8 @@ mod tests {
     #[test]
     fn incremental_parse_keeps_tool_metadata_for_prior_call_ids() {
         let path = temp_path("incremental");
-        let call = concat!(
-            "{\"timestamp\":\"2026-03-07T10:00:00Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"cargo build\\\"}\",\"call_id\":\"call_1\"}}\n"
-        );
-        let output = concat!(
-            "{\"timestamp\":\"2026-03-07T10:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"Command failed\\nProcess exited with code 1\"}}\n"
-        );
+        let call = "{\"timestamp\":\"2026-03-07T10:00:00Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"cargo build\\\"}\",\"call_id\":\"call_1\"}}\n";
+        let output = "{\"timestamp\":\"2026-03-07T10:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"Command failed\\nProcess exited with code 1\"}}\n";
         fs::write(&path, format!("{call}{output}")).unwrap();
 
         let events = parse_events_from_offset(&path, call.len() as u64).unwrap();

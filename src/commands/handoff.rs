@@ -108,6 +108,15 @@ struct DetectedSession {
     pid: u32,
 }
 
+#[derive(Clone, Copy)]
+struct HandoffRequest<'a> {
+    engine: &'a str,
+    model: &'a str,
+    prompt: &'a str,
+    provider: &'a str,
+    format: &'a str,
+}
+
 /// Runs the `gaal create-handoff` workflow.
 pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
     let mut config = load_config();
@@ -130,7 +139,10 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
             "xhigh" => 2710,
             _ => 0,
         };
-        let current = config.agent_mux.timeout_secs.unwrap_or(config.llm.timeout_secs);
+        let current = config
+            .agent_mux
+            .timeout_secs
+            .unwrap_or(config.llm.timeout_secs);
         if current < min_timeout {
             config.agent_mux.timeout_secs = Some(min_timeout);
         }
@@ -222,10 +234,15 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
     }
 
     let mut results = Vec::new();
+    let handoff_request = HandoffRequest {
+        engine: &engine,
+        model: &model,
+        prompt: &prompt,
+        provider: &provider,
+        format: &format,
+    };
     for session in sessions {
-        let processed = process_session_handoff(
-            &conn, &config, &session, &engine, &model, &prompt, &provider, &format,
-        )?;
+        let processed = process_session_handoff(&conn, &config, &session, handoff_request)?;
 
         results.push(HandoffRunResult {
             session_id: session.id,
@@ -307,14 +324,19 @@ fn run_batch(conn: &Connection, config: &GaalConfig, args: &HandoffArgs) -> Resu
 
     let total = candidates.len();
     let mut results = Vec::with_capacity(total);
+    let handoff_request = HandoffRequest {
+        engine: &engine,
+        model: &model,
+        prompt: &prompt,
+        provider: &provider,
+        format: &format,
+    };
 
     if args.parallel <= 1 || total <= 1 {
         for (idx, session) in candidates.iter().enumerate() {
             eprintln!("Batch {}/{}: {}", idx + 1, total, session.id);
             let started = Instant::now();
-            let outcome = process_single_batch_session(
-                conn, config, session, &engine, &model, &prompt, &provider, &format,
-            );
+            let outcome = process_single_batch_session(conn, config, session, handoff_request);
             let duration_secs = started.elapsed().as_secs_f64();
             match outcome {
                 Ok(path) => results.push(BatchResult {
@@ -374,11 +396,13 @@ fn run_batch(conn: &Connection, config: &GaalConfig, args: &HandoffArgs) -> Resu
                         &thread_conn,
                         &config,
                         &session,
-                        &engine,
-                        &model,
-                        &prompt,
-                        &provider,
-                        &format,
+                        HandoffRequest {
+                            engine: &engine,
+                            model: &model,
+                            prompt: &prompt,
+                            provider: &provider,
+                            format: &format,
+                        },
                     );
                     let duration_secs = started.elapsed().as_secs_f64();
                     let result = match outcome {
@@ -426,15 +450,9 @@ fn process_single_batch_session(
     conn: &Connection,
     config: &GaalConfig,
     session: &SessionRow,
-    engine: &str,
-    model: &str,
-    prompt: &str,
-    provider: &str,
-    format: &str,
+    request: HandoffRequest<'_>,
 ) -> Result<String, GaalError> {
-    let processed = process_session_handoff(
-        conn, config, session, engine, model, prompt, provider, format,
-    )?;
+    let processed = process_session_handoff(conn, config, session, request)?;
     Ok(processed.path.to_string_lossy().to_string())
 }
 
@@ -467,11 +485,7 @@ fn process_session_handoff(
     conn: &Connection,
     config: &GaalConfig,
     session: &SessionRow,
-    engine: &str,
-    model: &str,
-    prompt: &str,
-    provider: &str,
-    format: &str,
+    request: HandoffRequest<'_>,
 ) -> Result<ProcessedSessionHandoff, GaalError> {
     // Try session markdown transcript first (full narrative context),
     // fall back to DB facts (lossy structured context).
@@ -481,12 +495,12 @@ fn process_session_handoff(
                 "Using session transcript ({} chars) for context",
                 transcript.len()
             );
-            build_context_from_transcript(session, &transcript, provider, format)
+            build_context_from_transcript(session, &transcript, request.provider, request.format)
         }
         None => {
             eprintln!("No session transcript found, falling back to DB facts");
             let facts = get_facts(conn, &session.id, None)?;
-            build_context(session, &facts, provider, format)
+            build_context(session, &facts, request.provider, request.format)
         }
     };
 
@@ -500,10 +514,10 @@ fn process_session_handoff(
     for attempt in 1..=max_attempts {
         response = invoke_agent_mux(
             &config.agent_mux,
-            engine,
-            model,
+            request.engine,
+            request.model,
             session.cwd.as_deref().unwrap_or("."),
-            prompt,
+            request.prompt,
             &context,
             timeout_secs,
         )?;
@@ -537,7 +551,7 @@ fn process_session_handoff(
     let frontmatter = build_handoff_frontmatter(session, &extracted, session_engine, session_model);
     let full_content = format!("{}{}", frontmatter, response);
     let handoff_path = write_handoff_markdown(session, &full_content)?;
-    let generated_by = build_generated_by_label(&config.agent_mux, engine, model);
+    let generated_by = build_generated_by_label(&config.agent_mux, request.engine, request.model);
 
     let record = HandoffRecord {
         session_id: session.id.clone(),

@@ -78,10 +78,9 @@ pub fn run_recover_orphans(args: RecoverOrphansArgs) -> Result<(), GaalError> {
 
             let canonical_path_str = canonical_path.to_string_lossy().to_string();
             let existing_parent_id: Option<Option<String>> = stmt
-                .query_row(
-                    named_params! { ":path": &canonical_path_str },
-                    |row| row.get(0),
-                )
+                .query_row(named_params! { ":path": &canonical_path_str }, |row| {
+                    row.get(0)
+                })
                 .optional()
                 .map_err(GaalError::from)?;
 
@@ -152,9 +151,8 @@ pub fn run_recover_orphans(args: RecoverOrphansArgs) -> Result<(), GaalError> {
                         };
                         if replace {
                             ghost_cwd = parsed.meta.cwd.clone();
-                            ghost_started_at = Some(
-                                candidate_started_at.unwrap_or_else(|| parsed.meta.started_at),
-                            );
+                            ghost_started_at =
+                                Some(candidate_started_at.unwrap_or(parsed.meta.started_at));
                         }
                     }
                     Err(err) => {
@@ -217,7 +215,7 @@ pub fn run_recover_orphans(args: RecoverOrphansArgs) -> Result<(), GaalError> {
 
         for (subagent_file, canonical_path) in group {
             processed += 1;
-            if processed % 100 == 0 {
+            if processed.is_multiple_of(100) {
                 eprintln!("[{}/{}] processing orphans...", processed, total);
             }
 
