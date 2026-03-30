@@ -109,7 +109,7 @@ result=$(agent-mux \
     --engine codex \
     --model gpt-5.4 \
     --effort xhigh \
-    --sandbox workspace-write \
+    --sandbox none \
     --cwd "$GAAL_ROOT" \
     --context-file "$INPUT" \
     --context-file "${GAAL_ROOT}/skill/SKILL.md" \

@@ -153,7 +153,7 @@ result=$(agent-mux \
     --engine codex \
     --model gpt-5.4 \
     --effort xhigh \
-    --sandbox workspace-write \
+    --sandbox none \
     --cwd "$SCRIPT_DIR" \
     "${context_args[@]}" \
     "$ANALYSIS_PROMPT")
