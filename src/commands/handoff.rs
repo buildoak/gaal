@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -1016,7 +1017,10 @@ fn index_single_jsonl(
         file_size: meta.len(),
     };
 
-    match index_discovered_session(conn, &discovered, true) {
+    // For single-session on-the-fly indexing, pass an empty set — force=true
+    // already triggers full reparse so the codex error check is moot.
+    let empty_set = HashSet::new();
+    match index_discovered_session(conn, &discovered, true, &empty_set) {
         Ok(IndexOutcome::Indexed) => {
             eprintln!("On-the-fly index complete for session {}", discovered.id);
             Ok(short_id)

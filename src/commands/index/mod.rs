@@ -4,6 +4,7 @@ mod recover_orphans;
 
 pub use recover_orphans::{run_recover_orphans, RecoverOrphansArgs};
 
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -143,8 +144,12 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     };
     let total = sessions.len();
 
+    // Batch-load all session IDs with invalid codex error rows once, instead of
+    // querying per-session (which hit the wrong index and took ~60s over 2982 Codex sessions).
+    let invalid_codex_error_sessions = load_codex_invalid_error_sessions(&conn)?;
+
     for (idx, session) in sessions.into_iter().enumerate() {
-        match index_discovered_session(&mut conn, &session, args.force) {
+        match index_discovered_session(&mut conn, &session, args.force, &invalid_codex_error_sessions) {
             Ok(IndexOutcome::Indexed) => {
                 summary.indexed += 1;
                 eprintln!(
@@ -229,7 +234,9 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     }
 
     promote_codex_coordinators(&mut conn)?;
-    search::build_search_index(&conn)?;
+    if summary.indexed > 0 {
+        search::build_search_index(&conn)?;
+    }
 
     if let Some(output_dir) = &output_dir {
         let written = summary.markdown_written.unwrap_or(0);
@@ -354,6 +361,7 @@ pub(crate) fn index_discovered_session(
     conn: &mut rusqlite::Connection,
     discovered: &DiscoveredSession,
     force: bool,
+    invalid_codex_error_sessions: &HashSet<String>,
 ) -> Result<IndexOutcome, GaalError> {
     let existing = get_session(conn, &discovered.id)?;
     let file_size_i64 = u64_to_i64(discovered.file_size)?;
@@ -363,7 +371,7 @@ pub(crate) fn index_discovered_session(
         .unwrap_or(false);
     let existing_needs_full_reparse = existing
         .as_ref()
-        .map(|row| session_needs_full_reparse(conn, discovered, row))
+        .map(|row| session_needs_full_reparse(discovered, row, invalid_codex_error_sessions))
         .transpose()?
         .unwrap_or(false);
 
@@ -686,9 +694,9 @@ pub(super) fn resolve_subagent_session_id(
 }
 
 fn session_needs_full_reparse(
-    conn: &rusqlite::Connection,
     discovered: &DiscoveredSession,
     row: &SessionRow,
+    invalid_codex_error_sessions: &HashSet<String>,
 ) -> Result<bool, GaalError> {
     if discovered.engine == Engine::Claude
         && row.total_tools == 0
@@ -698,7 +706,7 @@ fn session_needs_full_reparse(
     }
 
     let has_invalid_codex_error_rows = discovered.engine == Engine::Codex
-        && session_has_codex_error_rows_with_zero_exit_code(conn, &row.id)?;
+        && invalid_codex_error_sessions.contains(&row.id);
 
     Ok(has_invalid_codex_error_rows)
 }
@@ -735,23 +743,22 @@ fn claude_jsonl_contains_inline_tool_use(path: &Path) -> Result<bool, GaalError>
     Ok(false)
 }
 
-fn session_has_codex_error_rows_with_zero_exit_code(
+/// Batch-load ALL session IDs that have invalid codex error rows (fact_type='error', exit_code=0).
+/// Called once before the backfill loop to avoid per-session queries that hit the wrong index.
+fn load_codex_invalid_error_sessions(
     conn: &rusqlite::Connection,
-    session_id: &str,
-) -> Result<bool, GaalError> {
-    conn.query_row(
-        "SELECT EXISTS(
-            SELECT 1
-            FROM facts
-            WHERE session_id = :session_id
-              AND fact_type = 'error'
-              AND exit_code = 0
-        )",
-        named_params! { ":session_id": session_id },
-        |row| row.get::<_, i64>(0),
-    )
-    .map(|exists| exists > 0)
-    .map_err(GaalError::from)
+) -> Result<HashSet<String>, GaalError> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT session_id FROM facts WHERE fact_type = 'error' AND exit_code = 0")
+        .map_err(GaalError::from)?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(GaalError::from)?;
+    let mut set = HashSet::new();
+    for row in rows {
+        set.insert(row.map_err(GaalError::from)?);
+    }
+    Ok(set)
 }
 
 fn build_full_session_row(

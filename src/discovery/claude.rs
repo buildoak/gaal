@@ -87,7 +87,15 @@ fn collect_project_jsonl_files(root: &Path) -> Vec<PathBuf> {
                 .unwrap_or(false);
 
             if is_jsonl {
-                files.push(path);
+                // Skip agent-*.jsonl — subagents are indexed via index_subagents()
+                let dominated_by_parent = entry
+                    .file_name()
+                    .to_str()
+                    .map(|n| n.starts_with("agent-"))
+                    .unwrap_or(false);
+                if !dominated_by_parent {
+                    files.push(path);
+                }
             }
         }
     }
