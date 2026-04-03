@@ -1344,19 +1344,11 @@ fn invoke_agent_mux(
         command.arg("--effort").arg(effort);
     }
 
-    // Override response truncation — handoff documents with the JSON metadata
-    // block typically need 4000-8000 chars, exceeding agent-mux's default
-    // response_max_chars (4000). Without this override, the response gets
-    // truncated and the JSON metadata block at the end is lost.
-    // Note: -1 (unlimited) is not reliably honored by agent-mux v2's config
-    // merge, so we use an explicit large value instead.
     let child = command
         .arg("--timeout")
         .arg(mux_timeout_secs.to_string())
         .arg("--cwd")
         .arg(effective_cwd)
-        .arg("--response-max-chars")
-        .arg("50000")
         .arg(request)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
