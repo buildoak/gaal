@@ -1300,25 +1300,17 @@ fn invoke_agent_mux(
 ) -> Result<String, GaalError> {
     let request = format!("{prompt}\n\n---\n\nSession context:\n{context}");
     let mux_timeout_secs = timeout_secs.saturating_sub(5).max(10);
-    let role = mux_config
-        .role
+    let profile = mux_config
+        .profile
         .as_deref()
         .map(str::trim)
-        .filter(|role| !role.is_empty());
-    let variant = mux_config
-        .variant
-        .as_deref()
-        .map(str::trim)
-        .filter(|variant| !variant.is_empty());
+        .filter(|p| !p.is_empty());
     let effort = mux_config
         .effort
         .as_deref()
         .map(str::trim)
         .filter(|effort| !effort.is_empty());
 
-    // When a role is used, agent-mux v2 resolves skills relative to --cwd.
-    // The config cwd override ensures skills are found regardless of the session's cwd.
-    // Falls back to the session's cwd if no override is configured.
     let effective_cwd = mux_config
         .cwd
         .as_deref()
@@ -1327,19 +1319,14 @@ fn invoke_agent_mux(
         .unwrap_or(cwd);
 
     let mut command = Command::new(&mux_config.path);
-    if let Some(role) = role {
-        command.arg("-R").arg(role);
-        if let Some(variant) = variant {
-            command.arg("--variant").arg(variant);
-        }
-    } else {
-        command
-            .arg("--engine")
-            .arg(engine)
-            .arg("--model")
-            .arg(model);
+    command
+        .arg("--engine")
+        .arg(engine)
+        .arg("--model")
+        .arg(model);
+    if let Some(profile) = profile {
+        command.arg("-P").arg(profile);
     }
-    // Pass --effort in both role and non-role paths
     if let Some(effort) = effort {
         command.arg("--effort").arg(effort);
     }
@@ -1598,40 +1585,25 @@ fn extract_agent_mux_error(value: &Value) -> Option<String> {
 }
 
 fn build_generated_by_label(mux_config: &AgentMuxConfig, engine: &str, model: &str) -> String {
-    let role = mux_config
-        .role
+    let profile = mux_config
+        .profile
         .as_deref()
         .map(str::trim)
-        .filter(|role| !role.is_empty());
-    let variant = mux_config
-        .variant
-        .as_deref()
-        .map(str::trim)
-        .filter(|variant| !variant.is_empty());
+        .filter(|p| !p.is_empty());
     let effort = mux_config
         .effort
         .as_deref()
         .map(str::trim)
         .filter(|effort| !effort.is_empty());
 
-    if let Some(role) = role {
-        let mut label = format!("agent-mux-v2 -R={role}");
-        if let Some(variant) = variant {
-            label.push_str(&format!(" --variant={variant}"));
-        }
-        if let Some(effort) = effort {
-            label.push_str(&format!(" --effort={effort}"));
-        }
-
-        let resolved = match effort {
-            Some(effort) => format!("{engine}/{model}/{effort}"),
-            None => format!("{engine}/{model}"),
-        };
-        label.push_str(&format!(" ({resolved})"));
-        return label;
+    let mut label = format!("agent-mux -E={engine} -m={model}");
+    if let Some(profile) = profile {
+        label.push_str(&format!(" -P={profile}"));
     }
-
-    format!("{engine}/{model}")
+    if let Some(effort) = effort {
+        label.push_str(&format!(" -e={effort}"));
+    }
+    label
 }
 
 /// Build YAML frontmatter for handoff markdown files.
