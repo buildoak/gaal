@@ -71,6 +71,7 @@ struct Turn {
 struct SessionData {
     session_id: String,
     summary: Option<String>,
+    engine: Engine,
     turns: Vec<Turn>,
     timestamp_start: Option<String>,
     timestamp_end: Option<String>,
@@ -152,7 +153,7 @@ pub fn render_session_markdown(path: &Path) -> Result<String> {
         Engine::Codex => codex::parse_events(path)?,
         Engine::Gemini => gemini::parse_events(path)?,
     };
-    let session = events_to_session_data(&events, path);
+    let session = events_to_session_data(&events, path, engine);
     Ok(session_to_markdown(&session))
 }
 
@@ -172,7 +173,7 @@ pub fn render_session_markdown_with_db(
         Engine::Codex => codex::parse_events(path)?,
         Engine::Gemini => gemini::parse_events(path)?,
     };
-    let mut session = events_to_session_data(&events, path);
+    let mut session = events_to_session_data(&events, path, engine);
 
     if let Some(sid) = override_session_id {
         session.session_id = sid.to_string();
@@ -297,6 +298,15 @@ fn fmt_duration(seconds: Option<f64>) -> String {
         format!("{h}h {m}m")
     } else {
         format!("{m}m")
+    }
+}
+
+/// Return the proper-cased assistant label for a given engine.
+fn engine_label(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Claude => "Claude",
+        Engine::Codex => "Codex",
+        Engine::Gemini => "Gemini",
     }
 }
 
@@ -804,7 +814,7 @@ fn extract_open_threads(turns: &[Turn]) -> Vec<String> {
 ///
 /// Replaces the old `parse_jsonl_to_session` — works with both Claude and
 /// Codex events since both emit the same `SessionEvent` types.
-fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
+fn events_to_session_data(events: &[SessionEvent], path: &Path, engine: Engine) -> SessionData {
     let mut session_id: Option<String> = None;
     let mut summary: Option<String> = None;
     let mut timestamps: Vec<String> = Vec::new();
@@ -1112,6 +1122,7 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path) -> SessionData {
     SessionData {
         session_id: session_id.unwrap_or(fallback_id),
         summary,
+        engine,
         turns,
         timestamp_start: ts_start,
         timestamp_end: ts_end,
@@ -1529,6 +1540,7 @@ fn session_to_markdown(session: &SessionData) -> String {
     parts.push(render_conversation(
         &session.turns,
         &session.subagent_deltas,
+        session.engine,
     ));
 
     // Open Threads.
@@ -1606,12 +1618,13 @@ fn flush_pending_tools(
     pending_time: &mut Option<String>,
     all_tool_results: &HashMap<String, String>,
     deltas_by_agent_id: &HashMap<String, &SubagentDelta>,
+    engine_label: &str,
 ) {
     if pending_tools.is_empty() {
         return;
     }
     let time = pending_time.as_deref().unwrap_or("??:??");
-    lines.push(format!("### [{time}] Claude"));
+    lines.push(format!("### [{time}] {engine_label}"));
     for ann in pending_tools.drain(..) {
         match ann {
             ToolAnnotation::Simple(s) => lines.push(s),
@@ -1649,7 +1662,8 @@ fn render_tool_annotations_inline(
 }
 
 /// Render the conversation section.
-fn render_conversation(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -> String {
+fn render_conversation(turns: &[Turn], subagent_deltas: &[SubagentDelta], engine: Engine) -> String {
+    let engine_label = engine_label(engine);
     let mut lines = vec!["## Conversation".to_string(), String::new()];
 
     // Build index of tool_results across all turns for Task matching.
@@ -1665,7 +1679,7 @@ fn render_conversation(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -> Str
         deltas_by_agent_id.insert(delta.agent_id.clone(), delta);
     }
 
-    // Accumulator for merging tool-only Claude turns.
+    // Accumulator for merging tool-only assistant turns.
     let mut pending_tools: Vec<ToolAnnotation> = Vec::new();
     let mut pending_time: Option<String> = None;
 
@@ -1682,6 +1696,7 @@ fn render_conversation(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -> Str
                 &mut pending_time,
                 &all_tool_results,
                 &deltas_by_agent_id,
+                engine_label,
             );
             let filtered = filter_skill_injection(&user_text);
             lines.push(format!("### [{time_str}] User"));
@@ -1705,8 +1720,9 @@ fn render_conversation(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -> Str
                     &mut pending_time,
                     &all_tool_results,
                     &deltas_by_agent_id,
+                    engine_label,
                 );
-                lines.push(format!("### [{time_str_end}] Claude"));
+                lines.push(format!("### [{time_str_end}] {engine_label}"));
                 lines.push(truncate_claude(&claude_text));
                 lines.push(String::new());
 
@@ -1735,6 +1751,7 @@ fn render_conversation(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -> Str
         &mut pending_time,
         &all_tool_results,
         &deltas_by_agent_id,
+        engine_label,
     );
 
     lines.join("\n")
@@ -2154,6 +2171,7 @@ mod tests {
         let session = SessionData {
             session_id: "abcdef1234567890".to_string(),
             summary: None,
+            engine: Engine::Claude,
             turns: vec![],
             timestamp_start: Some("2026-03-07T10:00:00Z".to_string()),
             timestamp_end: Some("2026-03-07T11:30:00Z".to_string()),
@@ -2239,7 +2257,7 @@ mod tests {
                 content: vec![PB::Text("[Request interrupted by user]".to_string())],
             },
         }];
-        let session = events_to_session_data(&events, Path::new("test.jsonl"));
+        let session = events_to_session_data(&events, Path::new("test.jsonl"), Engine::Claude);
         assert!(
             session.turns.is_empty(),
             "interruption turn should be skipped"
@@ -2252,7 +2270,7 @@ mod tests {
                 content: vec![PB::Text("Hello".to_string())],
             },
         }];
-        let session2 = events_to_session_data(&events2, Path::new("test.jsonl"));
+        let session2 = events_to_session_data(&events2, Path::new("test.jsonl"), Engine::Claude);
         assert_eq!(
             session2.turns.len(),
             1,
@@ -2308,7 +2326,7 @@ mod tests {
             },
         ];
 
-        let session = events_to_session_data(&events, Path::new("test.jsonl"));
+        let session = events_to_session_data(&events, Path::new("test.jsonl"), Engine::Claude);
         assert_eq!(session.subagent_deltas.len(), 1);
         let delta = &session.subagent_deltas[0];
         assert_eq!(delta.agent_id, "agent123");
