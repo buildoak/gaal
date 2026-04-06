@@ -119,13 +119,13 @@ gaal resolve [OPTIONS] [ID]
 | Flag | Description |
 | --- | --- |
 | `-H`, `--human` | Human-readable output (otherwise JSON) |
-| `--engine <claude|codex>` | Filter by engine to disambiguate |
+| `--engine <claude|codex|gemini>` | Filter by engine to disambiguate |
 
 ## JSON Output
 
 - `session_id` — full session identifier from the index
 - `short_id` — first 8 characters of `session_id`
-- `engine` — `claude` or `codex`
+- `engine` — `claude`, `codex`, or `gemini`
 - `jsonl_path` — absolute path to the source JSONL file
 - `transcript_path` — expected rendered transcript markdown path
 - `transcript_exists` — whether the transcript file exists on disk

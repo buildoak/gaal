@@ -22,7 +22,7 @@ gaal who [OPTIONS] [VERB] [TARGET]
 - `--since <duration|date>`: default `7d`
 - `--before <date|timestamp>`
 - `--cwd <substring>`
-- `--engine <claude|codex>`
+- `--engine <claude|codex|gemini>`
 - `--tag <tag>`
 - `--failed`: for `ran`, only non-zero command exits
 - `--limit <n>`: default `10`

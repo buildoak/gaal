@@ -11,7 +11,7 @@ gaal create-handoff [OPTIONS] [ID]
 ## Flags
 
 - `--jsonl <path>`: explicit JSONL override
-- `--engine <claude|codex>`: extraction engine override
+- `--engine <claude|codex|gemini>`: extraction engine override
 - `--model <model>`
 - `--prompt <path>`
 - `--provider <agent-mux|openrouter>`: default `agent-mux`

@@ -96,6 +96,96 @@ Most query commands accept:
 
 By default `ls` hides sessions with zero tool calls and duration under 30s. Use `--all` to include.
 
+## Gemini Session JSON Format
+
+Gemini sessions are stored as a single JSON file (not JSONL). The root object contains:
+
+```json
+{
+  "sessionId": "...",
+  "startTime": "<ISO8601>",
+  "summary": "...",
+  "messages": [...]
+}
+```
+
+Key root-level fields:
+
+- `sessionId` — session identifier
+- `startTime` — session start timestamp
+- `summary` — root-level session summary; gaal extracts this as a `Summary` event so it appears in session headlines
+- `messages` — array of turn objects
+
+### Message Types
+
+Each message has a `type` field:
+
+| `type` | Description |
+|--------|-------------|
+| `user` | User turn; `content` is an array of `{text}` objects |
+| `gemini` | Assistant turn; has `content`, `thoughts`, `toolCalls`, `tokens`, `model` |
+| `info` | System info; cancellation signals map to `StopSignal`, others surface as system notes |
+| `warning` | System warning; surfaces as a system note |
+| `error` | Error signal; maps to `StopSignal` |
+
+### Gemini Turn Fields
+
+A `gemini` message object:
+
+```json
+{
+  "type": "gemini",
+  "timestamp": "<ISO8601>",
+  "model": "gemini-2.5-pro",
+  "content": "assistant text here",
+  "thoughts": [
+    { "subject": "Reasoning about X", "description": "..." }
+  ],
+  "toolCalls": [...],
+  "tokens": { "input": 1000, "output": 200, "cached": 50, "thoughts": 30 }
+}
+```
+
+Thought blocks (`thoughts`) are Gemini's reasoning/thinking steps. Each has a `subject` and `description`. gaal prepends them to the assistant content as `[Thought: {subject}] {description}` so they appear in transcripts and search.
+
+Token fields: `input`, `output`, `cached` (cache read tokens), `thoughts` (reasoning tokens).
+
+### Tool Calls
+
+`toolCalls` is an array of:
+
+```json
+{
+  "id": "tool-call-id",
+  "name": "read_file",
+  "args": { "path": "src/main.rs" },
+  "status": "success",
+  "result": [{ "functionResponse": { "response": { "output": "..." } } }]
+}
+```
+
+Tool names use Gemini's snake_case naming. gaal normalizes them to the canonical names used by Claude/Codex:
+
+| Gemini raw name | Normalized |
+|-----------------|------------|
+| `read_file`, `read_many_files` | `Read` |
+| `write_file` | `Write` |
+| `replace`, `edit_file` | `Edit` |
+| `run_shell_command` | `Bash` |
+| `list_directory`, `glob` | `Glob` |
+| `grep_search` | `Grep` |
+| `google_web_search` | `WebSearch` |
+| `web_fetch` | `WebFetch` |
+| `write_todos` | `WriteTodos` |
+| `save_memory` | `SaveMemory` |
+| Unknown names | passed through unchanged |
+
+`status` is `"success"` or any other string for error. `result` contains `functionResponse.response.output` (success) or `functionResponse.response.error` (failure).
+
+### Incremental Indexing
+
+Gemini stores each session as a single JSON object, so offsets are not meaningful. gaal re-parses the full file on each incremental index run.
+
 ## Search Index Rebuild Triggers
 
 These commands rebuild Tantivy:

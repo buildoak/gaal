@@ -74,7 +74,7 @@ What each part is for:
 - `data/{engine}/sessions/YYYY/MM/DD/<id>.md`: rendered transcript markdown
 - `data/{engine}/handoffs/YYYY/MM/DD/<id>.md`: generated handoff markdown
 
-`{engine}` is usually `claude` or `codex`.
+`{engine}` is usually `claude`, `codex`, or `gemini`.
 
 ## Four Commands to Learn First
 

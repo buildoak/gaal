@@ -10,7 +10,7 @@ gaal ls [OPTIONS]
 
 ## Flags
 
-- `--engine <claude|codex>`
+- `--engine <claude|codex|gemini>`
 - `--since <duration|date>`
 - `--before <date|timestamp>`
 - `--cwd <substring>`

@@ -306,4 +306,7 @@ Token accounting is parser-driven and model-aware:
     codex/
       sessions/YYYY/MM/DD/<id>.md
       handoffs/YYYY/MM/DD/<id>.md
+    gemini/
+      sessions/YYYY/MM/DD/<id>.md
+      handoffs/YYYY/MM/DD/<id>.md
 ```

@@ -25,6 +25,8 @@ Use this table first. It is the fastest way to choose the correct command.
 
 The primary consumers of `gaal` are agents, not humans. Prefer machine-readable JSON unless a human explicitly asks for a table or card view.
 
+`gaal` supports three engines: Claude Code (JSONL), Codex (JSONL), and Gemini (single JSON). All three are indexed uniformly. The `engine` field on every session row tells you which parser produced it.
+
 The core mental model:
 
 - `gaal ls` answers "what sessions exist?"
@@ -108,6 +110,21 @@ fi
 ```
 
 CRITICAL: `gaal salt` and `gaal find-salt` must be separate tool calls. The JSONL must flush between those calls or `find-salt` may miss the current session.
+
+### Filtering by engine
+
+Use `--engine` to narrow any fleet or attribution query to a single engine.
+
+```bash
+# Gemini sessions only
+gaal ls --engine gemini --since 7d -H
+
+# Who wrote a file, Gemini sessions only
+gaal who wrote CLAUDE.md --engine gemini
+
+# Search within Gemini sessions
+gaal search "parser" --engine gemini
+```
 
 ### Finding GSD dispatches
 
