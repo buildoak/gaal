@@ -1,7 +1,9 @@
 # CLAUDE.md — gaal
 
-Session observability CLI for Claude Code and Codex. Rust, single binary, macOS-first.
+Session observability CLI for Claude Code, Codex, and Gemini. Rust, single binary, macOS-first.
 Version 0.1.0. Read this file before writing any code.
+
+> **Gemini integration is fresh (2026-04-06).** Discovery, parser, and indexing all work, but subagent patterns are untested and edge cases in the JSON format will surface. Expect bugs. When they appear: dump real Gemini JSON first, then fix — same evidence-first rule as Claude/Codex JSONL.
 
 ## Architecture
 
