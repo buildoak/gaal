@@ -2,20 +2,20 @@
 name: gaal
 description: |
   Agent session observability CLI — turns AI coding sessions into first-class queryable artifacts.
-  Parses Claude Code + Codex JSONL, indexes into SQLite + Tantivy FTS, answers questions in seconds.
+  Parses Claude Code (JSONL), Codex (JSONL), and Gemini (JSON) sessions, indexes into SQLite + Tantivy FTS, answers questions in seconds.
   Use when: recalling past context, attributing file changes, searching session history, generating
   continuity handoffs, inspecting sessions, viewing transcripts, managing session taxonomy,
   session search, who wrote, who read, who ran, fleet view, inspect session, recall context,
   transcript, tag management, self-identification, salt token, subagents, token accounting,
   cache tokens, continuity, prior context, attribution, handoff.
-  12 commands. JSON default, -H for human. AX errors teach agents what went wrong + how to recover.
+  12 commands. Three engines: Claude Code (JSONL), Codex (JSONL), Gemini (JSON). JSON default, -H for human. `--engine` flag filters any query by engine. AX errors teach agents what went wrong + how to recover.
 ---
 
 # gaal
 
 Session observability for AI coding agents.
 
-Claude Code and Codex emit JSONL session logs — 10-50MB blobs of undocumented, engine-specific event streams. Raw, they're useless. Gaal parses both formats, indexes them into SQLite and Tantivy, and turns raw traces into answers.
+Claude Code and Codex emit JSONL session logs; Gemini emits single JSON files. All are undocumented, engine-specific event streams. Raw, they're useless. Gaal parses all three formats, indexes them into SQLite and Tantivy, and turns raw traces into answers.
 
 The core idea: **sessions are first-class queryable artifacts, not throwaway logs.**
 
@@ -23,7 +23,7 @@ Every session you ran is indexed, searchable, and summarizable. Use gaal to resu
 
 ## Design Principles
 
-**1. Two-source architecture.** Database for speed, filesystem for truth. SQLite powers `ls`, `inspect`, `who`, `recall`, `search` — fast structured queries over session metadata and extracted facts. Raw JSONL files on disk power `transcript` rendering, `salt` scanning, and subagent discovery. Parent JSONL `toolUseResult` blocks give fleet-level subagent metadata (tokens, duration, status). Subagent JSONL files give the full turn-by-turn trace. Both sources needed. The DB is derived from the files, not the other way around.
+**1. Two-source architecture.** Database for speed, filesystem for truth. SQLite powers `ls`, `inspect`, `who`, `recall`, `search` — fast structured queries over session metadata and extracted facts. Raw session files on disk (JSONL for Claude/Codex, single JSON for Gemini) power `transcript` rendering, `salt` scanning, and subagent discovery. Parent JSONL `toolUseResult` blocks give fleet-level subagent metadata (tokens, duration, status). Subagent JSONL files give the full turn-by-turn trace. Both sources needed. The DB is derived from the files, not the other way around.
 
 **2. Errors teach.** Every gaal error has three parts: what went wrong, a working example, and a hint for the next action. This is the AX principle — agent experience matters more than API surface. A failed command should be productive: parse the error, extract the example, retry. Zero cryptic failures is the bar.
 
@@ -63,6 +63,7 @@ gaal inspect latest --tokens -H                    # drill into newest session
 gaal resolve dc5e98dc                              # resolve ID to paths
 gaal who wrote CLAUDE.md                           # attribution
 gaal search "auth refactor" --limit 5              # free-text search
+gaal ls --engine gemini --since 7d -H                # filter by engine
 gaal recall "topic" --format brief --limit 5       # continuity recall
 gaal create-handoff latest                         # generate handoff (costs $)
 ```
@@ -160,7 +161,7 @@ These were deliberately removed, not deferred.
 - **`create-handoff` costs money.** It dispatches to an external LLM via agent-mux. Always `--dry-run` first for batch operations. One careless loop can burn real dollars. Use `--effort` to control dispatch effort (low/medium/high/xhigh); defaults to config value.
 - **When developing gaal itself:** always `cargo build --release`. Debug builds don't update the installed binary (symlinked to `target/release/gaal`). Read gaal's own CLAUDE.md before writing code — it has Rust conventions and test contracts.
 - **Evidence first.** Grep real JSONL before reasoning about schemas. Don't guess field names — Claude Code and Codex emit different event shapes. Confident guesses about JSONL structure are the #1 source of gaal bugs.
-- **Trust gaal's JSON output, not raw JSONL parsing.** Gaal normalizes two incompatible formats into one clean schema. If you're tempted to read a session JSONL directly, you're using the wrong command.
+- **Trust gaal's JSON output, not raw session file parsing.** Gaal normalizes three incompatible formats (Claude JSONL, Codex JSONL, Gemini JSON) into one clean schema. If you're tempted to read a session file directly, you're using the wrong command.
 
 ## Anti-Patterns
 
@@ -168,7 +169,7 @@ These were deliberately removed, not deferred.
 |--------|------------|-----|
 | Pipe `gaal who` directly with `\|` | Capture to variable first | `who` consumes trailing args greedily — the pipe target becomes an argument |
 | Assume `gaal ls` has `--status active` | Use `gaal ls --all` + `gaal inspect <id>` | Active monitoring was killed — heuristics lie. Taxonomy is deterministic, status was not |
-| Read raw session JSONL manually | Use `gaal inspect --trace` or `gaal transcript` | Gaal normalizes dual formats; raw parsing will silently break on the other engine's schema |
+| Read raw session JSONL manually | Use `gaal inspect --trace` or `gaal transcript` | Gaal normalizes three engine formats; raw parsing will silently break on another engine's schema |
 | Call `gaal inspect` in a loop | Use `gaal inspect --ids a1b2,c3d4` | Batch mode exists — saves N-1 DB opens and N-1 process spawns |
 | Assume `gaal recall` works without handoffs | Check `gaal index status` first | Recall queries the handoff index, not raw sessions. No handoffs = no recall results |
 | Run `gaal create-handoff` without checking agent-mux | Verify `agent-mux` is available | Handoff generation dispatches to an external LLM — if agent-mux is down, the command hangs |
