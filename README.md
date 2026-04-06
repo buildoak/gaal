@@ -1,21 +1,21 @@
 # gaal
 
-Session observability for AI coding agents. Parses Claude Code and Codex session logs, indexes into SQLite + Tantivy FTS, answers any question about any session in seconds.
+Session observability for AI coding agents. Parses Claude Code, Codex, and Gemini CLI session logs, indexes into SQLite + Tantivy FTS, answers any question about any session in seconds.
 
 [![crates.io](https://img.shields.io/crates/v/gaal.svg)](https://crates.io/crates/gaal)
 [![CI](https://github.com/buildoak/gaal/actions/workflows/ci.yml/badge.svg)](https://github.com/buildoak/gaal/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS-lightgrey)
 
-11,000+ sessions. 372K facts. 895 handoffs indexed. Dual-engine. 12 commands.
+11,000+ sessions. 372K facts. 895 handoffs indexed. Three-engine. 12 commands.
 
 ---
 
 ## What It Does
 
-Claude Code and Codex emit JSONL session logs -- 10-50MB blobs of undocumented, engine-specific event streams. Raw, they're useless. Gaal parses both formats, normalizes two different event models, and turns raw traces into queryable artifacts.
+Claude Code, Codex, and Gemini CLI emit session logs -- 10-50MB blobs of undocumented, engine-specific event streams. Raw, they're useless. Gaal parses all three formats, normalizes three different event models, and turns raw traces into queryable artifacts.
 
-- **Fleet view** across thousands of sessions, both engines, one table. Filter by engine, model, session type, time window, CWD, or token count.
+- **Fleet view** across thousands of sessions, all engines, one table. Filter by engine, model, session type, time window, CWD, or token count.
 - **Drill into any session** -- files touched, commands run, subagent swarms, token breakdown, peak context, cost estimate.
 - **Attribution** -- which session wrote that file? Which agent ran that command? Traces through coordinator-subagent chains with arrow notation.
 - **Continuity** -- recall past work via BM25 full-text search and ranked handoff retrieval. Each new session is less amnesic than the last.
@@ -66,7 +66,7 @@ a4b8c9c5  [sub]  **Investigat...  claude  today 22:35  2m 23s    20 / 1K   67K  
 Showing 5 of 11366 sessions
 ```
 
-Both engines in one table. `[sub]` marks subagent sessions. Tokens column shows `input / output`. Peak is max single-turn context window usage. The default filter hides trivial sessions -- `--all` shows everything.
+All engines in one table. `[sub]` marks subagent sessions. Tokens column shows `input / output`. Peak is max single-turn context window usage. The default filter hides trivial sessions -- `--all` shows everything.
 
 Narrow the view:
 
@@ -74,6 +74,7 @@ Narrow the view:
 gaal ls --session-type coordinator --since 1d -H    # parent sessions today
 gaal ls --subagent-type gsd-heavy --since 3d         # GSD dispatches this week
 gaal ls --engine codex --limit 10 -H                 # Codex sessions only
+gaal ls --engine gemini --limit 10 -H                # Gemini sessions only
 gaal ls --model claude-opus-4-6 --since 7d -H        # Opus sessions this week
 ```
 
@@ -333,15 +334,15 @@ Options:
 ## Architecture
 
 ```
-JSONL files on disk
-  -> discovery/ (scan ~/.claude/projects/ and ~/.codex/)
-  -> parser/ (dual Claude/Codex parsers -> events -> facts)
+Session files on disk
+  -> discovery/ (scan ~/.claude/projects/, ~/.codex/, and ~/.gemini/tmp/)
+  -> parser/ (Claude/Codex/Gemini parsers -> events -> facts)
   -> db/ (SQLite for structured data + Tantivy for FTS)
   -> commands/ (query DB and Tantivy)
   -> output/ (JSON or human-readable tables)
 ```
 
-**Dual-engine.** Claude Code and Codex use different JSONL schemas. Gaal has a dedicated parser for each, normalizes both into the same fact model, and exposes one query surface. You never need to know which engine produced a session -- `ls`, `inspect`, `who`, `search`, and `recall` work the same across both.
+**Three-engine.** Claude Code, Codex, and Gemini CLI each use different session formats (JSONL or JSON). Gaal has a dedicated parser for each, normalizes all three into the same fact model, and exposes one query surface. You never need to know which engine produced a session -- `ls`, `inspect`, `who`, `search`, and `recall` work the same across all engines.
 
 **Session taxonomy.** Three types, deterministically classified from JSONL structure:
 
