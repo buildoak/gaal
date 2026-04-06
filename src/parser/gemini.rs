@@ -137,7 +137,8 @@ fn extract_user_content(message: &Map<String, Value>) -> Vec<ContentBlock> {
         return Vec::new();
     };
 
-    items.iter()
+    items
+        .iter()
         .filter_map(|item| item.get("text").and_then(Value::as_str))
         .filter(|text| !text.is_empty())
         .map(|text| ContentBlock::Text(text.to_string()))
@@ -258,20 +259,29 @@ fn extract_usage_event(message: &Map<String, Value>) -> Option<EventKind> {
         cache_read_input_tokens: as_i64(tokens.get("cached")),
         cache_creation_input_tokens: 0,
         reasoning_tokens: as_i64(tokens.get("thoughts")),
-        dedup_key: message.get("id").and_then(Value::as_str).map(str::to_string),
+        dedup_key: message
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
 fn normalize_tool_name(raw: &str) -> String {
     match raw {
         "read_file" => "Read",
+        "read_many_files" => "Read",
         "write_file" => "Write",
+        "write_todos" => "WriteTodos",
         "replace" | "edit_file" => "Edit",
         "run_shell_command" => "Bash",
         "list_directory" | "glob" => "Glob",
         "grep_search" => "Grep",
         "google_web_search" => "WebSearch",
         "web_fetch" => "WebFetch",
+        "save_memory" => "SaveMemory",
+        "get_internal_docs" => "GetInternalDocs",
+        "update_topic" => "UpdateTopic",
+        "complete_task" => "CompleteTask",
         "ask_user" => "AskUser",
         "cli_help" => "CliHelp",
         "codebase_investigator" => "CodebaseInvestigator",
@@ -281,4 +291,19 @@ fn normalize_tool_name(raw: &str) -> String {
         other => other,
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_tool_name;
+
+    #[test]
+    fn normalizes_additional_gemini_tool_names() {
+        assert_eq!(normalize_tool_name("read_many_files"), "Read");
+        assert_eq!(normalize_tool_name("write_todos"), "WriteTodos");
+        assert_eq!(normalize_tool_name("save_memory"), "SaveMemory");
+        assert_eq!(normalize_tool_name("get_internal_docs"), "GetInternalDocs");
+        assert_eq!(normalize_tool_name("update_topic"), "UpdateTopic");
+        assert_eq!(normalize_tool_name("complete_task"), "CompleteTask");
+    }
 }

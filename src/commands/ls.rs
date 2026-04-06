@@ -70,6 +70,7 @@ pub struct LsArgs {
 pub enum LsEngine {
     Claude,
     Codex,
+    Gemini,
 }
 
 /// Supported `gaal ls --sort` fields.
@@ -283,6 +284,7 @@ impl LsEngine {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Gemini => "gemini",
         }
     }
 }

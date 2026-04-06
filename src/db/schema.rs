@@ -23,6 +23,8 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
     conn.busy_timeout(Duration::from_millis(30_000))
         .map_err(map_db_err)?;
 
+    migrate_sessions_engine_check(conn)?;
+
     // Gate the migration behind a column-existence check so we don't attempt
     // ALTER TABLE (which requires a write lock) on every startup.
     let has_session_type: bool = conn
@@ -93,6 +95,202 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
 
     conn.execute_batch(DB_SCHEMA).map_err(map_db_err)?;
     Ok(())
+}
+
+fn migrate_sessions_engine_check(conn: &Connection) -> Result<(), GaalError> {
+    if !table_exists(conn, "sessions")? {
+        return Ok(());
+    }
+
+    let gemini_probe_inserted = conn
+        .execute(
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('__gaal_gemini_probe__', 'gemini', '1970-01-01T00:00:00Z', '__probe__')",
+            [],
+        )
+        .is_ok();
+
+    if gemini_probe_inserted {
+        conn.execute(
+            "DELETE FROM sessions WHERE id = '__gaal_gemini_probe__'",
+            [],
+        )
+        .ok();
+        return Ok(());
+    }
+
+    let existing_columns = session_columns(conn)?;
+    let copy_columns: Vec<&str> = SESSION_COLUMNS
+        .iter()
+        .copied()
+        .filter(|column| existing_columns.iter().any(|existing| existing == column))
+        .collect();
+    let column_list = copy_columns.join(", ");
+
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
+        .map_err(map_db_err)?;
+
+    let migration_result = (|| {
+        conn.execute_batch(SESSIONS_TABLE_WITH_GEMINI)
+            .map_err(map_db_err)?;
+
+        if !column_list.is_empty() {
+            conn.execute(
+                &format!(
+                    "INSERT INTO sessions_new ({column_list}) SELECT {column_list} FROM sessions"
+                ),
+                [],
+            )
+            .map_err(map_db_err)?;
+        }
+
+        conn.execute_batch(
+            r#"
+            DROP TABLE sessions;
+            ALTER TABLE sessions_new RENAME TO sessions;
+            "#,
+        )
+        .map_err(map_db_err)?;
+        Ok(())
+    })();
+
+    let reenable_fk_result = conn.execute_batch("PRAGMA foreign_keys = ON;");
+    if let Err(err) = reenable_fk_result {
+        return Err(map_db_err(err));
+    }
+
+    migration_result
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, GaalError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        [table_name],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .map_err(map_db_err)
+}
+
+fn session_columns(conn: &Connection) -> Result<Vec<String>, GaalError> {
+    let mut stmt = conn
+        .prepare("SELECT name FROM pragma_table_info('sessions') ORDER BY cid")
+        .map_err(map_db_err)?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(map_db_err)?;
+
+    let mut columns = Vec::new();
+    for row in rows {
+        columns.push(row.map_err(map_db_err)?);
+    }
+    Ok(columns)
+}
+
+const SESSION_COLUMNS: &[&str] = &[
+    "id",
+    "engine",
+    "model",
+    "cwd",
+    "started_at",
+    "ended_at",
+    "exit_signal",
+    "last_event_at",
+    "parent_id",
+    "session_type",
+    "jsonl_path",
+    "total_input_tokens",
+    "total_output_tokens",
+    "cache_read_tokens",
+    "cache_creation_tokens",
+    "reasoning_tokens",
+    "total_tools",
+    "total_turns",
+    "peak_context",
+    "last_indexed_offset",
+    "subagent_type",
+];
+
+const SESSIONS_TABLE_WITH_GEMINI: &str = r#"
+CREATE TABLE sessions_new (
+    id TEXT PRIMARY KEY,
+    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini')),
+    model TEXT,
+    cwd TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    exit_signal TEXT,
+    last_event_at TEXT,
+    parent_id TEXT REFERENCES sessions(id),
+    session_type TEXT DEFAULT 'standalone' CHECK(session_type IN ('standalone', 'coordinator', 'subagent')),
+    jsonl_path TEXT NOT NULL,
+    total_input_tokens INTEGER DEFAULT 0,
+    total_output_tokens INTEGER DEFAULT 0,
+    cache_read_tokens INTEGER DEFAULT 0,
+    cache_creation_tokens INTEGER DEFAULT 0,
+    reasoning_tokens INTEGER DEFAULT 0,
+    total_tools INTEGER DEFAULT 0,
+    total_turns INTEGER DEFAULT 0,
+    peak_context INTEGER DEFAULT 0,
+    last_indexed_offset INTEGER DEFAULT 0,
+    subagent_type TEXT
+);
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrates_sessions_check_constraint_to_allow_gemini() {
+        let conn = Connection::open_in_memory().expect("open db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex')),
+                model TEXT,
+                cwd TEXT,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                exit_signal TEXT,
+                last_event_at TEXT,
+                parent_id TEXT REFERENCES sessions(id),
+                jsonl_path TEXT NOT NULL
+            );
+            CREATE TABLE facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL REFERENCES sessions(id),
+                ts TEXT NOT NULL,
+                turn_number INTEGER,
+                fact_type TEXT NOT NULL,
+                subject TEXT,
+                detail TEXT,
+                exit_code INTEGER,
+                success INTEGER
+            );
+            INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('sess-1', 'claude', '2026-01-01T00:00:00Z', '/tmp/sess-1');
+            INSERT INTO facts (session_id, ts, fact_type) VALUES ('sess-1', '2026-01-01T00:00:00Z', 'user_prompt');
+            "#,
+        )
+        .expect("seed old schema");
+
+        init_db(&conn).expect("migrate schema");
+
+        conn.execute(
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('sess-2', 'gemini', '2026-01-02T00:00:00Z', '/tmp/sess-2')",
+            [],
+        )
+        .expect("insert gemini session");
+
+        let fact_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM facts WHERE session_id = 'sess-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count facts");
+        assert_eq!(fact_count, 1);
+    }
 }
 
 /// Return the default SQLite index path (`~/.gaal/index.db`).

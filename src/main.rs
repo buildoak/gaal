@@ -329,6 +329,7 @@ enum IndexCommand {
 enum Engine {
     Claude,
     Codex,
+    Gemini,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -644,6 +645,7 @@ fn convert_ls_engine(engine: Engine) -> gaal::commands::ls::LsEngine {
     match engine {
         Engine::Claude => gaal::commands::ls::LsEngine::Claude,
         Engine::Codex => gaal::commands::ls::LsEngine::Codex,
+        Engine::Gemini => gaal::commands::ls::LsEngine::Gemini,
     }
 }
 
@@ -697,6 +699,7 @@ fn convert_engine_string(engine: Engine) -> String {
     match engine {
         Engine::Claude => "claude".to_string(),
         Engine::Codex => "codex".to_string(),
+        Engine::Gemini => "gemini".to_string(),
     }
 }
 

@@ -149,7 +149,12 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     let invalid_codex_error_sessions = load_codex_invalid_error_sessions(&conn)?;
 
     for (idx, session) in sessions.into_iter().enumerate() {
-        match index_discovered_session(&mut conn, &session, args.force, &invalid_codex_error_sessions) {
+        match index_discovered_session(
+            &mut conn,
+            &session,
+            args.force,
+            &invalid_codex_error_sessions,
+        ) {
             Ok(IndexOutcome::Indexed) => {
                 summary.indexed += 1;
                 eprintln!(
@@ -393,6 +398,7 @@ pub(crate) fn index_discovered_session(
                 && row.peak_context <= SUSPICIOUS_PEAK_CONTEXT_THRESHOLD
                 && row.last_indexed_offset >= 0
                 && (row.last_indexed_offset as u64) < discovered.file_size
+                && discovered.engine != Engine::Gemini
         })
         .unwrap_or(false);
 
@@ -705,8 +711,8 @@ fn session_needs_full_reparse(
         return Ok(true);
     }
 
-    let has_invalid_codex_error_rows = discovered.engine == Engine::Codex
-        && invalid_codex_error_sessions.contains(&row.id);
+    let has_invalid_codex_error_rows =
+        discovered.engine == Engine::Codex && invalid_codex_error_sessions.contains(&row.id);
 
     Ok(has_invalid_codex_error_rows)
 }
@@ -749,7 +755,9 @@ fn load_codex_invalid_error_sessions(
     conn: &rusqlite::Connection,
 ) -> Result<HashSet<String>, GaalError> {
     let mut stmt = conn
-        .prepare("SELECT DISTINCT session_id FROM facts WHERE fact_type = 'error' AND exit_code = 0")
+        .prepare(
+            "SELECT DISTINCT session_id FROM facts WHERE fact_type = 'error' AND exit_code = 0",
+        )
         .map_err(GaalError::from)?;
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(0))
