@@ -178,6 +178,15 @@ Tool names use Gemini's snake_case naming. gaal normalizes them to the canonical
 | `web_fetch` | `WebFetch` |
 | `write_todos` | `WriteTodos` |
 | `save_memory` | `SaveMemory` |
+| `get_internal_docs` | `GetInternalDocs` |
+| `update_topic` | `UpdateTopic` |
+| `complete_task` | `CompleteTask` |
+| `ask_user` | `AskUser` |
+| `cli_help` | `CliHelp` |
+| `codebase_investigator` | `CodebaseInvestigator` |
+| `activate_skill` | `ActivateSkill` |
+| `enter_plan_mode` | `EnterPlanMode` |
+| `exit_plan_mode` | `ExitPlanMode` |
 | Unknown names | passed through unchanged |
 
 `status` is `"success"` or any other string for error. `result` contains `functionResponse.response.output` (success) or `functionResponse.response.error` (failure).
