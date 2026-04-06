@@ -33,6 +33,7 @@ pub fn discover_sessions(engine_filter: Option<Engine>) -> Result<Vec<Discovered
     let mut sessions = Vec::new();
     sessions.extend(super::claude::discover_claude_sessions()?);
     sessions.extend(super::codex::discover_codex_sessions()?);
+    sessions.extend(super::gemini::discover_gemini_sessions()?);
 
     if let Some(engine) = engine_filter {
         sessions.retain(|s| s.engine == engine);

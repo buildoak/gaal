@@ -1042,7 +1042,7 @@ fn index_single_jsonl(
 /// Codex (UUIDv7): last 8 hex characters (dashes stripped).
 fn truncate_session_id(raw: &str, engine: &Engine) -> String {
     match engine {
-        Engine::Claude => raw.chars().take(8).collect(),
+        Engine::Claude | Engine::Gemini => raw.chars().take(8).collect(),
         Engine::Codex => {
             let hex: String = raw.chars().filter(|c| *c != '-').collect();
             if hex.len() > 8 {

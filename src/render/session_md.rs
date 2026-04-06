@@ -6,7 +6,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::{DateTime, FixedOffset, Utc};
 use regex::Regex;
 use rusqlite::{named_params, Connection};
@@ -150,6 +150,10 @@ pub fn render_session_markdown(path: &Path) -> Result<String> {
     let events = match engine {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
+        Engine::Gemini => bail!(
+            "gemini session markdown rendering is not implemented yet: {}",
+            path.display()
+        ),
     };
     let session = events_to_session_data(&events, path);
     Ok(session_to_markdown(&session))
@@ -169,6 +173,10 @@ pub fn render_session_markdown_with_db(
     let events = match engine {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
+        Engine::Gemini => bail!(
+            "gemini session markdown rendering is not implemented yet: {}",
+            path.display()
+        ),
     };
     let mut session = events_to_session_data(&events, path);
 

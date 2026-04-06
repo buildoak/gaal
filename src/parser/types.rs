@@ -13,6 +13,8 @@ pub enum Engine {
     Claude,
     /// Codex JSONL format.
     Codex,
+    /// Gemini session JSON format.
+    Gemini,
 }
 
 impl Display for Engine {
@@ -20,6 +22,7 @@ impl Display for Engine {
         let value = match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Gemini => "gemini",
         };
         write!(f, "{value}")
     }
@@ -32,6 +35,7 @@ impl FromStr for Engine {
         match s {
             "claude" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
+            "gemini" => Ok(Self::Gemini),
             other => Err(GaalError::ParseError(format!("invalid engine: {other}"))),
         }
     }

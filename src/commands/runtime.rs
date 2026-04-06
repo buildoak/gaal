@@ -181,6 +181,10 @@ fn extract_session_id(record: &Value, engine: Engine) -> Option<String> {
             .or_else(|| record.get("session_id"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        Engine::Gemini => record
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     }
 }
 
@@ -223,6 +227,7 @@ fn extract_usage_sample(record: &Value, engine: Engine) -> Option<UsageSample> {
                 return None;
             }
         }
+        Engine::Gemini => return None,
     };
 
     (tokens > 0).then_some(UsageSample {
@@ -245,6 +250,7 @@ fn extract_actions(record: &Value, engine: Engine, ts: Option<String>) -> Vec<Ac
     match engine {
         Engine::Claude => extract_claude_actions(record, ts),
         Engine::Codex => extract_codex_actions(record, ts),
+        Engine::Gemini => Vec::new(),
     }
 }
 

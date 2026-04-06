@@ -10,6 +10,7 @@ pub mod codex;
 pub mod common;
 pub mod event;
 pub mod facts;
+pub mod gemini;
 pub mod types;
 
 pub use event::{ContentBlock, EventKind, SessionEvent, ToolUseEvent};
@@ -72,6 +73,10 @@ pub fn parse_session(path: &Path) -> Result<ParsedSession> {
     let events = match engine {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
+        Engine::Gemini => bail!(
+            "gemini session parsing is not implemented yet: {}",
+            path.display()
+        ),
     };
     Ok(facts::extract_parsed_session(&events, engine, path))
 }
@@ -84,6 +89,10 @@ pub fn parse_session_incremental(path: &Path, offset: u64) -> Result<(ParsedSess
     let events = match engine {
         Engine::Claude => claude::parse_events_from_offset(path, offset)?,
         Engine::Codex => codex::parse_events_from_offset(path, offset)?,
+        Engine::Gemini => bail!(
+            "gemini session parsing is not implemented yet: {}",
+            path.display()
+        ),
     };
     let parsed = facts::extract_parsed_session(&events, engine, path);
 

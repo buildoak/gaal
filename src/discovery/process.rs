@@ -1052,6 +1052,7 @@ fn map_cwd_to_jsonl(engine: &Engine, cwd: &str, pid: u32) -> Option<PathBuf> {
     match engine {
         Engine::Claude => map_claude_cwd_to_jsonl(cwd, pid),
         Engine::Codex => map_codex_cwd_to_jsonl(cwd),
+        Engine::Gemini => None,
     }
 }
 
@@ -1266,6 +1267,15 @@ fn extract_session_id_from_jsonl(path: &Path, engine: &Engine) -> Option<String>
                 if let Some(id) = record
                     .pointer("/payload/id")
                     .or_else(|| record.get("session_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                {
+                    return Some(id);
+                }
+            }
+            Engine::Gemini => {
+                if let Some(id) = record
+                    .get("sessionId")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string)
                 {
