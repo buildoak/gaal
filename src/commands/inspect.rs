@@ -973,7 +973,7 @@ fn extract_cache_tokens(row: &SessionRow) -> (i64, i64) {
     let events = match engine {
         crate::parser::Engine::Claude => crate::parser::claude::parse_events(path),
         crate::parser::Engine::Codex => crate::parser::codex::parse_events(path),
-        crate::parser::Engine::Gemini => return (0, 0),
+        crate::parser::Engine::Gemini => crate::parser::gemini::parse_events(path),
     };
 
     let events = match events {

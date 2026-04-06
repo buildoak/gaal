@@ -6,7 +6,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Utc};
 use regex::Regex;
 use rusqlite::{named_params, Connection};
@@ -16,7 +16,7 @@ use crate::parser::event::{
     ContentBlock as ParserContentBlock, EventKind, SessionEvent, ToolUseEvent,
 };
 use crate::parser::types::Engine;
-use crate::parser::{claude, codex, detect_engine};
+use crate::parser::{claude, codex, detect_engine, gemini};
 
 // Dubai timezone: UTC+4.
 const DUBAI_OFFSET_SECS: i32 = 4 * 3600;
@@ -150,10 +150,7 @@ pub fn render_session_markdown(path: &Path) -> Result<String> {
     let events = match engine {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
-        Engine::Gemini => bail!(
-            "gemini session markdown rendering is not implemented yet: {}",
-            path.display()
-        ),
+        Engine::Gemini => gemini::parse_events(path)?,
     };
     let session = events_to_session_data(&events, path);
     Ok(session_to_markdown(&session))
@@ -173,10 +170,7 @@ pub fn render_session_markdown_with_db(
     let events = match engine {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
-        Engine::Gemini => bail!(
-            "gemini session markdown rendering is not implemented yet: {}",
-            path.display()
-        ),
+        Engine::Gemini => gemini::parse_events(path)?,
     };
     let mut session = events_to_session_data(&events, path);
 

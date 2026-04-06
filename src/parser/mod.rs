@@ -40,6 +40,13 @@ pub fn detect_engine(path: &Path) -> Result<Engine> {
             Err(_) => continue,
         };
 
+        if record.get("sessionId").is_some()
+            && record.get("projectHash").is_some()
+            && record.get("messages").is_some()
+        {
+            return Ok(Engine::Gemini);
+        }
+
         let record_type = record
             .get("type")
             .and_then(Value::as_str)
@@ -73,10 +80,7 @@ pub fn parse_session(path: &Path) -> Result<ParsedSession> {
     let events = match engine {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
-        Engine::Gemini => bail!(
-            "gemini session parsing is not implemented yet: {}",
-            path.display()
-        ),
+        Engine::Gemini => gemini::parse_events(path)?,
     };
     Ok(facts::extract_parsed_session(&events, engine, path))
 }
@@ -89,10 +93,7 @@ pub fn parse_session_incremental(path: &Path, offset: u64) -> Result<(ParsedSess
     let events = match engine {
         Engine::Claude => claude::parse_events_from_offset(path, offset)?,
         Engine::Codex => codex::parse_events_from_offset(path, offset)?,
-        Engine::Gemini => bail!(
-            "gemini session parsing is not implemented yet: {}",
-            path.display()
-        ),
+        Engine::Gemini => gemini::parse_events_from_offset(path, offset)?,
     };
     let parsed = facts::extract_parsed_session(&events, engine, path);
 
@@ -128,6 +129,9 @@ fn detect_engine_from_path(path: &Path) -> Option<Engine> {
     }
     if path_str.contains("/.codex/sessions/") {
         return Some(Engine::Codex);
+    }
+    if path_str.contains("/.gemini/tmp/") {
+        return Some(Engine::Gemini);
     }
     None
 }
