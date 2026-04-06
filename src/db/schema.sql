@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     total_turns INTEGER DEFAULT 0,
     peak_context INTEGER DEFAULT 0,
     last_indexed_offset INTEGER DEFAULT 0,
-    subagent_type TEXT
+    subagent_type TEXT,
+    gemini_summary TEXT
 );
 
 CREATE TABLE IF NOT EXISTS facts (

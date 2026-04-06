@@ -507,6 +507,13 @@ fn resolve_headline(conn: &Connection, row: &SessionRow) -> Result<Option<String
         }
     }
 
+    // Gemini root `summary` field — prefer over raw first-user-prompt.
+    if let Some(ref summary) = row.gemini_summary {
+        if let Some(headline) = normalize_summary_text(summary) {
+            return Ok(Some(headline));
+        }
+    }
+
     if let Some(prompt) = first_user_prompt(conn, &row.id)? {
         return Ok(Some(prompt));
     }
@@ -829,6 +836,7 @@ mod tests {
             peak_context: 100,
             last_indexed_offset: 0,
             subagent_type: None,
+            gemini_summary: None,
         }
     }
 

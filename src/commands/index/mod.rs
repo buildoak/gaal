@@ -610,6 +610,7 @@ fn index_subagents(
             peak_context: parsed.peak_context,
             last_indexed_offset,
             subagent_type: summary.meta.subagent_type.clone(),
+            gemini_summary: parsed.session_summary.clone(),
         };
 
         let tx = match conn.savepoint_with_name("index_subagent") {
@@ -796,6 +797,7 @@ fn build_full_session_row(
         peak_context: parsed.peak_context,
         last_indexed_offset,
         subagent_type: None, // standalone sessions don't have a subagent_type
+        gemini_summary: parsed.session_summary.clone(),
     }
 }
 
@@ -844,6 +846,10 @@ fn build_incremental_session_row(
         peak_context: existing.peak_context.max(parsed_delta.peak_context),
         last_indexed_offset: u64_to_i64(new_offset)?,
         subagent_type: existing.subagent_type.clone(),
+        gemini_summary: parsed_delta
+            .session_summary
+            .clone()
+            .or_else(|| existing.gemini_summary.clone()),
     })
 }
 
@@ -1167,6 +1173,7 @@ fn build_eywa_session_stub(entry: &EywaEntry) -> SessionRow {
         peak_context: 0,
         last_indexed_offset: 0,
         subagent_type: None,
+        gemini_summary: None,
     }
 }
 

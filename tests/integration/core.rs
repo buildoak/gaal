@@ -54,6 +54,7 @@ fn session_row(
         peak_context: 0,
         last_indexed_offset: 256,
         subagent_type: None,
+        gemini_summary: None,
     }
 }
 
@@ -177,6 +178,7 @@ fn session_insert_and_query_roundtrip() {
         peak_context: 0,
         last_indexed_offset: 4_096,
         subagent_type: None,
+        gemini_summary: None,
     };
 
     upsert_session(&conn, &session).expect("upsert session");

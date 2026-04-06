@@ -26,7 +26,7 @@ pub fn parse_events(path: &Path) -> Result<Vec<SessionEvent>> {
     let model = first_gemini_model(&root);
 
     events.push(SessionEvent {
-        timestamp: root_ts,
+        timestamp: root_ts.clone(),
         kind: EventKind::Meta {
             session_id,
             model,
@@ -37,6 +37,18 @@ pub fn parse_events(path: &Path) -> Result<Vec<SessionEvent>> {
             agent_nickname: None,
         },
     });
+
+    // Emit root-level summary if present so session headlines use it.
+    if let Some(summary_text) = root.get("summary").and_then(Value::as_str) {
+        if !summary_text.is_empty() {
+            events.push(SessionEvent {
+                timestamp: root_ts,
+                kind: EventKind::Summary {
+                    text: summary_text.to_string(),
+                },
+            });
+        }
+    }
 
     let messages = root
         .get("messages")
@@ -99,7 +111,46 @@ pub fn parse_events(path: &Path) -> Result<Vec<SessionEvent>> {
                     });
                 }
             }
-            "info" => {}
+            msg_type @ ("info" | "warning" | "error") => {
+                // Preserve info/warning/error messages so they appear in
+                // transcripts and are searchable. Cancellation info maps to
+                // StopSignal; other info/warning/error become system messages
+                // via AssistantMessage with a bracketed type prefix.
+                let text = message_obj
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if text.is_empty() {
+                    continue;
+                }
+                let is_cancellation = msg_type == "info"
+                    && text.to_ascii_lowercase().contains("cancel");
+                if is_cancellation || msg_type == "error" {
+                    events.push(SessionEvent {
+                        timestamp: ts,
+                        kind: EventKind::StopSignal {
+                            reason: text.to_string(),
+                        },
+                    });
+                } else {
+                    // info/warning that aren't cancellations: surface as a
+                    // system note in the assistant role so they show in transcripts.
+                    let label = match msg_type {
+                        "warning" => "[Warning]",
+                        _ => "[Info]",
+                    };
+                    events.push(SessionEvent {
+                        timestamp: ts,
+                        kind: EventKind::AssistantMessage {
+                            content: vec![super::event::ContentBlock::Text(format!(
+                                "{label} {text}"
+                            ))],
+                            model: None,
+                            stop_reason: None,
+                        },
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -232,10 +283,16 @@ fn extract_tool_result_content(result: Option<&Value>) -> Option<String> {
 
     let mut outputs = Vec::new();
     for item in items {
-        let output = item
+        // Check output first, then fall back to error text.
+        if let Some(text) = item
             .pointer("/functionResponse/response/output")
-            .and_then(Value::as_str);
-        if let Some(text) = output {
+            .and_then(Value::as_str)
+        {
+            outputs.push(text.to_string());
+        } else if let Some(text) = item
+            .pointer("/functionResponse/response/error")
+            .and_then(Value::as_str)
+        {
             outputs.push(text.to_string());
         }
     }

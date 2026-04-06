@@ -32,6 +32,8 @@ pub struct SessionRow {
     pub last_indexed_offset: i64,
     /// Subagent type from Agent tool_use input (e.g. "gsd-heavy", "Explore").
     pub subagent_type: Option<String>,
+    /// Root-level session summary (e.g. Gemini `summary` field), used as headline fallback.
+    pub gemini_summary: Option<String>,
 }
 
 /// Filters for listing sessions.
@@ -142,13 +144,15 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
             parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
             cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type
+            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type,
+            gemini_summary
         )
         VALUES (
             :id, :engine, :model, :cwd, :started_at, :ended_at, :exit_signal, :last_event_at,
             :parent_id, :session_type, :jsonl_path, :total_input_tokens, :total_output_tokens,
             :cache_read_tokens, :cache_creation_tokens, :reasoning_tokens,
-            :total_tools, :total_turns, :peak_context, :last_indexed_offset, :subagent_type
+            :total_tools, :total_turns, :peak_context, :last_indexed_offset, :subagent_type,
+            :gemini_summary
         )
         ON CONFLICT(id) DO UPDATE SET
             engine = excluded.engine,
@@ -170,7 +174,8 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             total_turns = excluded.total_turns,
             peak_context = excluded.peak_context,
             last_indexed_offset = excluded.last_indexed_offset,
-            subagent_type = excluded.subagent_type
+            subagent_type = excluded.subagent_type,
+            gemini_summary = excluded.gemini_summary
         "#,
         named_params! {
             ":id": &session.id,
@@ -194,6 +199,7 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
             ":peak_context": session.peak_context,
             ":last_indexed_offset": session.last_indexed_offset,
             ":subagent_type": &session.subagent_type,
+            ":gemini_summary": &session.gemini_summary,
         },
     )
     .map_err(db_err)?;
@@ -358,7 +364,8 @@ pub fn get_session(conn: &Connection, id: &str) -> Result<Option<SessionRow>, Ga
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
             parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
             cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type
+            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type,
+            gemini_summary
         FROM sessions
         WHERE id = :id
         "#,
@@ -381,7 +388,8 @@ pub fn resolve_by_prefix(
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
             parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
             cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type
+            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type,
+            gemini_summary
         FROM sessions
         WHERE id LIKE :prefix AND engine = :engine
         ORDER BY started_at DESC
@@ -391,7 +399,8 @@ pub fn resolve_by_prefix(
             id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
             parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
             cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type
+            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type,
+            gemini_summary
         FROM sessions
         WHERE id LIKE :prefix
         ORDER BY started_at DESC
@@ -448,7 +457,8 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
             s.id, s.engine, s.model, s.cwd, s.started_at, s.ended_at, s.exit_signal, s.last_event_at,
             s.parent_id, s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens,
             s.cache_read_tokens, s.cache_creation_tokens, s.reasoning_tokens,
-            s.total_tools, s.total_turns, s.peak_context, s.last_indexed_offset, s.subagent_type
+            s.total_tools, s.total_turns, s.peak_context, s.last_indexed_offset, s.subagent_type,
+            s.gemini_summary
         FROM sessions s
         WHERE (:engine IS NULL OR s.engine = :engine)
           AND (:session_type IS NULL OR s.session_type = :session_type)
@@ -935,6 +945,11 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
         last_indexed_offset: row.get("last_indexed_offset")?,
         subagent_type: row
             .get::<_, Option<String>>("subagent_type")?
+            .filter(|s| !s.is_empty()),
+        gemini_summary: row
+            .get::<_, Option<String>>("gemini_summary")
+            .ok()
+            .flatten()
             .filter(|s| !s.is_empty()),
     })
 }

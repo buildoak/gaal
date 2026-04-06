@@ -263,6 +263,7 @@ mod tests {
             peak_context: 0,
             last_indexed_offset: 0,
             subagent_type: None,
+            gemini_summary: None,
         };
 
         let transcript = base

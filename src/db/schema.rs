@@ -93,6 +93,19 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
             .ok();
     }
 
+    let has_gemini_summary: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='gemini_summary'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false);
+    if !has_gemini_summary {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN gemini_summary TEXT;")
+            .ok();
+    }
+
     conn.execute_batch(DB_SCHEMA).map_err(map_db_err)?;
     Ok(())
 }

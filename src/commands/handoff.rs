@@ -624,6 +624,7 @@ fn find_batch_candidates(
             peak_context: 0,
             last_indexed_offset: row.get(15).map_err(GaalError::from)?,
             subagent_type: None,
+            gemini_summary: None,
         });
     }
     Ok(out)

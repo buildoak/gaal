@@ -93,4 +93,6 @@ pub struct ParsedSession {
     pub exit_signal: Option<String>,
     /// Last event timestamp seen in stream.
     pub last_event_at: Option<String>,
+    /// Session-level summary text, when present (e.g. Gemini root `summary` field).
+    pub session_summary: Option<String>,
 }

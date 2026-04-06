@@ -73,6 +73,7 @@ pub fn extract_parsed_session(
     let mut started_at: Option<String> = None;
     let mut last_event_at: Option<String> = None;
     let mut last_stop_reason: Option<String> = None;
+    let mut session_summary: Option<String> = None;
 
     // -- Counters --
     let mut total_input_tokens = 0i64;
@@ -446,10 +447,14 @@ pub fn extract_parsed_session(
                 last_stop_reason = Some(reason.clone());
             }
 
+            EventKind::Summary { text } => {
+                if session_summary.is_none() {
+                    session_summary = Some(text.clone());
+                }
+            }
+
             // ── Events not relevant to facts ──────────────────────
-            EventKind::SubagentProgress { .. }
-            | EventKind::SubagentCompletion { .. }
-            | EventKind::Summary { .. } => {}
+            EventKind::SubagentProgress { .. } | EventKind::SubagentCompletion { .. } => {}
         }
     }
 
@@ -491,6 +496,7 @@ pub fn extract_parsed_session(
         ended_at: last_event_at.clone(),
         exit_signal: last_stop_reason,
         last_event_at,
+        session_summary,
     }
 }
 

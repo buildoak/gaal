@@ -435,7 +435,7 @@ fn build_inspect_data(
         None
     };
 
-    // Compute task via 3-level cascade: handoff headline -> parent description -> first user prompt.
+    // Compute task: handoff headline -> parent description -> gemini_summary -> first user prompt.
     let task = record
         .headline
         .clone()
@@ -448,6 +448,7 @@ fn build_inspect_data(
                 None
             }
         })
+        .or_else(|| row.gemini_summary.clone())
         .or_else(|| first_user_prompt_for_inspect(&facts));
 
     Ok(InspectData {
@@ -875,6 +876,11 @@ fn get_child_sessions(conn: &Connection, parent_id: &str) -> Result<Vec<SessionR
                 last_indexed_offset: row.get("last_indexed_offset")?,
                 subagent_type: row
                     .get::<_, Option<String>>("subagent_type")?
+                    .filter(|s| !s.is_empty()),
+                gemini_summary: row
+                    .get::<_, Option<String>>("gemini_summary")
+                    .ok()
+                    .flatten()
                     .filter(|s| !s.is_empty()),
             })
         })
@@ -1308,6 +1314,7 @@ mod tests {
             peak_context: 0,
             last_indexed_offset: 0,
             subagent_type: None,
+            gemini_summary: None,
         };
 
         assert!(!subagent_has_meaningful_content(&empty));
