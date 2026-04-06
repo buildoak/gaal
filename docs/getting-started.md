@@ -29,7 +29,7 @@ cargo install --path .
 
 `gaal` indexes session artifacts that already exist on disk. Before your first run, make sure you have:
 
-- Local access to session JSONL trees under `~/.claude/projects/` and/or `~/.codex/`
+- Local access to session logs under `~/.claude/projects/`, `~/.codex/`, and/or `~/.gemini/tmp/`
 - A writable gaal home at `~/.gaal/`
 
 ## First Index

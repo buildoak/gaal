@@ -1,6 +1,6 @@
 # gaal
 
-`gaal` is session observability for AI coding agents. Claude Code and Codex both emit JSONL session logs, but those logs are usually 10-50MB blobs of undocumented, engine-specific event streams that are painful to inspect directly. `gaal` parses both formats, indexes them into SQLite plus Tantivy, and turns raw traces into answers in seconds. The core mental model is that sessions are first-class queryable artifacts, not throwaway logs.
+`gaal` is session observability for AI coding agents. Claude Code, Codex, and Gemini emit session logs, but those logs are usually 10-50MB blobs of undocumented, engine-specific event streams that are painful to inspect directly. `gaal` parses all three formats, indexes them into SQLite plus Tantivy, and turns raw traces into answers in seconds. The core mental model is that sessions are first-class queryable artifacts, not throwaway logs.
 
 ## Quick Orientation
 

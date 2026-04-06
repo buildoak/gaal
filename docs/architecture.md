@@ -6,7 +6,7 @@
 
 Key components:
 
-- Parser: dual Claude/Codex JSONL parsing
+- Parser: three-engine Claude/Codex/Gemini session parsing
 - SQLite: canonical structured store for sessions, facts, handoffs, and tags
 - Tantivy: full-text search over indexed facts
 - Markdown renderer: transcript generation
@@ -39,9 +39,10 @@ src/
     runtime.rs         Shared command runtime (DB handle, config, output mode)
     mod.rs             Module declarations
 
-  parser/              Dual-format JSONL parsing
+  parser/              Three-engine session parsing
     claude.rs          Claude session JSONL parser
     codex.rs           Codex session JSONL parser
+    gemini.rs          Gemini CLI session JSON parser
     facts.rs           Unified fact extraction (tool counting, error dedup, peak context)
     common.rs          Shared parser types and utilities
     event.rs           Parsed event types
@@ -57,6 +58,7 @@ src/
   discovery/           JSONL file discovery on disk
     claude.rs          Claude project tree scanner (~/.claude/projects/)
     codex.rs           Codex session tree scanner (~/.codex/)
+    gemini.rs          Gemini session scanner (~/.gemini/tmp/*/chats/)
     discover.rs        Unified discovery orchestrator
     process.rs         Process-related utilities
     mod.rs
@@ -286,7 +288,7 @@ Token accounting is parser-driven and model-aware:
 - Cache tokens are fully tracked as `cache_read_tokens` and `cache_creation_tokens`.
 - Peak context is the maximum of `input_tokens + cache_read_tokens + cache_creation_tokens` across all counted turns.
 - Model-aware cost estimation uses per-model pricing instead of one flat rate.
-- Tool counting includes both Claude and Codex tool uses.
+- Tool counting includes Claude, Codex, and Gemini tool uses.
 - Usage deduplication differs by engine: Claude uses `dedup_key`, while Codex uses cumulative `total_tokens`.
 - Error deduplication uses `tool:{tool_use_id}` when available, otherwise `ts:{timestamp}|exit:{code}`.
 

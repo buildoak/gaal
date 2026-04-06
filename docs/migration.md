@@ -35,7 +35,7 @@ For new integrations, prefer `--format brief` (default) or `--format summary`.
 
 Key differences between `eywa` and `gaal`:
 
-- `gaal` indexes both Claude and Codex sessions (`eywa` was Claude-only)
+- `gaal` indexes Claude, Codex, and Gemini sessions (`eywa` was Claude-only)
 - `gaal` uses SQLite + Tantivy instead of `eywa`'s flat-file approach
 - Handoff generation uses `agent-mux` by default (`eywa` used direct LLM calls)
 - `gaal`'s recall is BM25-ranked over handoff content, more accurate than `eywa`'s keyword matching

@@ -27,7 +27,7 @@ GAAL_SALT_d0a6e1d5530bf6c9
 
 # `gaal find-salt`
 
-Purpose: scan Claude and Codex JSONL trees and return the first file containing a salt token. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
+Purpose: scan Claude, Codex, and Gemini session logs and return the first file containing a salt token. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
 
 ## Usage
 
@@ -44,7 +44,7 @@ gaal find-salt [OPTIONS] [SALT]
 When the session is indexed (has been processed by `gaal index backfill`):
 
 - `session_id` — raw filename-derived session identifier
-- `engine` — `claude` or `codex`
+- `engine` — `claude`, `codex`, or `gemini`
 - `jsonl_path` — absolute path to the JSONL file
 - `indexed` — `true`
 - `model` — model name (e.g. `claude-opus-4-6`)
@@ -68,7 +68,7 @@ When not indexed:
 Notes:
 
 - The returned `session_id` is derived from the JSONL filename stem, so Codex and Claude shapes differ.
-- This command scans `~/.claude/projects/` and `~/.codex/`.
+- This command scans `~/.claude/projects/`, `~/.codex/`, and `~/.gemini/tmp/`.
 - Enrichment is best-effort: if the DB is unavailable or the session is not indexed, the command still succeeds with the base 3 fields plus `"indexed": false`.
 
 ## Real Examples
