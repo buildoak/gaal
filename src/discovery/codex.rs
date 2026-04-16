@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::Result;
 
@@ -9,7 +10,13 @@ use crate::parser::types::Engine;
 const HEAD_LINES: usize = 30;
 
 /// Discover Codex session JSONL files from `~/.codex/sessions` recursively.
-pub fn discover_codex_sessions() -> Result<Vec<DiscoveredSession>> {
+///
+/// When `newer_than` is set, sessions whose on-disk mtime is older than the
+/// cutoff are skipped before any head-read or JSON parsing.  This keeps the
+/// incremental-backfill hot path off quiet sessions.
+pub fn discover_codex_sessions(
+    newer_than: Option<SystemTime>,
+) -> Result<Vec<DiscoveredSession>> {
     let Some(home) = dirs::home_dir() else {
         return Ok(Vec::new());
     };
@@ -25,6 +32,14 @@ pub fn discover_codex_sessions() -> Result<Vec<DiscoveredSession>> {
         };
         if !meta.is_file() {
             continue;
+        }
+
+        // mtime gate: skip quiet sessions before any expensive work
+        // (head read, JSON parse, DB lookup).
+        if let Some(cutoff) = newer_than {
+            if meta.modified().ok().is_some_and(|m| m < cutoff) {
+                continue;
+            }
         }
 
         let head = read_head_lines(&path, HEAD_LINES);

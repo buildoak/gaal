@@ -10,6 +10,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{named_params, Connection};
 use serde::Serialize;
@@ -19,17 +20,24 @@ use crate::commands::search;
 use crate::config::{gaal_home, load_config};
 use crate::db::open_db;
 use crate::db::queries::{
-    delete_session, get_handoff, get_index_status, get_session, insert_facts_batch, upsert_handoff,
-    upsert_session, SessionRow,
+    delete_session, get_handoff, get_index_status, get_meta, get_session, insert_facts_batch,
+    set_meta, upsert_handoff, upsert_session, SessionRow,
 };
 use crate::discovery::codex::truncate_codex_id;
-use crate::discovery::{discover_sessions, DiscoveredSession};
+use crate::discovery::{discover_sessions_with_cutoff, DiscoveredSession};
 use crate::error::GaalError;
 use crate::model::{Fact, HandoffRecord};
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
 use crate::parser::{parse_session, parse_session_incremental, ParsedSession};
 use crate::subagent::engine::get_subagent_summaries;
+
+/// Safety margin when computing the mtime cutoff for incremental discovery.
+///
+/// Actively-appending files have an mtime equal (within filesystem granularity)
+/// to the last run's wall-clock time.  Subtracting a small window guarantees
+/// those files are NOT gated out on the next pass.
+const BACKFILL_CURSOR_SAFETY_MARGIN: Duration = Duration::from_secs(10);
 
 pub(super) const EPOCH_RFC3339: &str = "1970-01-01T00:00:00Z";
 const SUSPICIOUS_PEAK_CONTEXT_THRESHOLD: i64 = 10_000_000;
@@ -119,6 +127,18 @@ struct EywaEntry {
 }
 
 /// Run `gaal index backfill`.
+///
+/// Strategy:
+///   - One pass per engine (Claude, Codex, Gemini).
+///   - Each engine keeps its own mtime cursor in the `meta` table
+///     (`backfill:<engine>`).  On the next run, discovery skips files whose
+///     on-disk mtime is older than the cursor minus a 10s safety margin.
+///   - First run (no cursor) and DB wipes fall through to a full scan — the
+///     cursor is absent, so `newer_than` is `None`.
+///   - A per-engine failure leaves that engine's cursor untouched so the next
+///     run retries the missed window; the other engines still advance.
+///   - `--engine` filter continues to work — only the requested engine runs.
+///   - `--since` filter is honored on top of the mtime gate (additive).
 pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     // Resolve output_dir: CLI arg > config default > None.
     let output_dir = args
@@ -130,10 +150,6 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
 
     let mut conn = open_db()?;
     let engine_filter = parse_engine_filter(args.engine.as_deref())?;
-    let mut sessions = discover_sessions(engine_filter).map_err(GaalError::from)?;
-    if let Some(since) = args.since.as_deref() {
-        sessions.retain(|session| session_on_or_after(session, since));
-    }
 
     let mut summary = BackfillSummary {
         indexed: 0,
@@ -142,21 +158,128 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
         markdown_written: if output_dir.is_some() { Some(0) } else { None },
         markdown_skipped: if output_dir.is_some() { Some(0) } else { None },
     };
-    let total = sessions.len();
 
     // Batch-load all session IDs with invalid codex error rows once, instead of
     // querying per-session (which hit the wrong index and took ~60s over 2982 Codex sessions).
     let invalid_codex_error_sessions = load_codex_invalid_error_sessions(&conn)?;
 
-    for (idx, session) in sessions.into_iter().enumerate() {
-        match index_discovered_session(
+    let run_start = SystemTime::now();
+    let engines = [Engine::Claude, Engine::Codex, Engine::Gemini];
+    let mut any_engine_indexed = false;
+
+    for engine in engines {
+        if let Some(requested) = engine_filter {
+            if requested != engine {
+                continue;
+            }
+        }
+
+        let cursor_key = backfill_cursor_key(engine);
+        let cursor = get_meta(&conn, cursor_key)
+            .map_err(GaalError::from)?
+            .and_then(|raw| parse_unix_seconds(&raw));
+        let newer_than = cursor
+            .and_then(|c| c.checked_sub(BACKFILL_CURSOR_SAFETY_MARGIN));
+
+        match run_engine_pass(
             &mut conn,
-            &session,
+            engine,
+            newer_than,
+            args.since.as_deref(),
             args.force,
+            with_markdown,
+            output_dir.as_deref(),
             &invalid_codex_error_sessions,
+            &mut summary,
         ) {
+            Ok(indexed_any) => {
+                any_engine_indexed |= indexed_any;
+                // Advance cursor only on successful pass completion.
+                let secs = unix_seconds(run_start);
+                if let Err(err) = set_meta(&conn, cursor_key, &secs.to_string()) {
+                    eprintln!(
+                        "warning: failed to persist backfill cursor for {:?}: {}",
+                        engine, err
+                    );
+                }
+            }
+            Err(err) => {
+                eprintln!("engine {:?} stalled: {}", engine, err);
+                summary.errors += 1;
+                // Cursor stays put — next run retries the missed window.
+            }
+        }
+    }
+
+    promote_codex_coordinators(&mut conn)?;
+    if any_engine_indexed {
+        search::build_search_index(&conn)?;
+    }
+
+    if let Some(output_dir) = &output_dir {
+        let written = summary.markdown_written.unwrap_or(0);
+        if written > 0 {
+            eprintln!(
+                "Wrote {} new session markdowns to {}",
+                written,
+                output_dir.display()
+            );
+        } else {
+            eprintln!("No new sessions to process");
+        }
+    }
+
+    print_json(&summary).map_err(GaalError::from)
+}
+
+fn backfill_cursor_key(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Claude => "backfill:claude",
+        Engine::Codex => "backfill:codex",
+        Engine::Gemini => "backfill:gemini",
+    }
+}
+
+fn unix_seconds(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn parse_unix_seconds(raw: &str) -> Option<SystemTime> {
+    let secs: u64 = raw.trim().parse().ok()?;
+    UNIX_EPOCH.checked_add(Duration::from_secs(secs))
+}
+
+/// Run one engine's pass: discover (with mtime cutoff), iterate, index.
+///
+/// Returns `Ok(true)` when at least one session was indexed this pass.
+#[allow(clippy::too_many_arguments)]
+fn run_engine_pass(
+    conn: &mut Connection,
+    engine: Engine,
+    newer_than: Option<SystemTime>,
+    since: Option<&str>,
+    force: bool,
+    with_markdown: bool,
+    output_dir: Option<&Path>,
+    invalid_codex_error_sessions: &HashSet<String>,
+    summary: &mut BackfillSummary,
+) -> Result<bool, GaalError> {
+    let mut sessions = discover_sessions_with_cutoff(Some(engine), newer_than)
+        .map_err(GaalError::from)?;
+    if let Some(since) = since {
+        sessions.retain(|session| session_on_or_after(session, since));
+    }
+
+    let total = sessions.len();
+    let mut indexed_any = false;
+
+    for (idx, session) in sessions.into_iter().enumerate() {
+        match index_discovered_session(conn, &session, force, invalid_codex_error_sessions) {
             Ok(IndexOutcome::Indexed) => {
                 summary.indexed += 1;
+                indexed_any = true;
                 eprintln!(
                     "[{}/{}] indexed {} ({})",
                     idx + 1,
@@ -165,8 +288,8 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                     session.path.display()
                 );
                 if with_markdown {
-                    if let Some(output_dir) = &output_dir {
-                        match write_session_markdown_to_dir(&conn, &session, output_dir, true) {
+                    if let Some(output_dir) = output_dir {
+                        match write_session_markdown_to_dir(conn, &session, output_dir, true) {
                             Ok(WriteOutcome::Written(md_path)) => {
                                 *summary.markdown_written.as_mut().unwrap() += 1;
                                 eprintln!("  -> markdown: {}", md_path.display());
@@ -179,7 +302,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                             }
                         }
                     } else {
-                        match generate_session_markdown(&conn, &session) {
+                        match generate_session_markdown(conn, &session) {
                             Ok(md_path) => {
                                 eprintln!("  -> markdown: {}", md_path.display());
                             }
@@ -195,8 +318,8 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                 eprintln!("[{}/{}] skipped {}", idx + 1, total, session.id);
                 // Even for index-skipped sessions, write markdown if output-dir
                 // is set and the file doesn't exist yet.
-                if let Some(output_dir) = &output_dir {
-                    match write_session_markdown_to_dir(&conn, &session, output_dir, false) {
+                if let Some(output_dir) = output_dir {
+                    match write_session_markdown_to_dir(conn, &session, output_dir, false) {
                         Ok(WriteOutcome::Written(md_path)) => {
                             *summary.markdown_written.as_mut().unwrap() += 1;
                             eprintln!("  -> markdown: {}", md_path.display());
@@ -213,7 +336,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
                     // if the file doesn't already exist.
                     let md_path = default_session_markdown_path(&session);
                     if !md_path.exists() {
-                        match generate_session_markdown(&conn, &session) {
+                        match generate_session_markdown(conn, &session) {
                             Ok(md_path) => {
                                 eprintln!("  -> markdown: {}", md_path.display());
                             }
@@ -238,25 +361,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
         }
     }
 
-    promote_codex_coordinators(&mut conn)?;
-    if summary.indexed > 0 {
-        search::build_search_index(&conn)?;
-    }
-
-    if let Some(output_dir) = &output_dir {
-        let written = summary.markdown_written.unwrap_or(0);
-        if written > 0 {
-            eprintln!(
-                "Wrote {} new session markdowns to {}",
-                written,
-                output_dir.display()
-            );
-        } else {
-            eprintln!("No new sessions to process");
-        }
-    }
-
-    print_json(&summary).map_err(GaalError::from)
+    Ok(indexed_any)
 }
 
 /// Run `gaal index status`.

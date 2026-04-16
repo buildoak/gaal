@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-16
+
+### Fixed
+- **UTF-8 panic in `index backfill` render pipeline** when session transcripts contained multi-byte codepoints in bash command strings. Two byte-index slicing sites in `src/render/session_md.rs` (truncation limits 57 and 37) would panic on non-ASCII bytes at the cut boundary. Replaced with codepoint-safe `chars().take(N)`. Regression test added.
+
+### Performance
+- **`index backfill` is now incremental.** Per-engine mtime cursors stored in a new `meta` SQLite table (`backfill:claude`, `backfill:codex`, `backfill:gemini`) gate discovery — files whose on-disk mtime is older than `cursor - 10s` are skipped before any head-read, JSON parse, or SQLite lookup. A 10-second safety margin covers actively-appending files. Cursors advance only on successful per-engine passes; a stalled engine leaves its cursor untouched so the next run retries the missed window, and other engines still advance independently. First run (no cursor) and DB wipes fall through to the existing full-scan baseline. `--since`, `--engine`, and `--force` flags still work — the mtime gate is additive. Replaces the previous behavior that walked all ~6,784 sessions every run.
+
 ## 2026-04-06
 
 ### Added

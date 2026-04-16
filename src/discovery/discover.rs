@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -30,10 +31,28 @@ pub struct DiscoveredSession {
 
 /// Discover sessions across all supported engines.
 pub fn discover_sessions(engine_filter: Option<Engine>) -> Result<Vec<DiscoveredSession>> {
+    discover_sessions_with_cutoff(engine_filter, None)
+}
+
+/// Discover sessions across all supported engines, optionally skipping files
+/// whose on-disk mtime is older than `newer_than`.
+///
+/// Used by incremental backfill to avoid walking quiet sessions every minute.
+/// When `newer_than` is `None`, behaves identically to [`discover_sessions`].
+pub fn discover_sessions_with_cutoff(
+    engine_filter: Option<Engine>,
+    newer_than: Option<SystemTime>,
+) -> Result<Vec<DiscoveredSession>> {
     let mut sessions = Vec::new();
-    sessions.extend(super::claude::discover_claude_sessions()?);
-    sessions.extend(super::codex::discover_codex_sessions()?);
-    sessions.extend(super::gemini::discover_gemini_sessions()?);
+    if engine_filter.map_or(true, |e| e == Engine::Claude) {
+        sessions.extend(super::claude::discover_claude_sessions(newer_than)?);
+    }
+    if engine_filter.map_or(true, |e| e == Engine::Codex) {
+        sessions.extend(super::codex::discover_codex_sessions(newer_than)?);
+    }
+    if engine_filter.map_or(true, |e| e == Engine::Gemini) {
+        sessions.extend(super::gemini::discover_gemini_sessions(newer_than)?);
+    }
 
     if let Some(engine) = engine_filter {
         sessions.retain(|s| s.engine == engine);

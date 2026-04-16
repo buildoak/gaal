@@ -1119,3 +1119,66 @@ fn parse_embedded_json(value: Option<String>) -> Value {
 fn db_err(err: rusqlite::Error) -> GaalError {
     GaalError::Db(err)
 }
+
+/// Fetch a value from the `meta` key/value table.
+///
+/// Returns `Ok(None)` when the key is absent, `Ok(Some(value))` otherwise.
+/// Used for durable cursors such as incremental-backfill timestamps.
+pub fn get_meta(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM meta WHERE key = :key",
+        named_params! { ":key": key },
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+}
+
+/// Upsert a value into the `meta` key/value table.
+///
+/// Stamps `updated_at` with the current unix-second timestamp.  Callers should
+/// treat this as authoritative persistence — failure propagates to the caller
+/// so the cursor does not silently skip forward on a half-written row.
+pub fn set_meta(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value, updated_at) VALUES (:key, :value, :updated_at)",
+        named_params! {
+            ":key": key,
+            ":value": value,
+            ":updated_at": now,
+        },
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod meta_tests {
+    use super::*;
+    use crate::db::init_db;
+    use rusqlite::Connection;
+
+    fn fresh_conn() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        init_db(&conn).expect("init schema");
+        conn
+    }
+
+    #[test]
+    fn meta_roundtrip_get_set() {
+        let conn = fresh_conn();
+        assert_eq!(get_meta(&conn, "backfill:claude").unwrap(), None);
+        set_meta(&conn, "backfill:claude", "1234567890").unwrap();
+        assert_eq!(
+            get_meta(&conn, "backfill:claude").unwrap(),
+            Some("1234567890".to_string())
+        );
+        set_meta(&conn, "backfill:claude", "9999999999").unwrap();
+        assert_eq!(
+            get_meta(&conn, "backfill:claude").unwrap(),
+            Some("9999999999".to_string())
+        );
+    }
+}

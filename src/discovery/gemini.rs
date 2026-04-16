@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::Result;
 use serde_json::Value;
@@ -8,7 +9,13 @@ use crate::discovery::discover::DiscoveredSession;
 use crate::parser::types::Engine;
 
 /// Discover Gemini session JSON files from `~/.gemini/tmp/*/chats/session-*.json`.
-pub fn discover_gemini_sessions() -> Result<Vec<DiscoveredSession>> {
+///
+/// When `newer_than` is set, sessions whose on-disk mtime is older than the
+/// cutoff are skipped before the full JSON read + parse.  This keeps the
+/// incremental-backfill hot path off quiet sessions.
+pub fn discover_gemini_sessions(
+    newer_than: Option<SystemTime>,
+) -> Result<Vec<DiscoveredSession>> {
     let Some(home) = dirs::home_dir() else {
         return Ok(Vec::new());
     };
@@ -24,6 +31,13 @@ pub fn discover_gemini_sessions() -> Result<Vec<DiscoveredSession>> {
         };
         if !meta.is_file() || meta.len() == 0 {
             continue;
+        }
+
+        // mtime gate: skip quiet sessions before the full read_to_string + JSON parse.
+        if let Some(cutoff) = newer_than {
+            if meta.modified().ok().is_some_and(|m| m < cutoff) {
+                continue;
+            }
         }
 
         let Ok(contents) = fs::read_to_string(&path) else {
@@ -181,7 +195,7 @@ mod tests {
         let previous_home = std::env::var_os("HOME");
         std::env::set_var("HOME", &temp_home);
 
-        let sessions = discover_gemini_sessions().unwrap();
+        let sessions = discover_gemini_sessions(None).unwrap();
         eprintln!("discovered gemini sessions: {}", sessions.len());
 
         if let Some(home) = previous_home {

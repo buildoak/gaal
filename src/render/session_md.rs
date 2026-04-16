@@ -389,8 +389,9 @@ fn fmt_tool_annotation(name: &str, input: &Value, tool_id: &str) -> Option<ToolA
             let cmd = get_str(&inp, "command")
                 .or_else(|| get_str(&inp, "cmd"))
                 .unwrap_or("?");
-            let display = if cmd.len() > 60 {
-                format!("{}...", &cmd[..57.min(cmd.len())])
+            let display = if cmd.chars().count() > 60 {
+                let short: String = cmd.chars().take(57).collect();
+                format!("{short}...")
             } else {
                 cmd.to_string()
             };
@@ -582,8 +583,9 @@ fn fmt_task_block(task: &TaskInfo, result: Option<&str>, delta: Option<&Subagent
             if !d.commands.is_empty() {
                 if d.commands.len() == 1 {
                     let cmd = &d.commands[0];
-                    let cmd_short = if cmd.len() > 40 {
-                        format!("{}...", &cmd[..37.min(cmd.len())])
+                    let cmd_short = if cmd.chars().count() > 40 {
+                        let short: String = cmd.chars().take(37).collect();
+                        format!("{short}...")
                     } else {
                         cmd.clone()
                     };
@@ -2243,6 +2245,25 @@ mod tests {
                 assert!(s.contains("..."));
                 assert!(s.len() < 80);
             }
+            _ => panic!("expected Simple annotation"),
+        }
+    }
+
+    /// Regression: byte-index slicing panicked when a multi-byte UTF-8 codepoint
+    /// (e.g. U+2019 curly apostrophe, 3 bytes) straddled the truncation boundary.
+    /// The codepoint-safe `chars().take(N)` replacement must not panic.
+    #[test]
+    fn test_tool_annotation_bash_truncate_utf8_at_boundary() {
+        // Craft a command where the curly apostrophe lands across the 57-char
+        // byte cutoff. Each "x" is 1 byte; U+2019 is 3 bytes in UTF-8.
+        let prefix = "x".repeat(56); // 56 bytes before the multi-byte char
+        let cmd = format!("{prefix}\u{2019}tail padding to exceed 60 char threshold");
+        assert!(cmd.chars().count() > 60);
+        let input = serde_json::json!({"command": cmd});
+        // Must not panic.
+        let ann = fmt_tool_annotation("Bash", &input, "idu8");
+        match ann {
+            Some(ToolAnnotation::Simple(s)) => assert!(s.contains("...")),
             _ => panic!("expected Simple annotation"),
         }
     }

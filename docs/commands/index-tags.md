@@ -30,6 +30,28 @@ Output:
 - JSON summary: `indexed`, `skipped`, `errors`, optional `markdown_written`, optional `markdown_skipped`
 - Progress lines go to stderr during the run
 
+### Incremental behavior
+
+`index backfill` is incremental. Each engine (Claude, Codex, Gemini) keeps its own mtime cursor in the `meta` SQLite table under keys `backfill:claude`, `backfill:codex`, and `backfill:gemini`. On every run, discovery for an engine skips files whose on-disk mtime is older than `cursor - 10s` before any head-read, JSON parse, or SQLite lookup. The 10-second safety margin covers actively-appending session files whose mtime is close to wall-clock.
+
+Cursor advancement rules:
+
+- A cursor advances only when that engine's pass completes successfully.
+- If one engine stalls, its cursor stays put and the next run retries the missed window. Other engines still advance independently.
+- First run (no cursor) and DB wipes fall through to a full scan — the cursor is absent, so no mtime gate applies.
+- `--engine`, `--since`, and `--force` are all additive on top of the mtime gate. `--engine claude` only advances the Claude cursor. `--since` narrows further. `--force` re-indexes already-known rows but still honors the mtime gate for discovery.
+
+### Troubleshooting: stuck cursor
+
+If a backfill cursor ever gets stuck (e.g., an engine that keeps failing partway through and you want to force it to re-evaluate everything), delete the cursor rows and rerun:
+
+```bash
+sqlite3 ~/.gaal/index.db "DELETE FROM meta WHERE key LIKE 'backfill:%'"
+gaal index backfill
+```
+
+This clears the per-engine cursors without touching indexed sessions or facts. The next run performs a full-scan baseline and rewrites the cursors on success.
+
 ## `index status`
 
 Usage:
@@ -125,7 +147,7 @@ Run with `--dry-run` first. This is an admin-only recovery tool, not part of nor
 
 ## Operational Note
 
-Any command that mutates facts rebuilds the Tantivy index afterwards. Rebuild triggers include `gaal index backfill`, `gaal index reindex`, `gaal index prune`, `gaal index import-eywa`, and `gaal index recover-orphans`.
+Any command that mutates facts rebuilds the Tantivy index afterwards. Rebuild triggers include `gaal index backfill` (only when at least one engine indexed new sessions), `gaal index reindex`, `gaal index prune`, `gaal index import-eywa`, and `gaal index recover-orphans`.
 
 # `gaal tag`
 

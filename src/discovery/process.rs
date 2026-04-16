@@ -1088,7 +1088,7 @@ fn map_claude_cwd_to_jsonl(cwd: &str, pid: u32) -> Option<PathBuf> {
     }
 
     // Fallback: scan all discovered sessions matching this CWD
-    let Ok(discovered) = super::claude::discover_claude_sessions() else {
+    let Ok(discovered) = super::claude::discover_claude_sessions(None) else {
         return None;
     };
     let mut candidates: Vec<_> = discovered
@@ -1184,7 +1184,7 @@ fn jsonl_matching_pid_start(
 }
 
 fn map_codex_cwd_to_jsonl(cwd: &str) -> Option<PathBuf> {
-    let Ok(discovered) = super::codex::discover_codex_sessions() else {
+    let Ok(discovered) = super::codex::discover_codex_sessions(None) else {
         return None;
     };
     discovered

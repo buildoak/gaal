@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS session_tags (
     PRIMARY KEY (session_id, tag)
 );
 
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_facts_session_ts ON facts(session_id, ts);
 CREATE INDEX IF NOT EXISTS idx_facts_type_ts ON facts(fact_type, ts);
 CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject);

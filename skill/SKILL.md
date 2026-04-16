@@ -151,6 +151,21 @@ gaal ls --since today | jq -r '.sessions[].id' | xargs -I{} gaal inspect {} --fi
 
 These were deliberately removed, not deferred.
 
+## Backfill Incrementality
+
+`gaal index backfill` is incremental. Per-engine mtime cursors live in the `meta` SQLite table under keys `backfill:claude`, `backfill:codex`, `backfill:gemini`. Each run skips session files whose on-disk mtime is older than `cursor - 10s` *before* any head-read, JSON parse, or SQLite lookup. A 10-second safety margin handles actively-appending files. Cursors advance only on successful per-engine passes — a stalled engine retries its window next run while other engines advance independently. First run and DB wipes fall through to a full scan.
+
+This matters for periodic/cron backfills: steady-state runs only touch files that actually changed, so cadence can be tight without burning I/O re-reading 6K+ sessions every time.
+
+**Stuck cursor?** If an engine's cursor gets wedged (e.g., after a crash or cursor corruption) and you want to force a full rescan, delete the cursor rows:
+
+```bash
+sqlite3 ~/.gaal/index.db "DELETE FROM meta WHERE key LIKE 'backfill:%'"
+gaal index backfill
+```
+
+This is a no-op against indexed sessions and facts — it only resets the per-engine mtime gates.
+
 ## Admin: recover-orphans
 
 `gaal index recover-orphans` — one-off subcommand to recover subagent JSONL files orphaned by Claude Code's 30-day cleanup. Creates ghost parent records tagged `_recovered`. Run with `--dry-run` first. Not part of normal workflow.

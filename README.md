@@ -293,7 +293,7 @@ This command costs money -- it runs an LLM extraction pass. Use it on sessions t
 
 | Command | What it does |
 |---------|-------------|
-| `gaal index backfill` | Scan disk for new sessions and index them |
+| `gaal index backfill` | Incremental scan for new/modified sessions. Per-engine mtime cursors skip unchanged files before discovery I/O |
 | `gaal index reindex` | Re-parse all indexed sessions from source JSONL |
 | `gaal index prune` | Remove entries for sessions whose JSONL no longer exists on disk |
 | `gaal index status` | Index statistics: session counts, fact counts, engine breakdown |
@@ -423,7 +423,13 @@ gaal index status
 }
 ```
 
-411 MB SQLite database. 82 days of sessions from two engines. Full backfill from cold takes under 2 minutes. Incremental indexing runs in seconds. Queries return in single-digit milliseconds.
+411 MB SQLite database. 82 days of sessions from two engines. Full backfill from cold takes under 2 minutes. Incremental indexing runs in seconds — per-engine mtime cursors in the `meta` table skip unmodified session files before any discovery I/O, so steady-state runs only touch files that actually changed. Queries return in single-digit milliseconds.
+
+If a backfill cursor ever gets stuck, force a full rescan with:
+
+```bash
+sqlite3 ~/.gaal/index.db "DELETE FROM meta WHERE key LIKE 'backfill:%'"
+```
 
 ---
 

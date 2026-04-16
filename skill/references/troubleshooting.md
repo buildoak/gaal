@@ -9,6 +9,7 @@
 | **`contains_error` false positives** | Sessions flagged with errors that have none | Strings like `"error_count: 0"` or `"no errors found"` match error detection | Check `.errors` array in `gaal inspect <id> --errors` for actual errors. Ignore summary-level flags. |
 | **Claude token counts near-zero** | Claude sessions show `tokens.input: 13, tokens.output: 11` despite hundreds of tool calls | Claude JSONL parser not accumulating `usage.input_tokens`/`usage.output_tokens` from assistant message records | Known bug (TESTING.md T-20). Use `tools_used` as a proxy for session activity. Codex sessions unaffected. |
 | **Epoch-dated eywa stubs** | `gaal index status` shows `oldest_session: "1970-01-01T00:00:00Z"` | `import-eywa` creates session stubs with epoch timestamp when date is missing | Cosmetic — does not affect queries. Filter with `--since` to exclude. |
+| **Backfill cursor stuck** | `gaal index backfill` keeps skipping new or modified sessions | Per-engine mtime cursor in `meta` table is ahead of truth (e.g., after a crash or manual file-mtime edit) | Force full rescan: `sqlite3 ~/.gaal/index.db "DELETE FROM meta WHERE key LIKE 'backfill:%'"` then re-run `gaal index backfill`. Safe — only clears cursors, not indexed rows. |
 
 ## Quick Diagnostics
 

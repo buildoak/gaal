@@ -199,7 +199,7 @@ Gemini stores each session as a single JSON object, so offsets are not meaningfu
 
 These commands rebuild Tantivy:
 
-- `index backfill`
+- `index backfill` (only when at least one engine indexed new sessions on that run)
 - `index reindex`
 - `index prune`
 - `index import-eywa`
