@@ -6,7 +6,7 @@
 
 Key components:
 
-- Parser: three-engine Claude/Codex/Gemini session parsing
+- Parser: four-engine Claude/Codex/Gemini/Hermes session parsing
 - SQLite: canonical structured store for sessions, facts, handoffs, and tags
 - Tantivy: full-text search over indexed facts
 - Markdown renderer: transcript generation
@@ -39,10 +39,11 @@ src/
     runtime.rs         Shared command runtime (DB handle, config, output mode)
     mod.rs             Module declarations
 
-  parser/              Three-engine session parsing
+  parser/              Four-engine session parsing
     claude.rs          Claude session JSONL parser
     codex.rs           Codex session JSONL parser
     gemini.rs          Gemini CLI session JSON parser
+    hermes.rs          Hermes Agent SQLite session parser
     facts.rs           Unified fact extraction (tool counting, error dedup, peak context)
     common.rs          Shared parser types and utilities
     event.rs           Parsed event types
@@ -55,10 +56,11 @@ src/
     queries.rs         All SQL queries
     mod.rs
 
-  discovery/           JSONL file discovery on disk
+  discovery/           Session source discovery on disk
     claude.rs          Claude project tree scanner (~/.claude/projects/)
     codex.rs           Codex session tree scanner (~/.codex/)
     gemini.rs          Gemini session scanner (~/.gemini/tmp/*/chats/)
+    hermes.rs          Hermes state DB scanner (~/.hermes/state.db)
     discover.rs        Unified discovery orchestrator
     process.rs         Process-related utilities
     mod.rs

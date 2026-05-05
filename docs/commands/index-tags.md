@@ -18,7 +18,7 @@ gaal index backfill [OPTIONS]
 
 Flags:
 
-- `--engine <claude|codex|gemini>`
+- `--engine <claude|codex|gemini|hermes>`
 - `--since <date|timestamp>`
 - `--force`
 - `--with-markdown`

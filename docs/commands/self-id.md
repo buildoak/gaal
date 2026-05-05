@@ -119,7 +119,7 @@ gaal resolve [OPTIONS] [ID]
 | Flag | Description |
 | --- | --- |
 | `-H`, `--human` | Human-readable output (otherwise JSON) |
-| `--engine <claude|codex|gemini>` | Filter by engine to disambiguate |
+| `--engine <claude|codex|gemini|hermes>` | Filter by engine to disambiguate |
 
 ## JSON Output
 

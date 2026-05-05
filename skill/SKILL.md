@@ -1,18 +1,18 @@
 ---
 name: gaal
 description: |
-  Gaal is the memory layer for AI coding agents on this Mac mini. It indexes Claude Code, Codex, and Gemini sessions so agents can recall context, search traces, attribute file/command activity, identify their own running session, inspect transcripts, and create continuity handoffs. Use for prior session context, attribution, transcript retrieval, self-identification, handoff generation, fleet/session search, and gaal maintenance.
+  Gaal is the memory layer for AI coding agents on this Mac mini. It indexes Claude Code, Codex, Gemini, and Hermes sessions so agents can recall context, search traces, attribute file/command activity, identify their own running session, inspect transcripts, and create continuity handoffs. Use for prior session context, attribution, transcript retrieval, self-identification, handoff generation, fleet/session search, and gaal maintenance.
 ---
 
 # gaal
 
-strace for AI agents. Dissect anything that happened at the agentic level — every session, every tool call, every file touch, every command run. Claude Code, Codex, and Gemini traces indexed and queryable.
+strace for AI agents. Dissect anything that happened at the agentic level — every session, every tool call, every file touch, every command run. Claude Code, Codex, Gemini, and Hermes traces indexed and queryable.
 
 ## Capabilities
 
 ```bash
 gaal ls -H                                      # fleet overview
-gaal ls --engine gemini --since 7d -H           # filter sessions by engine
+gaal ls --engine hermes --since 7d -H           # filter sessions by engine
 gaal inspect latest --tokens -H                 # inspect one session
 gaal inspect latest --files write               # file writes only
 gaal transcript latest                          # rendered transcript path metadata
@@ -36,7 +36,7 @@ gaal index status -H                            # index health
 
 ## Fleet
 
-`gaal ls` lists indexed sessions. Important filters: `--engine claude|codex|gemini`, `--session-type coordinator|standalone|subagent`, `--subagent-type <type>`, `--since`, `--before`, `--cwd`, repeatable `--tag`, `--sort started|ended|tokens|cost|duration`, `--aggregate`, `--all`, and `--skip-subagents`.
+`gaal ls` lists indexed sessions. Important filters: `--engine claude|codex|gemini|hermes`, `--session-type coordinator|standalone|subagent`, `--subagent-type <type>`, `--since`, `--before`, `--cwd`, repeatable `--tag`, `--sort started|ended|tokens|cost|duration`, `--aggregate`, `--all`, and `--skip-subagents`.
 
 Session taxonomy:
 
@@ -68,7 +68,7 @@ gaal transcript latest --stdout        # markdown content
 gaal transcript latest --force         # re-render cached transcript
 ```
 
-Prefer `inspect --trace` or `transcript` over raw file parsing. Gaal normalizes incompatible Claude Code JSONL, Codex JSONL, and Gemini JSON formats.
+Prefer `inspect --trace` or `transcript` over raw file parsing. Gaal normalizes incompatible Claude Code JSONL, Codex JSONL, Gemini JSON, and Hermes SQLite formats.
 
 ## Attribution
 
@@ -123,6 +123,7 @@ When indexed, `find-salt` returns model, cwd, session type, turns, tokens, trans
 - **Claude Code**: first 8 chars of UUID (e.g., `69384ef1`)
 - **Gemini**: first 8 chars of session name
 - **Codex**: last 8 hex chars of UUIDv7 (dashes stripped) — Codex UUIDs share timestamp prefix, uniqueness is in the suffix
+- **Hermes**: full session ID. First-8 prefixes are date-like and collide.
 
 ```bash
 gaal create-handoff 69384ef1                              # 99% case
@@ -131,13 +132,13 @@ gaal create-handoff latest --provider openrouter          # alt backend
 gaal create-handoff --batch --since 1d --min-turns 3 --dry-run
 ```
 
-Key flags: `--engine claude|codex|gemini`, `--provider agent-mux|openrouter`, `--effort low|medium|high|xhigh`, `--dry-run`, `--batch`, `--parallel`, `--min-turns`, `--this`, `--jsonl`, `--model`, and `--prompt`. Use `--dry-run` before batch work.
+Key flags: `--engine claude|codex|gemini|hermes`, `--provider agent-mux|openrouter`, `--effort low|medium|high|xhigh`, `--dry-run`, `--batch`, `--parallel`, `--min-turns`, `--this`, `--jsonl`, `--model`, and `--prompt`. Use `--dry-run` before batch work.
 
 **Failure mode:** Default provider is `agent-mux`. If agent-mux is unavailable, `create-handoff` hangs. Verify agent-mux is working before batch operations.
 
 ## Engine Filters
 
-`--engine claude|codex|gemini` is supported only on:
+`--engine claude|codex|gemini|hermes` is supported only on:
 
 ```text
 gaal ls
@@ -157,6 +158,7 @@ Index commands maintain derived data:
 ```bash
 gaal index status
 gaal index backfill --engine claude
+gaal index backfill --engine hermes
 gaal index reindex <session-id>
 gaal index recover-orphans --dry-run
 ```
@@ -189,4 +191,4 @@ Tag with `gaal tag <session-id> research`, remove with `gaal tag <session-id> --
 
 For exact flags, schemas, and operational details, read `docs/agent-guide.md`, `docs/commands/`, `docs/formats.md`, `docs/architecture.md`, `docs/getting-started.md`, and the skill-local files in `skill/references/`.
 
-**Data root:** `~/.gaal/` (override with `GAAL_HOME` env var). Index at `$GAAL_HOME/index.db`, FTS at `$GAAL_HOME/tantivy/`.
+**Data root:** `~/.gaal/` (override with `GAAL_HOME` env var). Index at `$GAAL_HOME/index.db`, FTS at `$GAAL_HOME/tantivy/`. Hermes discovery reads `~/.hermes/state.db` by default; override with `HERMES_STATE_DB` or `HERMES_HOME`.

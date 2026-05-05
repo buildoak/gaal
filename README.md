@@ -1,19 +1,19 @@
 # gaal
 
-Session observability for AI coding agents. Parses Claude Code, Codex, and Gemini CLI session logs, indexes into SQLite + Tantivy FTS, answers any question about any session in seconds.
+Session observability for AI coding agents. Parses Claude Code, Codex, Gemini CLI, and Hermes Agent session logs, indexes into SQLite + Tantivy FTS, answers any question about any session in seconds.
 
 [![crates.io](https://img.shields.io/crates/v/gaal.svg)](https://crates.io/crates/gaal)
 [![CI](https://github.com/buildoak/gaal/actions/workflows/ci.yml/badge.svg)](https://github.com/buildoak/gaal/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS-lightgrey)
 
-11,000+ sessions. 372K facts. 895 handoffs indexed. Three-engine. 12 commands.
+11,000+ sessions. 372K facts. 895 handoffs indexed. Four-engine. 12 commands.
 
 ---
 
 ## What It Does
 
-Claude Code, Codex, and Gemini CLI emit session logs -- 10-50MB blobs of undocumented, engine-specific event streams. Raw, they're useless. Gaal parses all three formats, normalizes three different event models, and turns raw traces into queryable artifacts.
+Claude Code, Codex, Gemini CLI, and Hermes Agent emit session logs -- often 10-50MB blobs of undocumented, engine-specific event streams. Raw, they're useless. Gaal parses all four formats, normalizes their event models, and turns raw traces into queryable artifacts.
 
 - **Fleet view** across thousands of sessions, all engines, one table. Filter by engine, model, session type, time window, CWD, or token count.
 - **Drill into any session** -- files touched, commands run, subagent swarms, token breakdown, peak context, cost estimate.
@@ -75,6 +75,7 @@ gaal ls --session-type coordinator --since 1d -H    # parent sessions today
 gaal ls --subagent-type gsd-heavy --since 3d         # GSD dispatches this week
 gaal ls --engine codex --limit 10 -H                 # Codex sessions only
 gaal ls --engine gemini --limit 10 -H                # Gemini sessions only
+gaal ls --engine hermes --limit 10 -H                # Hermes sessions only
 gaal ls --model claude-opus-4-6 --since 7d -H        # Opus sessions this week
 ```
 
@@ -342,7 +343,7 @@ Session files on disk
   -> output/ (JSON or human-readable tables)
 ```
 
-**Three-engine.** Claude Code, Codex, and Gemini CLI each use different session formats (JSONL or JSON). Gaal has a dedicated parser for each, normalizes all three into the same fact model, and exposes one query surface. You never need to know which engine produced a session -- `ls`, `inspect`, `who`, `search`, and `recall` work the same across all engines.
+**Four-engine.** Claude Code, Codex, Gemini CLI, and Hermes Agent each use different session formats (JSONL, JSON, or SQLite). Gaal has a dedicated adapter for each, normalizes all four into the same fact model, and exposes one query surface. You never need to know which engine produced a session -- `ls`, `inspect`, `who`, `search`, and `recall` work the same across all engines.
 
 **Session taxonomy.** Three types, deterministically classified from JSONL structure:
 

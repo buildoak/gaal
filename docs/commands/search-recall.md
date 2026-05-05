@@ -12,7 +12,7 @@ gaal search [OPTIONS] [QUERY]
 
 - `--since <duration|date>`: default `30d`
 - `--cwd <substring>`
-- `--engine <claude|codex|gemini>`
+- `--engine <claude|codex|gemini|hermes>`
 - `--field <prompts|replies|commands|errors|files|all>`: default `all`
 - `--context <n>`: default `2`
 - `--limit <n>`: default `20`
