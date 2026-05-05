@@ -5,12 +5,15 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
+use crate::discovery::DiscoveredSession;
+
 pub mod claude;
 pub mod codex;
 pub mod common;
 pub mod event;
 pub mod facts;
 pub mod gemini;
+pub mod hermes;
 pub mod types;
 
 pub use event::{ContentBlock, EventKind, SessionEvent, ToolUseEvent};
@@ -81,8 +84,23 @@ pub fn parse_session(path: &Path) -> Result<ParsedSession> {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
         Engine::Gemini => gemini::parse_events(path)?,
+        Engine::Hermes => {
+            bail!("Hermes sessions require a session id; use hermes::parse_session(db_path, id)")
+        }
     };
     Ok(facts::extract_parsed_session(&events, engine, path))
+}
+
+/// Parse a discovered session, preserving source-specific addressing.
+///
+/// File-backed engines can be parsed from their JSONL path alone. Hermes stores
+/// many logical sessions inside one SQLite state DB, so discovery must pass the
+/// session id through the parser boundary.
+pub fn parse_discovered_session(discovered: &DiscoveredSession) -> Result<ParsedSession> {
+    match discovered.engine {
+        Engine::Hermes => hermes::parse_session(&discovered.path, &discovered.id),
+        _ => parse_session(&discovered.path),
+    }
 }
 
 /// Parses only newly appended JSONL content starting at byte `offset`.
@@ -94,6 +112,9 @@ pub fn parse_session_incremental(path: &Path, offset: u64) -> Result<(ParsedSess
         Engine::Claude => claude::parse_events_from_offset(path, offset)?,
         Engine::Codex => codex::parse_events_from_offset(path, offset)?,
         Engine::Gemini => gemini::parse_events_from_offset(path, offset)?,
+        Engine::Hermes => {
+            bail!("Hermes sessions are SQLite-backed and do not support byte-offset parsing")
+        }
     };
     let parsed = facts::extract_parsed_session(&events, engine, path);
 

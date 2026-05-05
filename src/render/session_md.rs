@@ -6,7 +6,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::{DateTime, FixedOffset, Utc};
 use regex::Regex;
 use rusqlite::{named_params, Connection};
@@ -16,7 +16,7 @@ use crate::parser::event::{
     ContentBlock as ParserContentBlock, EventKind, SessionEvent, ToolUseEvent,
 };
 use crate::parser::types::Engine;
-use crate::parser::{claude, codex, detect_engine, gemini};
+use crate::parser::{claude, codex, detect_engine, gemini, hermes};
 
 // Dubai timezone: UTC+4.
 const DUBAI_OFFSET_SECS: i32 = 4 * 3600;
@@ -152,6 +152,9 @@ pub fn render_session_markdown(path: &Path) -> Result<String> {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
         Engine::Gemini => gemini::parse_events(path)?,
+        Engine::Hermes => {
+            bail!("Hermes sessions require a session id; use render_hermes_session_markdown")
+        }
     };
     let session = events_to_session_data(&events, path, engine);
     Ok(session_to_markdown(&session))
@@ -172,12 +175,37 @@ pub fn render_session_markdown_with_db(
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
         Engine::Gemini => gemini::parse_events(path)?,
+        Engine::Hermes => {
+            let Some(session_id) = override_session_id else {
+                bail!("Hermes sessions require override_session_id")
+            };
+            hermes::parse_events(path, session_id)?
+        }
     };
     let mut session = events_to_session_data(&events, path, engine);
 
     if let Some(sid) = override_session_id {
         session.session_id = sid.to_string();
     }
+
+    if session.subagent_deltas.is_empty() {
+        if let Some(db_deltas) = load_subagent_deltas_from_db(conn, &session.session_id) {
+            session.subagent_deltas = db_deltas;
+        }
+    }
+
+    Ok(session_to_markdown(&session))
+}
+
+/// Render one logical Hermes session from a SQLite `state.db`.
+pub fn render_hermes_session_markdown(
+    path: &Path,
+    conn: &Connection,
+    session_id: &str,
+) -> Result<String> {
+    let events = hermes::parse_events(path, session_id)?;
+    let mut session = events_to_session_data(&events, path, Engine::Hermes);
+    session.session_id = session_id.to_string();
 
     if session.subagent_deltas.is_empty() {
         if let Some(db_deltas) = load_subagent_deltas_from_db(conn, &session.session_id) {
@@ -307,6 +335,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Claude => "Claude",
         Engine::Codex => "Codex",
         Engine::Gemini => "Gemini",
+        Engine::Hermes => "Hermes",
     }
 }
 
@@ -1562,7 +1591,7 @@ fn session_to_markdown(session: &SessionData) -> String {
 
 /// Render YAML frontmatter.
 fn render_frontmatter(session: &SessionData) -> String {
-    let sid: String = session.session_id.chars().take(8).collect();
+    let sid = crate::util::session_artifact_id(&session.engine.to_string(), &session.session_id);
     let ts_start = parse_ts(session.timestamp_start.as_deref());
     let ts_end = parse_ts(session.timestamp_end.as_deref());
 
@@ -1664,7 +1693,11 @@ fn render_tool_annotations_inline(
 }
 
 /// Render the conversation section.
-fn render_conversation(turns: &[Turn], subagent_deltas: &[SubagentDelta], engine: Engine) -> String {
+fn render_conversation(
+    turns: &[Turn],
+    subagent_deltas: &[SubagentDelta],
+    engine: Engine,
+) -> String {
     let engine_label = engine_label(engine);
     let mut lines = vec!["## Conversation".to_string(), String::new()];
 

@@ -15,6 +15,8 @@ pub enum Engine {
     Codex,
     /// Gemini session JSON format.
     Gemini,
+    /// Hermes Agent SQLite session store.
+    Hermes,
 }
 
 impl Display for Engine {
@@ -23,6 +25,7 @@ impl Display for Engine {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Gemini => "gemini",
+            Self::Hermes => "hermes",
         };
         write!(f, "{value}")
     }
@@ -36,6 +39,7 @@ impl FromStr for Engine {
             "claude" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
             "gemini" => Ok(Self::Gemini),
+            "hermes" => Ok(Self::Hermes),
             other => Err(GaalError::ParseError(format!("invalid engine: {other}"))),
         }
     }

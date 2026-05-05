@@ -71,6 +71,7 @@ pub enum LsEngine {
     Claude,
     Codex,
     Gemini,
+    Hermes,
 }
 
 /// Supported `gaal ls --sort` fields.
@@ -285,6 +286,7 @@ impl LsEngine {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Gemini => "gemini",
+            Self::Hermes => "hermes",
         }
     }
 }

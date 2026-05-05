@@ -1052,7 +1052,7 @@ fn map_cwd_to_jsonl(engine: &Engine, cwd: &str, pid: u32) -> Option<PathBuf> {
     match engine {
         Engine::Claude => map_claude_cwd_to_jsonl(cwd, pid),
         Engine::Codex => map_codex_cwd_to_jsonl(cwd),
-        Engine::Gemini => None,
+        Engine::Gemini | Engine::Hermes => None,
     }
 }
 
@@ -1282,6 +1282,7 @@ fn extract_session_id_from_jsonl(path: &Path, engine: &Engine) -> Option<String>
                     return Some(id);
                 }
             }
+            Engine::Hermes => {}
         }
     }
     None

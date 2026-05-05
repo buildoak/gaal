@@ -149,23 +149,37 @@ fn is_stale_render(path: &Path) -> bool {
 }
 
 fn render_markdown(session: &SessionRow, conn: Option<&Connection>) -> Result<String, GaalError> {
-    let jsonl_path = Path::new(&session.jsonl_path);
-    if !jsonl_path.exists() {
+    let source_path = Path::new(&session.jsonl_path);
+    if !source_path.exists() {
         return Err(GaalError::NotFound(format!(
-            "JSONL source file not found: {}",
+            "session source file not found: {}",
             session.jsonl_path
         )));
+    }
+
+    if session.engine == "hermes" {
+        let Some(conn) = conn else {
+            return Err(GaalError::Internal(
+                "Hermes transcript rendering requires DB context".to_string(),
+            ));
+        };
+        return crate::render::session_md::render_hermes_session_markdown(
+            source_path,
+            conn,
+            &session.id,
+        )
+        .map_err(|e| GaalError::Internal(format!("failed to render session markdown: {e}")));
     }
 
     // Pass the DB session ID as override — subagent JSONLs contain the parent's
     // sessionId field, so the JSONL-derived ID would be wrong in frontmatter.
     let rendered = match conn {
         Some(conn) => crate::render::session_md::render_session_markdown_with_db(
-            jsonl_path,
+            source_path,
             conn,
             Some(&session.id),
         ),
-        None => crate::render::session_md::render_session_markdown(jsonl_path),
+        None => crate::render::session_md::render_session_markdown(source_path),
     };
 
     rendered.map_err(|e| GaalError::Internal(format!("failed to render session markdown: {e}")))
@@ -202,7 +216,7 @@ fn read_markdown_file(path: &Path) -> Result<String, GaalError> {
 }
 
 fn transcript_paths(session: &SessionRow, output_dir: Option<&Path>) -> TranscriptPaths {
-    let short_id = session.id.chars().take(8).collect::<String>();
+    let artifact_id = crate::util::session_artifact_id(&session.engine, &session.id);
     let (year, month, day) = date_parts(&session.started_at);
 
     let gaal_path = gaal_home()
@@ -212,13 +226,13 @@ fn transcript_paths(session: &SessionRow, output_dir: Option<&Path>) -> Transcri
         .join(&year)
         .join(&month)
         .join(&day)
-        .join(format!("{short_id}.md"));
+        .join(format!("{artifact_id}.md"));
 
     let external_path = output_dir.map(|dir| {
         dir.join(&year)
             .join(&month)
             .join(&day)
-            .join(format!("{short_id}.md"))
+            .join(format!("{artifact_id}.md"))
     });
 
     TranscriptPaths {

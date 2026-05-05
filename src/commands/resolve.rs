@@ -69,7 +69,7 @@ pub fn run(args: ResolveArgs) -> Result<(), GaalError> {
 fn to_output(session: &SessionRow, paths: &ResolvedPaths) -> ResolveOutput {
     ResolveOutput {
         session_id: session.id.clone(),
-        short_id: short_id(&session.id),
+        short_id: artifact_id(session),
         engine: session.engine.clone(),
         jsonl_path: paths.jsonl_path.clone(),
         transcript_path: paths.transcript_path.clone(),
@@ -92,7 +92,7 @@ fn compute_paths(session: &SessionRow) -> ResolvedPaths {
 
 fn compute_paths_from_home(session: &SessionRow, gaal_home: &Path) -> ResolvedPaths {
     let date_parts = parse_date_parts(&session.started_at);
-    let short_id = short_id(&session.id);
+    let artifact_id = artifact_id(session);
 
     let transcript_path = date_parts.as_ref().map(|(year, month, day)| {
         gaal_home
@@ -102,7 +102,7 @@ fn compute_paths_from_home(session: &SessionRow, gaal_home: &Path) -> ResolvedPa
             .join(year)
             .join(month)
             .join(day)
-            .join(format!("{short_id}.md"))
+            .join(format!("{artifact_id}.md"))
     });
 
     let handoff_path = date_parts.as_ref().map(|(year, month, day)| {
@@ -113,7 +113,7 @@ fn compute_paths_from_home(session: &SessionRow, gaal_home: &Path) -> ResolvedPa
             .join(year)
             .join(month)
             .join(day)
-            .join(format!("{short_id}.md"))
+            .join(format!("{artifact_id}.md"))
     });
 
     ResolvedPaths {
@@ -149,7 +149,7 @@ fn print_human(session: &SessionRow, paths: &ResolvedPaths) {
     let model = session.model.as_deref().unwrap_or("unknown");
     println!(
         "Session:    {} ({model}, {})",
-        short_id(&session.id),
+        artifact_id(session),
         session.session_type
     );
     println!("JSONL:      {}", compact_home(&paths.jsonl_path));
@@ -214,8 +214,8 @@ fn compact_home(path: &str) -> String {
     }
 }
 
-fn short_id(session_id: &str) -> String {
-    session_id.chars().take(8).collect()
+fn artifact_id(session: &SessionRow) -> String {
+    crate::util::session_artifact_id(&session.engine, &session.id)
 }
 
 #[cfg(test)]
@@ -301,6 +301,51 @@ mod tests {
             Some(handoff.to_string_lossy().to_string())
         );
         assert!(paths.handoff_exists);
+
+        fs::remove_dir_all(&base).expect("cleanup");
+    }
+
+    #[test]
+    fn compute_paths_uses_full_hermes_id() {
+        let base = unique_test_dir();
+        let session = SessionRow {
+            id: "20260504_101010_a1b2c3".to_string(),
+            engine: "hermes".to_string(),
+            model: Some("hermes-test-model".to_string()),
+            cwd: None,
+            started_at: "2026-05-04T14:10:10.125Z".to_string(),
+            ended_at: None,
+            exit_signal: None,
+            last_event_at: None,
+            parent_id: None,
+            session_type: "standalone".to_string(),
+            jsonl_path: "/tmp/state.db".to_string(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+            total_tools: 0,
+            total_turns: 0,
+            peak_context: 0,
+            last_indexed_offset: 0,
+            subagent_type: None,
+            gemini_summary: None,
+        };
+
+        let paths = compute_paths_from_home(&session, &base);
+        assert!(paths
+            .transcript_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(
+                "/data/hermes/sessions/2026/05/04/20260504_101010_a1b2c3.md"
+            )));
+        assert!(paths
+            .handoff_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(
+                "/data/hermes/handoffs/2026/05/04/20260504_101010_a1b2c3.md"
+            )));
 
         fs::remove_dir_all(&base).expect("cleanup");
     }

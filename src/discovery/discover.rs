@@ -53,18 +53,29 @@ pub fn discover_sessions_with_cutoff(
     if engine_filter.map_or(true, |e| e == Engine::Gemini) {
         sessions.extend(super::gemini::discover_gemini_sessions(newer_than)?);
     }
+    if engine_filter.map_or(true, |e| e == Engine::Hermes) {
+        sessions.extend(super::hermes::discover_hermes_sessions(newer_than)?);
+    }
 
     if let Some(engine) = engine_filter {
         sessions.retain(|s| s.engine == engine);
     }
 
     sessions.sort_by(|a, b| {
-        b.started_at
-            .as_deref()
-            .cmp(&a.started_at.as_deref())
+        hermes_parent_order(a)
+            .cmp(&hermes_parent_order(b))
+            .then_with(|| b.started_at.as_deref().cmp(&a.started_at.as_deref()))
             .then_with(|| a.id.cmp(&b.id))
     });
     Ok(sessions)
+}
+
+fn hermes_parent_order(session: &DiscoveredSession) -> u8 {
+    if session.engine == Engine::Hermes && session.forked_from_id.is_some() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Read up to `n` lines from the start of a file.

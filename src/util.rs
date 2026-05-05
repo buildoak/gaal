@@ -13,6 +13,19 @@ pub fn sanitize_filename(id: &str) -> String {
     }
 }
 
+/// Return the filename/session-display identifier used for derived artifacts.
+///
+/// Claude, Codex, and Gemini keep the historic first-8 convention. Hermes IDs
+/// start with date/time components, so first-8 aliases collide across sessions.
+pub fn session_artifact_id(engine: &str, id: &str) -> String {
+    let sanitized = sanitize_filename(id);
+    if engine == "hermes" {
+        sanitized
+    } else {
+        sanitized.chars().take(8).collect()
+    }
+}
+
 /// Write content to a file atomically using a temporary file and rename.
 /// This prevents partial writes if the process is killed mid-write.
 pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {

@@ -115,16 +115,16 @@ fn migrate_sessions_engine_check(conn: &Connection) -> Result<(), GaalError> {
         return Ok(());
     }
 
-    let gemini_probe_inserted = conn
+    let hermes_probe_inserted = conn
         .execute(
-            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('__gaal_gemini_probe__', 'gemini', '1970-01-01T00:00:00Z', '__probe__')",
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('__gaal_hermes_probe__', 'hermes', '1970-01-01T00:00:00Z', '__probe__')",
             [],
         )
         .is_ok();
 
-    if gemini_probe_inserted {
+    if hermes_probe_inserted {
         conn.execute(
-            "DELETE FROM sessions WHERE id = '__gaal_gemini_probe__'",
+            "DELETE FROM sessions WHERE id = '__gaal_hermes_probe__'",
             [],
         )
         .ok();
@@ -143,7 +143,7 @@ fn migrate_sessions_engine_check(conn: &Connection) -> Result<(), GaalError> {
         .map_err(map_db_err)?;
 
     let migration_result = (|| {
-        conn.execute_batch(SESSIONS_TABLE_WITH_GEMINI)
+        conn.execute_batch(SESSIONS_TABLE_WITH_ALL_ENGINES)
             .map_err(map_db_err)?;
 
         if !column_list.is_empty() {
@@ -221,12 +221,13 @@ const SESSION_COLUMNS: &[&str] = &[
     "peak_context",
     "last_indexed_offset",
     "subagent_type",
+    "gemini_summary",
 ];
 
-const SESSIONS_TABLE_WITH_GEMINI: &str = r#"
+const SESSIONS_TABLE_WITH_ALL_ENGINES: &str = r#"
 CREATE TABLE sessions_new (
     id TEXT PRIMARY KEY,
-    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini')),
+    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'hermes')),
     model TEXT,
     cwd TEXT,
     started_at TEXT NOT NULL,
@@ -245,7 +246,8 @@ CREATE TABLE sessions_new (
     total_turns INTEGER DEFAULT 0,
     peak_context INTEGER DEFAULT 0,
     last_indexed_offset INTEGER DEFAULT 0,
-    subagent_type TEXT
+    subagent_type TEXT,
+    gemini_summary TEXT
 );
 "#;
 
@@ -254,7 +256,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn migrates_sessions_check_constraint_to_allow_gemini() {
+    fn migrates_sessions_check_constraint_to_allow_gemini_and_hermes() {
         let conn = Connection::open_in_memory().expect("open db");
         conn.execute_batch(
             r#"
@@ -294,6 +296,11 @@ mod tests {
             [],
         )
         .expect("insert gemini session");
+        conn.execute(
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('sess-3', 'hermes', '2026-01-03T00:00:00Z', '/tmp/state.db')",
+            [],
+        )
+        .expect("insert hermes session");
 
         let fact_count: i64 = conn
             .query_row(

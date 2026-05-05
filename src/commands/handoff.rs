@@ -19,8 +19,8 @@ use serde_json::Value;
 
 use crate::commands::index::{index_discovered_session, IndexOutcome};
 use crate::config::{gaal_home, load_config, AgentMuxConfig, GaalConfig};
-use crate::db::open_db;
 use crate::db::queries::{get_facts, get_session, upsert_handoff, SessionRow};
+use crate::db::{open_db, open_db_readonly};
 use crate::discovery::DiscoveredSession;
 use crate::error::GaalError;
 use crate::model::{Fact, FactType, HandoffRecord};
@@ -549,7 +549,7 @@ fn build_dry_run_plan(
     session: &DryRunSession,
     request: DryRunRequest<'_>,
 ) -> Result<HandoffDryRunResult, GaalError> {
-    let stats = scan_jsonl_for_plan(&session.jsonl_path)?;
+    let stats = scan_dry_run_session_for_plan(session)?;
     let mut warnings = Vec::new();
     let execution_plan = plan_execution_chunks(&stats, &mut warnings);
     let estimated_llm_calls = match execution_plan.strategy.as_str() {
@@ -741,6 +741,44 @@ fn scan_jsonl_for_plan(path: &Path) -> Result<JsonlPlanStats, GaalError> {
     })
 }
 
+fn scan_dry_run_session_for_plan(session: &DryRunSession) -> Result<JsonlPlanStats, GaalError> {
+    if session.engine == "hermes" {
+        return scan_hermes_source_for_plan(&session.jsonl_path, &session.id, &session.started_at);
+    }
+    scan_jsonl_for_plan(&session.jsonl_path)
+}
+
+fn scan_indexed_session_for_plan(session: &SessionRow) -> Result<JsonlPlanStats, GaalError> {
+    if session.engine == "hermes" {
+        return scan_hermes_source_for_plan(
+            Path::new(&session.jsonl_path),
+            &session.id,
+            &session.started_at,
+        );
+    }
+    scan_jsonl_for_plan(Path::new(&session.jsonl_path))
+}
+
+fn scan_hermes_source_for_plan(
+    db_path: &Path,
+    session_id: &str,
+    started_at: &str,
+) -> Result<JsonlPlanStats, GaalError> {
+    if !db_path.exists() {
+        return Err(GaalError::NotFound(db_path.display().to_string()));
+    }
+    let conn = open_db_readonly()?;
+    let transcript =
+        crate::render::session_md::render_hermes_session_markdown(db_path, &conn, session_id)
+            .map_err(|e| GaalError::Internal(format!("render Hermes transcript: {e}")))?;
+    Ok(JsonlPlanStats {
+        chars: transcript.len() as u64,
+        lines: transcript.lines().count().max(1),
+        compaction_lines: Vec::new(),
+        first_timestamp: Some(started_at.to_string()),
+    })
+}
+
 fn line_has_top_level_compacted_type(line: &str) -> bool {
     let prefix = match line.find("\"payload\"") {
         Some(idx) => &line[..idx],
@@ -772,10 +810,7 @@ fn planned_handoff_path(session_id: &str, engine: &str, started_at: &str) -> Pat
         .join(day)
         .join(format!(
             "{}.md",
-            crate::util::sanitize_filename(session_id)
-                .chars()
-                .take(8)
-                .collect::<String>()
+            crate::util::session_artifact_id(engine, session_id)
         ))
 }
 
@@ -1068,7 +1103,7 @@ fn process_session_handoff(
     }
 
     let mut plan_warnings = Vec::new();
-    let execution_plan = scan_jsonl_for_plan(Path::new(&session.jsonl_path))
+    let execution_plan = scan_indexed_session_for_plan(session)
         .map(|stats| plan_execution_chunks(&stats, &mut plan_warnings))
         .ok();
     if let Some(plan) = execution_plan {
@@ -2104,6 +2139,7 @@ fn index_single_jsonl(
 fn truncate_session_id(raw: &str, engine: &Engine) -> String {
     match engine {
         Engine::Claude | Engine::Gemini => raw.chars().take(8).collect(),
+        Engine::Hermes => crate::util::sanitize_filename(raw),
         Engine::Codex => {
             let hex: String = raw.chars().filter(|c| *c != '-').collect();
             if hex.len() > 8 {
@@ -2135,18 +2171,30 @@ fn load_prompt(path: &Path) -> Result<String, GaalError> {
 ///
 /// Returns `None` if all sources fail.
 fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Option<String> {
-    let short_id: String = session.id.chars().take(8).collect();
+    let artifact_id = crate::util::session_artifact_id(&session.engine, &session.id);
     let (year, month, day) = date_parts(&session.started_at);
 
     // 1. Fresh render from JSONL. Handoff generation should not depend on
     // cached markdown because active/recent sessions may still be appending.
-    let jsonl_path = Path::new(&session.jsonl_path);
-    if jsonl_path.exists() {
-        match crate::render::session_md::render_session_markdown(jsonl_path) {
+    let source_path = Path::new(&session.jsonl_path);
+    if source_path.exists() {
+        let render_result = if session.engine == "hermes" {
+            match open_db_readonly() {
+                Ok(conn) => crate::render::session_md::render_hermes_session_markdown(
+                    source_path,
+                    &conn,
+                    &session.id,
+                ),
+                Err(err) => Err(anyhow!("open gaal DB for Hermes transcript: {err}")),
+            }
+        } else {
+            crate::render::session_md::render_session_markdown(source_path)
+        };
+        match render_result {
             Ok(content) if !content.trim().is_empty() => {
                 eprintln!(
                     "  -> transcript source: freshly rendered from {}",
-                    jsonl_path.display()
+                    source_path.display()
                 );
                 return Some(content);
             }
@@ -2165,7 +2213,7 @@ fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Opti
         .join(&year)
         .join(&month)
         .join(&day)
-        .join(format!("{short_id}.md"));
+        .join(format!("{artifact_id}.md"));
     if let Ok(content) = fs::read_to_string(&gaal_md_path) {
         if !content.trim().is_empty() {
             eprintln!("  -> transcript source: {}", gaal_md_path.display());
@@ -2179,7 +2227,7 @@ fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Opti
             .join(&year)
             .join(&month)
             .join(&day)
-            .join(format!("{short_id}.md"));
+            .join(format!("{artifact_id}.md"));
         if let Ok(content) = fs::read_to_string(&external_path) {
             if !content.trim().is_empty() {
                 eprintln!("  -> transcript source: {}", external_path.display());
@@ -2717,8 +2765,7 @@ fn build_handoff_frontmatter(
     engine: &str,
     model: &str,
 ) -> String {
-    // Session ID: first 8 chars
-    let sid: String = session.id.chars().take(8).collect();
+    let sid = crate::util::session_artifact_id(&session.engine, &session.id);
 
     // Date is user-local, matching rendered transcript frontmatter.
     let date_str = DateTime::parse_from_rfc3339(&session.started_at)
@@ -2736,9 +2783,12 @@ fn build_handoff_frontmatter(
     // Simplified model name using same logic as render/session_md.rs
     let model_simple = simplify_model_name(model);
 
-    // Engine: "claude" or "codex"
     let engine_str = if engine.contains("codex") {
         "codex"
+    } else if engine.contains("gemini") {
+        "gemini"
+    } else if engine.contains("hermes") {
+        "hermes"
     } else {
         "claude"
     };

@@ -330,6 +330,7 @@ enum Engine {
     Claude,
     Codex,
     Gemini,
+    Hermes,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -647,6 +648,7 @@ fn convert_ls_engine(engine: Engine) -> gaal::commands::ls::LsEngine {
         Engine::Claude => gaal::commands::ls::LsEngine::Claude,
         Engine::Codex => gaal::commands::ls::LsEngine::Codex,
         Engine::Gemini => gaal::commands::ls::LsEngine::Gemini,
+        Engine::Hermes => gaal::commands::ls::LsEngine::Hermes,
     }
 }
 
@@ -701,6 +703,7 @@ fn convert_engine_string(engine: Engine) -> String {
         Engine::Claude => "claude".to_string(),
         Engine::Codex => "codex".to_string(),
         Engine::Gemini => "gemini".to_string(),
+        Engine::Hermes => "hermes".to_string(),
     }
 }
 

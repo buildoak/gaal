@@ -973,6 +973,7 @@ fn extract_cache_tokens(row: &SessionRow) -> (i64, i64) {
     let engine = match row.engine.as_str() {
         "claude" => crate::parser::Engine::Claude,
         "codex" => crate::parser::Engine::Codex,
+        "hermes" => crate::parser::Engine::Hermes,
         _ => return (0, 0),
     };
 
@@ -980,6 +981,7 @@ fn extract_cache_tokens(row: &SessionRow) -> (i64, i64) {
         crate::parser::Engine::Claude => crate::parser::claude::parse_events(path),
         crate::parser::Engine::Codex => crate::parser::codex::parse_events(path),
         crate::parser::Engine::Gemini => crate::parser::gemini::parse_events(path),
+        crate::parser::Engine::Hermes => crate::parser::hermes::parse_events(path, &row.id),
     };
 
     let events = match events {

@@ -29,7 +29,9 @@ use crate::error::GaalError;
 use crate::model::{Fact, HandoffRecord};
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
-use crate::parser::{parse_session, parse_session_incremental, ParsedSession};
+use crate::parser::{
+    parse_discovered_session, parse_session, parse_session_incremental, ParsedSession,
+};
 use crate::subagent::engine::get_subagent_summaries;
 
 /// Safety margin when computing the mtime cutoff for incremental discovery.
@@ -164,7 +166,12 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     let invalid_codex_error_sessions = load_codex_invalid_error_sessions(&conn)?;
 
     let run_start = SystemTime::now();
-    let engines = [Engine::Claude, Engine::Codex, Engine::Gemini];
+    let engines = [
+        Engine::Claude,
+        Engine::Codex,
+        Engine::Gemini,
+        Engine::Hermes,
+    ];
     let mut any_engine_indexed = false;
 
     for engine in engines {
@@ -178,8 +185,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
         let cursor = get_meta(&conn, cursor_key)
             .map_err(GaalError::from)?
             .and_then(|raw| parse_unix_seconds(&raw));
-        let newer_than = cursor
-            .and_then(|c| c.checked_sub(BACKFILL_CURSOR_SAFETY_MARGIN));
+        let newer_than = cursor.and_then(|c| c.checked_sub(BACKFILL_CURSOR_SAFETY_MARGIN));
 
         match run_engine_pass(
             &mut conn,
@@ -237,6 +243,7 @@ fn backfill_cursor_key(engine: Engine) -> &'static str {
         Engine::Claude => "backfill:claude",
         Engine::Codex => "backfill:codex",
         Engine::Gemini => "backfill:gemini",
+        Engine::Hermes => "backfill:hermes",
     }
 }
 
@@ -266,8 +273,8 @@ fn run_engine_pass(
     invalid_codex_error_sessions: &HashSet<String>,
     summary: &mut BackfillSummary,
 ) -> Result<bool, GaalError> {
-    let mut sessions = discover_sessions_with_cutoff(Some(engine), newer_than)
-        .map_err(GaalError::from)?;
+    let mut sessions =
+        discover_sessions_with_cutoff(Some(engine), newer_than).map_err(GaalError::from)?;
     if let Some(since) = since {
         sessions.retain(|session| session_on_or_after(session, since));
     }
@@ -391,11 +398,17 @@ pub fn run_reindex(args: ReindexArgs) -> Result<(), GaalError> {
         return Err(GaalError::NotFound(existing.jsonl_path));
     }
 
-    let parsed = parse_session(&path).map_err(GaalError::from)?;
+    let parsed = if existing.engine == "hermes" {
+        crate::parser::hermes::parse_session(&path, &existing.id).map_err(GaalError::from)?
+    } else {
+        parse_session(&path).map_err(GaalError::from)?
+    };
     let offset = file_len_i64(&path)?;
     let mut row = build_full_session_row(&parsed, &path, offset);
     row.id = existing.id.clone();
     row.session_type = existing.session_type.clone();
+    row.parent_id = existing.parent_id.clone();
+    row.subagent_type = existing.subagent_type.clone();
     let facts = normalize_facts(parsed.facts, &existing.id);
 
     conn.execute(
@@ -504,6 +517,7 @@ pub(crate) fn index_discovered_session(
                 && row.last_indexed_offset >= 0
                 && (row.last_indexed_offset as u64) < discovered.file_size
                 && discovered.engine != Engine::Gemini
+                && discovered.engine != Engine::Hermes
         })
         .unwrap_or(false);
 
@@ -562,10 +576,13 @@ pub(crate) fn index_discovered_session(
         return Ok(IndexOutcome::Indexed);
     }
 
-    let parsed = parse_session(&discovered.path).map_err(GaalError::from)?;
+    let parsed = parse_discovered_session(discovered).map_err(GaalError::from)?;
 
     // Skip noise-only sessions (0 conversation turns, e.g. file-history-snapshot only).
-    if parsed.total_turns == 0 {
+    // Hermes cron/session-meta rows can be useful even without a user turn.
+    let hermes_has_summary_or_tools = discovered.engine == Engine::Hermes
+        && (parsed.session_summary.is_some() || parsed.total_tools > 0);
+    if parsed.total_turns == 0 && !hermes_has_summary_or_tools {
         if let Some(row) = existing.as_ref() {
             // Prune stale zero-turn sessions from the DB on re-index.
             if row.total_turns == 0 {
@@ -585,6 +602,7 @@ pub(crate) fn index_discovered_session(
         session_row.session_type = row.session_type.clone();
     }
     apply_codex_subagent_link(&mut session_row, discovered, parsed.meta.agent_role.clone());
+    apply_hermes_lineage(&mut session_row, discovered);
     let facts = normalize_facts(parsed.facts, target_id);
 
     // Wrap delete-old-facts + upsert + insert-facts + links in a single
@@ -972,6 +990,19 @@ fn apply_codex_subagent_link(
     session_row.subagent_type = subagent_type;
 }
 
+fn apply_hermes_lineage(session_row: &mut SessionRow, discovered: &DiscoveredSession) {
+    if discovered.engine != Engine::Hermes {
+        return;
+    }
+    if let Some(parent_id) = discovered.forked_from_id.as_ref() {
+        if !parent_id.is_empty() {
+            session_row.parent_id = Some(parent_id.clone());
+        }
+    }
+    session_row.session_type = "standalone".to_string();
+    session_row.subagent_type = None;
+}
+
 fn promote_codex_coordinators(conn: &mut Connection) -> Result<(), GaalError> {
     conn.execute(
         r#"
@@ -1009,10 +1040,7 @@ fn default_session_markdown_path(discovered: &DiscoveredSession) -> PathBuf {
         .join(day)
         .join(format!(
             "{}.md",
-            crate::util::sanitize_filename(&discovered.id)
-                .chars()
-                .take(8)
-                .collect::<String>()
+            crate::util::session_artifact_id(&discovered.engine.to_string(), &discovered.id)
         ))
 }
 
@@ -1032,12 +1060,7 @@ fn generate_session_markdown(
         ));
     }
 
-    let markdown = crate::render::session_md::render_session_markdown_with_db(
-        &discovered.path,
-        conn,
-        Some(&discovered.id),
-    )
-    .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
+    let markdown = render_discovered_markdown(conn, discovered)?;
 
     let engine = discovered.engine.to_string();
     let (year, month, day) = extract_date_parts(started_at);
@@ -1051,10 +1074,7 @@ fn generate_session_markdown(
         .join(day)
         .join(format!(
             "{}.md",
-            crate::util::sanitize_filename(&discovered.id)
-                .chars()
-                .take(8)
-                .collect::<String>()
+            crate::util::session_artifact_id(&discovered.engine.to_string(), &discovered.id)
         ));
 
     if let Some(parent) = md_path.parent() {
@@ -1089,34 +1109,47 @@ fn write_session_markdown_to_dir(
         return Ok(WriteOutcome::Skipped);
     }
     let (year, month, day) = extract_date_parts(started_at);
-    let short_id = &crate::util::sanitize_filename(&discovered.id)
-        .chars()
-        .take(8)
-        .collect::<String>();
+    let artifact_id =
+        crate::util::session_artifact_id(&discovered.engine.to_string(), &discovered.id);
 
     let md_path = output_dir
         .join(&year)
         .join(&month)
         .join(&day)
-        .join(format!("{short_id}.md"));
+        .join(format!("{artifact_id}.md"));
 
     // Idempotent: skip if already written (unless overwrite requested).
     if !overwrite && md_path.exists() {
         return Ok(WriteOutcome::Skipped);
     }
 
-    let markdown = crate::render::session_md::render_session_markdown_with_db(
-        &discovered.path,
-        conn,
-        Some(&discovered.id),
-    )
-    .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))?;
+    let markdown = render_discovered_markdown(conn, discovered)?;
 
     if let Some(parent) = md_path.parent() {
         fs::create_dir_all(parent).map_err(GaalError::from)?;
     }
     crate::util::atomic_write(&md_path, &markdown).map_err(GaalError::from)?;
     Ok(WriteOutcome::Written(md_path))
+}
+
+fn render_discovered_markdown(
+    conn: &Connection,
+    discovered: &DiscoveredSession,
+) -> Result<String, GaalError> {
+    if discovered.engine == Engine::Hermes {
+        crate::render::session_md::render_hermes_session_markdown(
+            &discovered.path,
+            conn,
+            &discovered.id,
+        )
+    } else {
+        crate::render::session_md::render_session_markdown_with_db(
+            &discovered.path,
+            conn,
+            Some(&discovered.id),
+        )
+    }
+    .map_err(|e| GaalError::Internal(format!("render session markdown: {e}")))
 }
 
 /// Extract (year, month, day) from an RFC3339 timestamp prefix.
@@ -1288,7 +1321,7 @@ fn normalize_engine_string(value: Option<&str>) -> String {
         .unwrap_or_default()
         .to_ascii_lowercase();
     match candidate.as_str() {
-        "claude" | "codex" => candidate,
+        "claude" | "codex" | "gemini" | "hermes" => candidate,
         _ => "claude".to_string(),
     }
 }
