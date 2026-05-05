@@ -25,6 +25,7 @@ gaal recall "auth refactor" --format brief
   - [Index & Tags: index, tag](commands/index-tags.md)
 - [Agent Guide](agent-guide.md) -- how agents should consume gaal output
 - [Formats Reference](formats.md) -- output formats, exit codes
+- [Hermes Engine Plan](hermes-engine-plan.md) -- native Hermes adapter plan and verification gates
 - [Eywa Migration](migration.md) -- eywa to gaal migration
 
 ## What gaal Does Not Do
