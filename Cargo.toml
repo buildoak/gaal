@@ -1,6 +1,6 @@
 [package]
 name = "gaal"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Agent session observability CLI — like k9s for AI coding agents"
 license = "MIT"

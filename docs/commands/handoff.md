@@ -21,7 +21,7 @@ gaal create-handoff [OPTIONS] [ID]
 - `--parallel <n>`: default `1`
 - `--min-turns <n>`: default `3`
 - `--this`: prefer the current detected session rather than a parent
-- `--dry-run`: preview candidates only
+- `--dry-run`: preview candidates/planned execution only. Single-session dry-run is read-only: it does not invoke providers, spend tokens, write handoff markdown, upsert handoff rows, or index unindexed JSONL files.
 - `--effort <low|medium|high|xhigh>`: effort level for agent-mux dispatch. Overrides config `[agent-mux] effort`. Controls how long the LLM worker runs and auto-aligns gaal's wrapper timeout.
 - `-H`, `--human`
 
@@ -41,7 +41,20 @@ Single-session mode returns an array of handoff results with `session_id`, `hand
 
 Batch mode returns per-session status rows.
 
-`--dry-run` still returns JSON rows, with candidate summary lines printed to stderr.
+`--dry-run` still returns JSON rows. For single-session mode, each row is a planning record with:
+
+- `strategy`: `single`, `chunked_compaction`, or `chunked_turn_split`
+- `estimated_transcript_chars`, `estimated_transcript_tokens`
+- `compaction_lines`
+- `chunk_count`, `estimated_llm_calls`
+- `provider`, `provider_supported`, `model`, `effort`, `format`
+- `handoff_path`
+- `side_effects`: all false in dry-run
+- `warnings`
+
+For unindexed `--jsonl --dry-run`, Gaal reads the JSONL path directly, reports `indexed=false`, and does not index it.
+
+When single-session planning returns a strategy other than `single`, non-dry-run execution uses automatic chunked generation: mapper calls process each planned chunk, one reducer call synthesizes the final handoff, and Gaal writes only the final markdown file plus the normal handoff DB row. Mapper outputs stay in memory and no surfaced `.parts` files are created. The final markdown includes a `Coverage Manifest` reporting source JSONL line ranges, source used, chunk statuses, mapper/reducer call counts, and whether rendered transcript line ranges were approximate.
 
 ## Real Example
 

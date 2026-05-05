@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-05-05
+
+### Added
+- **Automatic chunked `create-handoff` generation for long sessions.** Long Codex sessions now use compaction checkpoints as map/reduce boundaries, while other long transcripts fall back to turn/line splitting. The CLI remains low-friction: `gaal create-handoff <id>` chooses the correct path automatically and still writes one final handoff markdown file plus one DB row.
+- **Coverage manifests in generated handoffs.** Chunked handoffs now record source JSONL line coverage, compaction boundaries, mapper/reducer call counts, source used, rendered transcript line ranges, and confirm that no surfaced `.parts` files were created.
+- **Single-session dry-run planning.** `gaal create-handoff <id> --dry-run` now reports strategy, chunk count, estimated calls, compaction lines, provider/model/effort, planned handoff path, and explicit side-effect booleans.
+
+### Fixed
+- **Dry-run safety for `create-handoff`.** Single-session dry runs no longer invoke providers, spend tokens, write handoff markdown, upsert DB rows, or index unindexed JSONL files.
+- **Fresh transcript rendering for handoff generation.** Handoff creation now prefers rendering directly from JSONL so active or recently updated sessions do not accidentally use stale cached markdown.
+- **Large prompt dispatch stability.** Agent-mux handoff calls now use prompt files instead of passing giant contexts through argv.
+- **Stale session cwd handling.** If an indexed session cwd no longer exists, handoff generation falls back to the current working directory instead of failing inside agent-mux startup.
+- **Local-date frontmatter.** Handoff frontmatter dates now match the rendered transcript’s local date for sessions that cross UTC day boundaries.
+
+### Changed
+- **Provider honesty.** `--provider openrouter` remains visible in dry-run planning as unsupported for real execution instead of silently routing through agent-mux.
+- **Handoff fidelity prompts.** Chunk mapper/reducer prompts now explicitly preserve absolute paths, dirty worktree state, verification evidence, and continuation-critical risks.
+- **Release version bumped to 0.2.0.**
+
 ## 2026-04-16
 
 ### Fixed

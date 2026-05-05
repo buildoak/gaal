@@ -593,6 +593,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 force_this: this,
                 dry_run,
                 effort,
+                human,
             };
             gaal::commands::handoff::run(args)
         }

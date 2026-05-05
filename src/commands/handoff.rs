@@ -36,6 +36,11 @@ const DEFAULT_HANDOFF_PROMPT: &str = r#"You are analyzing an agent session trace
 ## Key Files (files created/modified with descriptions)
 Also extract: projects (list), keywords (list), substance score (0-3)."#;
 
+const SINGLE_CONTEXT_LIMIT_CHARS: u64 = 80_000;
+const MAX_CHUNKS: usize = 8;
+const MAX_LLM_CALLS_PER_SESSION: usize = 9;
+const ESTIMATED_CHARS_PER_TOKEN: u64 = 4;
+
 static FENCED_JSON_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)```json\s*\n(.*?)\n\s*```")
         .expect("fenced JSON regex for handoff metadata should compile")
@@ -72,6 +77,8 @@ pub struct HandoffArgs {
     pub dry_run: bool,
     /// Effort level override (low, medium, high, xhigh).
     pub effort: Option<String>,
+    /// Print a compact human-readable dry-run plan.
+    pub human: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -107,6 +114,123 @@ struct DetectedSession {
     session_id: String,
     jsonl_path: PathBuf,
     pid: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct HandoffDryRunResult {
+    session_id: String,
+    status: String,
+    engine: String,
+    indexed: bool,
+    jsonl_path: String,
+    handoff_path: String,
+    strategy: String,
+    estimated_transcript_chars: u64,
+    estimated_transcript_tokens: u64,
+    jsonl_lines: usize,
+    compaction_lines: Vec<usize>,
+    chunk_count: usize,
+    estimated_llm_calls: usize,
+    single_context_limit_chars: u64,
+    max_chunks: usize,
+    max_llm_calls_per_session: usize,
+    provider: String,
+    provider_supported: bool,
+    model: String,
+    effort: String,
+    format: String,
+    session_model: Option<String>,
+    side_effects: DryRunSideEffects,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DryRunSideEffects {
+    spawn_provider_worker: bool,
+    spend_tokens: bool,
+    write_handoff_markdown: bool,
+    upsert_db_rows: bool,
+    index_jsonl: bool,
+}
+
+impl DryRunSideEffects {
+    fn none() -> Self {
+        Self {
+            spawn_provider_worker: false,
+            spend_tokens: false,
+            write_handoff_markdown: false,
+            upsert_db_rows: false,
+            index_jsonl: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DryRunSession {
+    id: String,
+    engine: String,
+    model: Option<String>,
+    started_at: String,
+    jsonl_path: PathBuf,
+    indexed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct JsonlPlanStats {
+    chars: u64,
+    lines: usize,
+    compaction_lines: Vec<usize>,
+    first_timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ExecutionPlan {
+    strategy: String,
+    chunks: Vec<ChunkPlan>,
+    jsonl_lines: usize,
+    compaction_lines: Vec<usize>,
+}
+
+impl ExecutionPlan {
+    fn is_chunked(&self) -> bool {
+        self.strategy != "single"
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ChunkPlan {
+    index: usize,
+    total: usize,
+    source_start_line: usize,
+    source_end_line: usize,
+}
+
+#[derive(Debug, Clone)]
+struct ChunkContext {
+    plan: ChunkPlan,
+    body: String,
+    source_kind: &'static str,
+    rendered_start_line: Option<usize>,
+    rendered_end_line: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct ChunkMapResult {
+    plan: ChunkPlan,
+    status: String,
+    response: String,
+    source_kind: &'static str,
+    rendered_start_line: Option<usize>,
+    rendered_end_line: Option<usize>,
+    context_chars: usize,
+}
+
+#[derive(Clone, Copy)]
+struct DryRunRequest<'a> {
+    model: &'a str,
+    provider: &'a str,
+    format: &'a str,
+    effort: &'a str,
 }
 
 #[derive(Clone, Copy)]
@@ -212,6 +336,27 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
         .prompt
         .clone()
         .unwrap_or_else(|| config.handoff.prompt.clone());
+
+    if args.dry_run {
+        let plans = plan_single_session_dry_run(
+            &conn,
+            &args,
+            &id_or_today,
+            detected.as_ref(),
+            DryRunRequest {
+                model: &model,
+                provider: &provider,
+                format: &format,
+                effort: effective_handoff_effort(&config),
+            },
+        )?;
+        if args.human {
+            print_handoff_dry_run_human(&plans);
+            return Ok(());
+        }
+        return print_json(&plans).map_err(GaalError::from);
+    }
+
     let prompt = load_prompt(&prompt_path)?;
 
     let sessions = match resolve_sessions(&conn, &id_or_today) {
@@ -262,6 +407,433 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
 struct ProcessedSessionHandoff {
     path: PathBuf,
     extracted: ExtractedMetadata,
+}
+
+fn plan_single_session_dry_run(
+    conn: &Connection,
+    args: &HandoffArgs,
+    id_or_today: &str,
+    detected: Option<&DetectedSession>,
+    request: DryRunRequest<'_>,
+) -> Result<Vec<HandoffDryRunResult>, GaalError> {
+    if let Some(jsonl_path) = args.jsonl.as_deref() {
+        let session = dry_run_session_from_jsonl(conn, jsonl_path, args.engine.as_deref())?;
+        return Ok(vec![build_dry_run_plan(&session, request)?]);
+    }
+
+    match resolve_sessions(conn, id_or_today) {
+        Ok(sessions) => sessions
+            .iter()
+            .map(|session| build_dry_run_plan(&DryRunSession::from(session), request))
+            .collect(),
+        Err(GaalError::NotFound(_)) if detected.is_some() => {
+            let detected = detected.expect("checked is_some");
+            let session = dry_run_session_from_detected(conn, detected)?;
+            Ok(vec![build_dry_run_plan(&session, request)?])
+        }
+        Err(err) => Err(err),
+    }
+}
+
+impl From<&SessionRow> for DryRunSession {
+    fn from(session: &SessionRow) -> Self {
+        Self {
+            id: session.id.clone(),
+            engine: session.engine.clone(),
+            model: session.model.clone(),
+            started_at: session.started_at.clone(),
+            jsonl_path: PathBuf::from(&session.jsonl_path),
+            indexed: true,
+        }
+    }
+}
+
+fn dry_run_session_from_detected(
+    conn: &Connection,
+    detected: &DetectedSession,
+) -> Result<DryRunSession, GaalError> {
+    if let Some(indexed) = find_indexed_session_for_jsonl(
+        conn,
+        &detected.jsonl_path,
+        &detected.session_id,
+        &detected.engine,
+    )? {
+        return Ok(DryRunSession::from(&indexed));
+    }
+
+    let stats = scan_jsonl_for_plan(&detected.jsonl_path)?;
+    let engine = Engine::from_str(&detected.engine)?;
+    Ok(DryRunSession {
+        id: truncate_session_id(&detected.session_id, &engine),
+        engine: detected.engine.clone(),
+        model: None,
+        started_at: stats
+            .first_timestamp
+            .unwrap_or_else(|| Utc::now().to_rfc3339()),
+        jsonl_path: detected.jsonl_path.clone(),
+        indexed: false,
+    })
+}
+
+fn dry_run_session_from_jsonl(
+    conn: &Connection,
+    jsonl_path: &Path,
+    engine_override: Option<&str>,
+) -> Result<DryRunSession, GaalError> {
+    let engine = engine_override
+        .map(str::to_string)
+        .unwrap_or_else(|| infer_engine_from_jsonl_path(jsonl_path).to_string());
+    let raw_id = extract_session_id_from_jsonl(jsonl_path, &engine)
+        .or_else(|| {
+            jsonl_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
+        .ok_or_else(|| GaalError::ParseError("invalid --jsonl path".into()))?;
+
+    if let Some(indexed) = find_indexed_session_for_jsonl(conn, jsonl_path, &raw_id, &engine)? {
+        return Ok(DryRunSession::from(&indexed));
+    }
+
+    let stats = scan_jsonl_for_plan(jsonl_path)?;
+    let engine_type = Engine::from_str(&engine)?;
+    Ok(DryRunSession {
+        id: truncate_session_id(&raw_id, &engine_type),
+        engine,
+        model: None,
+        started_at: stats
+            .first_timestamp
+            .unwrap_or_else(|| Utc::now().to_rfc3339()),
+        jsonl_path: jsonl_path.to_path_buf(),
+        indexed: false,
+    })
+}
+
+fn find_indexed_session_for_jsonl(
+    conn: &Connection,
+    jsonl_path: &Path,
+    raw_id: &str,
+    engine: &str,
+) -> Result<Option<SessionRow>, GaalError> {
+    let engine_type = Engine::from_str(engine)?;
+    let short_id = truncate_session_id(raw_id, &engine_type);
+    if let Some(session) = get_session(conn, &short_id)? {
+        return Ok(Some(session));
+    }
+
+    let path = jsonl_path.to_string_lossy();
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id
+            FROM sessions
+            WHERE jsonl_path = :jsonl_path
+            ORDER BY started_at DESC
+            LIMIT 1
+            "#,
+        )
+        .map_err(GaalError::from)?;
+    let mut rows = stmt
+        .query(named_params! { ":jsonl_path": path.as_ref() })
+        .map_err(GaalError::from)?;
+    if let Some(row) = rows.next().map_err(GaalError::from)? {
+        let id = row.get::<_, String>(0).map_err(GaalError::from)?;
+        return get_session(conn, &id);
+    }
+
+    Ok(None)
+}
+
+fn build_dry_run_plan(
+    session: &DryRunSession,
+    request: DryRunRequest<'_>,
+) -> Result<HandoffDryRunResult, GaalError> {
+    let stats = scan_jsonl_for_plan(&session.jsonl_path)?;
+    let mut warnings = Vec::new();
+    let execution_plan = plan_execution_chunks(&stats, &mut warnings);
+    let estimated_llm_calls = match execution_plan.strategy.as_str() {
+        "single" => 1,
+        _ => execution_plan
+            .chunks
+            .len()
+            .saturating_add(1)
+            .min(MAX_LLM_CALLS_PER_SESSION),
+    };
+    let provider_supported = request.provider == "agent-mux";
+    if !provider_supported {
+        warnings.push(format!(
+            "provider `{}` is not implemented for real execution; non-dry-run will fail unless --provider agent-mux is used",
+            request.provider
+        ));
+    }
+    if !session.indexed {
+        warnings.push(
+            "session is not indexed; dry-run did not index JSONL or write DB rows".to_string(),
+        );
+    }
+    let handoff_path = planned_handoff_path(&session.id, &session.engine, &session.started_at);
+    if handoff_path.exists() {
+        warnings.push(
+            "handoff file already exists; real execution would overwrite/update it".to_string(),
+        );
+    }
+
+    Ok(HandoffDryRunResult {
+        session_id: session.id.clone(),
+        status: "dry_run".to_string(),
+        engine: session.engine.clone(),
+        indexed: session.indexed,
+        jsonl_path: session.jsonl_path.to_string_lossy().to_string(),
+        handoff_path: handoff_path.to_string_lossy().to_string(),
+        strategy: execution_plan.strategy,
+        estimated_transcript_chars: stats.chars,
+        estimated_transcript_tokens: estimate_tokens(stats.chars),
+        jsonl_lines: stats.lines,
+        compaction_lines: stats.compaction_lines,
+        chunk_count: execution_plan.chunks.len(),
+        estimated_llm_calls,
+        single_context_limit_chars: SINGLE_CONTEXT_LIMIT_CHARS,
+        max_chunks: MAX_CHUNKS,
+        max_llm_calls_per_session: MAX_LLM_CALLS_PER_SESSION,
+        provider: request.provider.to_string(),
+        provider_supported,
+        model: request.model.to_string(),
+        effort: request.effort.to_string(),
+        format: request.format.to_string(),
+        session_model: session.model.clone(),
+        side_effects: DryRunSideEffects::none(),
+        warnings,
+    })
+}
+
+fn plan_chunking(stats: &JsonlPlanStats, warnings: &mut Vec<String>) -> (String, usize) {
+    if stats.chars <= SINGLE_CONTEXT_LIMIT_CHARS {
+        return ("single".to_string(), 1);
+    }
+
+    if !stats.compaction_lines.is_empty() {
+        let natural_chunks = stats.compaction_lines.len().saturating_add(1);
+        if natural_chunks > MAX_CHUNKS {
+            warnings.push(format!(
+                "compaction boundaries imply {natural_chunks} chunks; capped to max_chunks={MAX_CHUNKS}"
+            ));
+        }
+        return (
+            "chunked_compaction".to_string(),
+            natural_chunks.clamp(2, MAX_CHUNKS),
+        );
+    }
+
+    let natural_chunks = stats
+        .chars
+        .div_ceil(SINGLE_CONTEXT_LIMIT_CHARS)
+        .try_into()
+        .unwrap_or(usize::MAX);
+    if natural_chunks > MAX_CHUNKS {
+        warnings.push(format!(
+            "size implies {natural_chunks} chunks; capped to max_chunks={MAX_CHUNKS}"
+        ));
+    }
+    (
+        "chunked_turn_split".to_string(),
+        natural_chunks.clamp(2, MAX_CHUNKS),
+    )
+}
+
+fn plan_execution_chunks(stats: &JsonlPlanStats, warnings: &mut Vec<String>) -> ExecutionPlan {
+    let (strategy, chunk_count) = plan_chunking(stats, warnings);
+    let total_lines = stats.lines.max(1);
+    let chunks = if strategy == "chunked_compaction" {
+        let mut chunks = Vec::new();
+        let mut start = 1usize;
+        for end in stats
+            .compaction_lines
+            .iter()
+            .copied()
+            .take(chunk_count.saturating_sub(1))
+        {
+            let end = end.clamp(start, total_lines);
+            chunks.push(ChunkPlan {
+                index: chunks.len() + 1,
+                total: chunk_count,
+                source_start_line: start,
+                source_end_line: end,
+            });
+            start = end.saturating_add(1);
+        }
+        if chunks.len() < chunk_count && start <= total_lines {
+            chunks.push(ChunkPlan {
+                index: chunks.len() + 1,
+                total: chunk_count,
+                source_start_line: start,
+                source_end_line: total_lines,
+            });
+        }
+        normalize_chunk_totals(chunks)
+    } else if strategy == "chunked_turn_split" {
+        let chunk_size = total_lines.div_ceil(chunk_count);
+        let mut chunks = Vec::new();
+        for idx in 0..chunk_count {
+            let start = idx.saturating_mul(chunk_size).saturating_add(1);
+            if start > total_lines {
+                break;
+            }
+            let end = ((idx + 1).saturating_mul(chunk_size)).min(total_lines);
+            chunks.push(ChunkPlan {
+                index: chunks.len() + 1,
+                total: chunk_count,
+                source_start_line: start,
+                source_end_line: end,
+            });
+        }
+        normalize_chunk_totals(chunks)
+    } else {
+        vec![ChunkPlan {
+            index: 1,
+            total: 1,
+            source_start_line: 1,
+            source_end_line: total_lines,
+        }]
+    };
+
+    ExecutionPlan {
+        strategy,
+        chunks,
+        jsonl_lines: stats.lines,
+        compaction_lines: stats.compaction_lines.clone(),
+    }
+}
+
+fn normalize_chunk_totals(mut chunks: Vec<ChunkPlan>) -> Vec<ChunkPlan> {
+    let total = chunks.len().max(1);
+    for (idx, chunk) in chunks.iter_mut().enumerate() {
+        chunk.index = idx + 1;
+        chunk.total = total;
+    }
+    chunks
+}
+
+fn scan_jsonl_for_plan(path: &Path) -> Result<JsonlPlanStats, GaalError> {
+    let meta = fs::metadata(path).map_err(GaalError::from)?;
+    let file = File::open(path).map_err(GaalError::from)?;
+    let reader = BufReader::new(file);
+    let mut lines = 0usize;
+    let mut compaction_lines = Vec::new();
+    let mut first_timestamp = None;
+
+    for line in reader.lines() {
+        let line = line.map_err(GaalError::from)?;
+        lines += 1;
+        if first_timestamp.is_none() {
+            first_timestamp = extract_json_string_field(&line, "timestamp");
+        }
+        if line_has_top_level_compacted_type(&line) {
+            compaction_lines.push(lines);
+        }
+    }
+
+    Ok(JsonlPlanStats {
+        chars: meta.len(),
+        lines,
+        compaction_lines,
+        first_timestamp,
+    })
+}
+
+fn line_has_top_level_compacted_type(line: &str) -> bool {
+    let prefix = match line.find("\"payload\"") {
+        Some(idx) => &line[..idx],
+        None => line.get(..line.len().min(512)).unwrap_or(line),
+    };
+    prefix.contains("\"type\":\"compacted\"") || prefix.contains("\"type\": \"compacted\"")
+}
+
+fn extract_json_string_field(line: &str, field: &str) -> Option<String> {
+    let compact = format!("\"{field}\":\"");
+    let spaced = format!("\"{field}\": \"");
+    let (idx, pattern_len) = line
+        .find(&compact)
+        .map(|idx| (idx, compact.len()))
+        .or_else(|| line.find(&spaced).map(|idx| (idx, spaced.len())))?;
+    let rest = &line[idx + pattern_len..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+fn planned_handoff_path(session_id: &str, engine: &str, started_at: &str) -> PathBuf {
+    let (year, month, day) = date_parts(started_at);
+    gaal_home()
+        .join("data")
+        .join(engine)
+        .join("handoffs")
+        .join(year)
+        .join(month)
+        .join(day)
+        .join(format!(
+            "{}.md",
+            crate::util::sanitize_filename(session_id)
+                .chars()
+                .take(8)
+                .collect::<String>()
+        ))
+}
+
+fn infer_engine_from_jsonl_path(path: &Path) -> &'static str {
+    let path = path.to_string_lossy();
+    if path.contains(".codex") {
+        "codex"
+    } else if path.contains(".gemini") {
+        "gemini"
+    } else {
+        "claude"
+    }
+}
+
+fn estimate_tokens(chars: u64) -> u64 {
+    chars.div_ceil(ESTIMATED_CHARS_PER_TOKEN)
+}
+
+fn effective_handoff_effort(config: &GaalConfig) -> &str {
+    config
+        .agent_mux
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+        .unwrap_or("xhigh")
+}
+
+fn print_handoff_dry_run_human(plans: &[HandoffDryRunResult]) {
+    for plan in plans {
+        println!(
+            "{}: {} ({} chunks, {} call(s), {} chars/~{} tokens)",
+            plan.session_id,
+            plan.strategy,
+            plan.chunk_count,
+            plan.estimated_llm_calls,
+            plan.estimated_transcript_chars,
+            plan.estimated_transcript_tokens
+        );
+        println!("  jsonl: {}", plan.jsonl_path);
+        println!("  handoff: {}", plan.handoff_path);
+        println!(
+            "  provider/model/effort: {}/{}/{}",
+            plan.provider, plan.model, plan.effort
+        );
+        println!("  indexed: {}", plan.indexed);
+        println!("  provider_supported: {}", plan.provider_supported);
+        println!("  compaction_lines: {:?}", plan.compaction_lines);
+        println!(
+            "  side_effects: spawn_provider_worker=false spend_tokens=false write_handoff_markdown=false upsert_db_rows=false index_jsonl=false"
+        );
+        if !plan.warnings.is_empty() {
+            println!("  warnings:");
+            for warning in &plan.warnings {
+                println!("    - {warning}");
+            }
+        }
+    }
 }
 
 fn run_batch(conn: &Connection, config: &GaalConfig, args: &HandoffArgs) -> Result<(), GaalError> {
@@ -488,6 +1060,26 @@ fn process_session_handoff(
     session: &SessionRow,
     request: HandoffRequest<'_>,
 ) -> Result<ProcessedSessionHandoff, GaalError> {
+    if request.provider != "agent-mux" {
+        return Err(GaalError::Other(anyhow!(
+            "handoff provider `{}` is not implemented for real execution; use --provider agent-mux",
+            request.provider
+        )));
+    }
+
+    let mut plan_warnings = Vec::new();
+    let execution_plan = scan_jsonl_for_plan(Path::new(&session.jsonl_path))
+        .map(|stats| plan_execution_chunks(&stats, &mut plan_warnings))
+        .ok();
+    if let Some(plan) = execution_plan {
+        for warning in plan_warnings {
+            eprintln!("Handoff planner warning: {warning}");
+        }
+        if plan.is_chunked() {
+            return process_chunked_session_handoff(conn, config, session, request, plan);
+        }
+    }
+
     // Try session markdown transcript first (full narrative context),
     // fall back to DB facts (lossy structured context).
     let context = match resolve_session_transcript(session, config) {
@@ -505,6 +1097,101 @@ fn process_session_handoff(
         }
     };
 
+    let (response, extracted) =
+        invoke_validated_handoff(config, session, request, &context, "single-pass")?;
+
+    finish_handoff(conn, config, session, request, response, extracted)
+}
+
+fn process_chunked_session_handoff(
+    conn: &Connection,
+    config: &GaalConfig,
+    session: &SessionRow,
+    request: HandoffRequest<'_>,
+    plan: ExecutionPlan,
+) -> Result<ProcessedSessionHandoff, GaalError> {
+    eprintln!(
+        "Using chunked handoff execution: {} ({} mapper calls + 1 reducer call)",
+        plan.strategy,
+        plan.chunks.len()
+    );
+
+    let chunk_contexts =
+        build_chunk_contexts(session, config, &plan, request.provider, request.format)?;
+    let mapper_prompt = build_chunk_mapper_prompt(request.prompt);
+    let timeout_secs = config
+        .agent_mux
+        .timeout_secs
+        .unwrap_or(config.llm.timeout_secs);
+    let mut mapped = Vec::with_capacity(chunk_contexts.len());
+
+    for chunk in chunk_contexts {
+        eprintln!(
+            "Mapping chunk {}/{} from source JSONL lines {}-{}",
+            chunk.plan.index,
+            chunk.plan.total,
+            chunk.plan.source_start_line,
+            chunk.plan.source_end_line
+        );
+        let context_chars = chunk.body.len();
+        let response = invoke_agent_mux(
+            &config.agent_mux,
+            request.engine,
+            request.model,
+            session.cwd.as_deref().unwrap_or("."),
+            &mapper_prompt,
+            &chunk.body,
+            timeout_secs,
+        )?;
+        mapped.push(ChunkMapResult {
+            plan: chunk.plan,
+            status: "mapped".to_string(),
+            response,
+            source_kind: chunk.source_kind,
+            rendered_start_line: chunk.rendered_start_line,
+            rendered_end_line: chunk.rendered_end_line,
+            context_chars,
+        });
+    }
+
+    let coverage_manifest = build_coverage_manifest(session, &plan, &mapped);
+    let reducer_prompt = build_chunk_reducer_prompt(request.prompt);
+    let reducer_context = build_reducer_context(
+        session,
+        request.provider,
+        request.format,
+        &mapped,
+        &coverage_manifest,
+    );
+    let (response, extracted) = invoke_validated_handoff(
+        config,
+        session,
+        HandoffRequest {
+            engine: request.engine,
+            model: request.model,
+            prompt: &reducer_prompt,
+            provider: request.provider,
+            format: request.format,
+        },
+        &reducer_context,
+        "chunked reducer",
+    )?;
+    let response = format!(
+        "{}\n\n{}",
+        coverage_manifest.trim_end(),
+        response.trim_start()
+    );
+
+    finish_handoff(conn, config, session, request, response, extracted)
+}
+
+fn invoke_validated_handoff(
+    config: &GaalConfig,
+    session: &SessionRow,
+    request: HandoffRequest<'_>,
+    context: &str,
+    label: &str,
+) -> Result<(String, ExtractedMetadata), GaalError> {
     let max_attempts = 2;
     let mut response = String::new();
     let mut extracted = ExtractedMetadata::default();
@@ -532,19 +1219,30 @@ fn process_session_handoff(
             Ok(()) => break,
             Err(reason) if attempt < max_attempts => {
                 eprintln!(
-                    "Handoff validation failed (attempt {}/{}): {}. Retrying...",
+                    "Handoff validation failed for {label} (attempt {}/{}): {}. Retrying...",
                     attempt, max_attempts, reason
                 );
             }
             Err(reason) => {
                 eprintln!(
-                    "Handoff validation failed after {} attempts: {}. Accepting best-effort.",
+                    "Handoff validation failed for {label} after {} attempts: {}. Accepting best-effort.",
                     max_attempts, reason
                 );
             }
         }
     }
 
+    Ok((response, extracted))
+}
+
+fn finish_handoff(
+    conn: &Connection,
+    config: &GaalConfig,
+    session: &SessionRow,
+    request: HandoffRequest<'_>,
+    response: String,
+    extracted: ExtractedMetadata,
+) -> Result<ProcessedSessionHandoff, GaalError> {
     // Use the session's own engine/model for frontmatter (ground truth),
     // not the extraction LLM engine/model.
     let session_engine = &session.engine;
@@ -571,6 +1269,368 @@ fn process_session_handoff(
         path: handoff_path,
         extracted,
     })
+}
+
+fn build_chunk_contexts(
+    session: &SessionRow,
+    config: &GaalConfig,
+    plan: &ExecutionPlan,
+    provider: &str,
+    format: &str,
+) -> Result<Vec<ChunkContext>, GaalError> {
+    if let Some(transcript) = resolve_session_transcript(session, config) {
+        eprintln!(
+            "Using session transcript ({} chars) split into {} chunk contexts",
+            transcript.len(),
+            plan.chunks.len()
+        );
+        return Ok(build_transcript_chunk_contexts(
+            session,
+            &transcript,
+            plan,
+            provider,
+            format,
+        ));
+    }
+
+    eprintln!("No session transcript found, falling back to JSONL line chunks");
+    build_jsonl_chunk_contexts(session, plan, provider, format)
+}
+
+fn build_transcript_chunk_contexts(
+    session: &SessionRow,
+    transcript: &str,
+    plan: &ExecutionPlan,
+    provider: &str,
+    format: &str,
+) -> Vec<ChunkContext> {
+    let transcript_lines: Vec<&str> = transcript.lines().collect();
+    let total_rendered_lines = transcript_lines.len().max(1);
+    let total_source_lines = plan
+        .chunks
+        .iter()
+        .map(|chunk| chunk.source_end_line)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    plan.chunks
+        .iter()
+        .enumerate()
+        .map(|(idx, chunk)| {
+            let previous_end = if idx == 0 {
+                0
+            } else {
+                proportional_line(
+                    plan.chunks[idx - 1].source_end_line,
+                    total_source_lines,
+                    total_rendered_lines,
+                )
+            };
+            let rendered_start = previous_end
+                .saturating_add(1)
+                .clamp(1, total_rendered_lines);
+            let mut rendered_end = if idx + 1 == plan.chunks.len() {
+                total_rendered_lines
+            } else {
+                proportional_line(
+                    chunk.source_end_line,
+                    total_source_lines,
+                    total_rendered_lines,
+                )
+            };
+            if rendered_end < rendered_start {
+                rendered_end = rendered_start;
+            }
+            let slice = transcript_lines
+                .iter()
+                .skip(rendered_start.saturating_sub(1))
+                .take(
+                    rendered_end
+                        .saturating_sub(rendered_start)
+                        .saturating_add(1),
+                )
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            let body = build_chunk_context_body(
+                session,
+                provider,
+                format,
+                &plan.strategy,
+                chunk,
+                "rendered transcript",
+                Some((rendered_start, rendered_end)),
+                &slice,
+            );
+            ChunkContext {
+                plan: chunk.clone(),
+                body,
+                source_kind: "rendered_transcript",
+                rendered_start_line: Some(rendered_start),
+                rendered_end_line: Some(rendered_end),
+            }
+        })
+        .collect()
+}
+
+fn proportional_line(
+    source_line: usize,
+    total_source_lines: usize,
+    total_rendered_lines: usize,
+) -> usize {
+    let source_zero = source_line.saturating_sub(1);
+    let rendered_zero = source_zero
+        .saturating_mul(total_rendered_lines)
+        .checked_div(total_source_lines.max(1))
+        .unwrap_or(0);
+    rendered_zero
+        .saturating_add(1)
+        .clamp(1, total_rendered_lines.max(1))
+}
+
+fn build_jsonl_chunk_contexts(
+    session: &SessionRow,
+    plan: &ExecutionPlan,
+    provider: &str,
+    format: &str,
+) -> Result<Vec<ChunkContext>, GaalError> {
+    let file = File::open(&session.jsonl_path).map_err(GaalError::from)?;
+    let reader = BufReader::new(file);
+    let mut chunks = plan
+        .chunks
+        .iter()
+        .map(|chunk| (chunk.clone(), Vec::<String>::new()))
+        .collect::<Vec<_>>();
+
+    for (line_number, line) in reader.lines().enumerate() {
+        let line_number = line_number + 1;
+        let line = line.map_err(GaalError::from)?;
+        if let Some((_, lines)) = chunks.iter_mut().find(|(chunk, _)| {
+            line_number >= chunk.source_start_line && line_number <= chunk.source_end_line
+        }) {
+            lines.push(line);
+        }
+    }
+
+    Ok(chunks
+        .into_iter()
+        .map(|(chunk, lines)| {
+            let slice = lines.join("\n");
+            let body = build_chunk_context_body(
+                session,
+                provider,
+                format,
+                &plan.strategy,
+                &chunk,
+                "raw JSONL",
+                None,
+                &slice,
+            );
+            ChunkContext {
+                plan: chunk,
+                body,
+                source_kind: "raw_jsonl",
+                rendered_start_line: None,
+                rendered_end_line: None,
+            }
+        })
+        .collect())
+}
+
+fn build_chunk_context_body(
+    session: &SessionRow,
+    provider: &str,
+    format: &str,
+    strategy: &str,
+    chunk: &ChunkPlan,
+    source_label: &str,
+    rendered_lines: Option<(usize, usize)>,
+    body: &str,
+) -> String {
+    let rendered_line_note = rendered_lines
+        .map(|(start, end)| {
+            format!(
+                "- rendered_transcript_lines: {start}-{end} (approximate range derived from source JSONL line proportions)\n"
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "Requested provider: {provider}\nRequested format: {format}\n\n\
+GROUND TRUTH (do not override in your output):\n\
+- engine: {engine}\n\
+- model: {model}\n\
+These values are determined from the session source. Do not infer or hallucinate different engine/model values.\n\n\
+Chunk Coverage:\n\
+- strategy: {strategy}\n\
+- chunk: {chunk_index}/{chunk_total}\n\
+- source_jsonl_path: {jsonl_path}\n\
+- source_jsonl_lines: {source_start}-{source_end}\n\
+{rendered_line_note}\
+\nSession Summary:\n\
+- id: {id}\n\
+- engine: {engine}\n\
+- model: {model}\n\
+- cwd: {cwd}\n\
+- started_at: {started_at}\n\
+- ended_at: {ended_at}\n\
+- total_input_tokens: {input_tokens}\n\
+- total_output_tokens: {output_tokens}\n\
+- total_tools: {tools}\n\
+- total_turns: {turns}\n\n\
+--- SESSION CHUNK ({source_label}) ---\n\n\
+{body}\n",
+        engine = session.engine,
+        model = session.model.as_deref().unwrap_or("unknown"),
+        chunk_index = chunk.index,
+        chunk_total = chunk.total,
+        jsonl_path = session.jsonl_path,
+        source_start = chunk.source_start_line,
+        source_end = chunk.source_end_line,
+        id = session.id,
+        cwd = session.cwd.as_deref().unwrap_or("."),
+        started_at = session.started_at,
+        ended_at = session.ended_at.as_deref().unwrap_or("in_progress"),
+        input_tokens = session.total_input_tokens,
+        output_tokens = session.total_output_tokens,
+        tools = session.total_tools,
+        turns = session.total_turns,
+    )
+}
+
+fn build_chunk_mapper_prompt(base_prompt: &str) -> String {
+    format!(
+        "{base_prompt}\n\n\
+You are running the mapper phase of a chunked gaal handoff. Analyze only the supplied chunk. \
+Return concise markdown with concrete facts, decisions, open threads, files, commands, and risks visible in this chunk. \
+Do not claim whole-session coverage and do not invent missing continuity.\n\n\
+Path and state fidelity rules:\n\
+- Preserve exact file paths as written in the chunk; never rewrite path roots or move files into a more familiar repo.\n\
+- Because final handoffs live under ~/.gaal, repo-relative paths are unsafe for continuation. If the chunk provides an absolute path, copy the absolute path.\n\
+- If the chunk contains a known worktree root such as /Users/otonashi/thinking/building/<repo> and later mentions repo-relative paths from that worktree, resolve them to absolute paths in your mapper output.\n\
+- If the chunk contains final git/worktree status, dirty files, uncommitted changes, or explicit not-committed/not-pushed state, preserve it.\n\
+- Preserve the exact dirty-file list when present.\n\
+- Preserve concrete verification facts, falsifiers, endpoint diagnostics, and residual risks even when they look too detailed.\n\
+- If a fact is uncertain from this chunk, label it uncertain instead of smoothing it into a confident claim."
+    )
+}
+
+fn build_chunk_reducer_prompt(base_prompt: &str) -> String {
+    format!(
+        "{base_prompt}\n\n\
+You are running the reducer phase of a chunked gaal handoff. Synthesize the mapper outputs into one final handoff for the whole session. \
+Preserve the normal handoff sections and metadata expectations from the base prompt. \
+Use only mapper evidence and the coverage manifest supplied in context.\n\n\
+Continuation-critical fidelity rules:\n\
+- Preserve exact file paths from mapper evidence; do not rewrite path roots or infer shorter/cleaner destinations.\n\
+- Final handoffs are stored under ~/.gaal, so repo-relative paths are ambiguous. Key Files and Open Threads must use absolute paths whenever a mapper supplied, or could resolve, an absolute path.\n\
+- If a mapper still gives a relative path, state its worktree root explicitly before the relative path instead of leaving it bare.\n\
+- Preserve final repo/worktree state, especially dirty files, uncommitted changes, not-pushed branches, and explicit next gates.\n\
+- Preserve the exact dirty-file list when present.\n\
+- Preserve concrete verification facts and falsifiers that would change whether the next agent trusts the result.\n\
+- Prefer a slightly longer handoff over dropping late-session validation evidence.\n\
+- If mapper evidence conflicts, say so; do not silently merge it into a cleaner story."
+    )
+}
+
+fn build_reducer_context(
+    session: &SessionRow,
+    provider: &str,
+    format: &str,
+    mapped: &[ChunkMapResult],
+    coverage_manifest: &str,
+) -> String {
+    let mut chunks = String::new();
+    for result in mapped {
+        chunks.push_str(&format!(
+            "\n\n--- MAPPER OUTPUT {}/{} (source JSONL lines {}-{}, status {}) ---\n\n{}\n",
+            result.plan.index,
+            result.plan.total,
+            result.plan.source_start_line,
+            result.plan.source_end_line,
+            result.status,
+            result.response.trim()
+        ));
+    }
+
+    format!(
+        "Requested provider: {provider}\nRequested format: {format}\n\n\
+GROUND TRUTH (do not override in your output):\n\
+- engine: {engine}\n\
+- model: {model}\n\
+These values are determined from the session source. Do not infer or hallucinate different engine/model values.\n\n\
+Session Summary:\n\
+- id: {id}\n\
+- engine: {engine}\n\
+- model: {model}\n\
+- cwd: {cwd}\n\
+- started_at: {started_at}\n\
+- ended_at: {ended_at}\n\
+- total_input_tokens: {input_tokens}\n\
+- total_output_tokens: {output_tokens}\n\
+- total_tools: {tools}\n\
+- total_turns: {turns}\n\n\
+Path Root Rule:\n\
+- This final handoff will be stored under ~/.gaal, not in the original worktree. Do not leave continuation-critical paths as repo-relative strings. Use absolute paths from mapper evidence, or explicitly name the worktree root before relative paths.\n\n\
+{coverage_manifest}\n\
+{chunks}\n",
+        engine = session.engine,
+        model = session.model.as_deref().unwrap_or("unknown"),
+        id = session.id,
+        cwd = session.cwd.as_deref().unwrap_or("."),
+        started_at = session.started_at,
+        ended_at = session.ended_at.as_deref().unwrap_or("in_progress"),
+        input_tokens = session.total_input_tokens,
+        output_tokens = session.total_output_tokens,
+        tools = session.total_tools,
+        turns = session.total_turns,
+    )
+}
+
+fn build_coverage_manifest(
+    session: &SessionRow,
+    plan: &ExecutionPlan,
+    mapped: &[ChunkMapResult],
+) -> String {
+    let mut manifest = format!(
+        "## Coverage Manifest\n\n\
+- strategy: {}\n\
+- source_jsonl_path: {}\n\
+- source_jsonl_lines: {}\n\
+- compaction_lines: {:?}\n\
+- chunks_completed: {}/{}\n\
+- mapper_calls: {}\n\
+- reducer_calls: 1\n\
+- surfaced_part_files: false\n\
+- excluded_content: compacted records were used as boundary markers only; encrypted replacement_history payloads were not interpreted\n\n\
+| Chunk | Source JSONL Lines | Source Used | Rendered Transcript Lines | Status | Context Chars |\n\
+|---|---:|---|---:|---|---:|\n",
+        plan.strategy,
+        session.jsonl_path,
+        plan.jsonl_lines,
+        plan.compaction_lines,
+        mapped.len(),
+        plan.chunks.len(),
+        mapped.len()
+    );
+    for result in mapped {
+        let rendered = match (result.rendered_start_line, result.rendered_end_line) {
+            (Some(start), Some(end)) => format!("{start}-{end}"),
+            _ => "-".to_string(),
+        };
+        manifest.push_str(&format!(
+            "| {}/{} | {}-{} | {} | {} | {} | {} |\n",
+            result.plan.index,
+            result.plan.total,
+            result.plan.source_start_line,
+            result.plan.source_end_line,
+            result.source_kind,
+            rendered,
+            result.status,
+            result.context_chars
+        ));
+    }
+    manifest
 }
 
 fn find_batch_candidates(
@@ -1066,19 +2126,38 @@ fn load_prompt(path: &Path) -> Result<String, GaalError> {
     }
 }
 
-/// Attempt to locate and read a session markdown transcript.
+/// Attempt to locate and read a session markdown transcript for handoff generation.
 ///
 /// Checks three sources in priority order:
-/// 1. External output directory (e.g. pratchett-os/data/claude-code-sessions/) via config
+/// 1. On-the-fly render from the session's JSONL file
 /// 2. Gaal's own rendered markdown (~/.gaal/data/{engine}/sessions/YYYY/MM/DD/{id}.md)
-/// 3. On-the-fly render from the session's JSONL file
+/// 3. External output directory (e.g. pratchett-os/data/claude-code-sessions/) via config
 ///
 /// Returns `None` if all sources fail.
 fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Option<String> {
     let short_id: String = session.id.chars().take(8).collect();
     let (year, month, day) = date_parts(&session.started_at);
 
-    // 1. Gaal's own session markdown directory (kept fresh by cron backfill)
+    // 1. Fresh render from JSONL. Handoff generation should not depend on
+    // cached markdown because active/recent sessions may still be appending.
+    let jsonl_path = Path::new(&session.jsonl_path);
+    if jsonl_path.exists() {
+        match crate::render::session_md::render_session_markdown(jsonl_path) {
+            Ok(content) if !content.trim().is_empty() => {
+                eprintln!(
+                    "  -> transcript source: freshly rendered from {}",
+                    jsonl_path.display()
+                );
+                return Some(content);
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("  -> fresh render failed: {e}");
+            }
+        }
+    }
+
+    // 2. Gaal's own session markdown directory (kept fresh by cron backfill)
     let gaal_md_path = gaal_home()
         .join("data")
         .join(&session.engine)
@@ -1094,7 +2173,7 @@ fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Opti
         }
     }
 
-    // 2. External output directory (config.markdown_output_dir) — fallback
+    // 3. External output directory (config.markdown_output_dir) — fallback
     if let Some(ref output_dir) = config.markdown_output_dir {
         let external_path = output_dir
             .join(&year)
@@ -1105,24 +2184,6 @@ fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Opti
             if !content.trim().is_empty() {
                 eprintln!("  -> transcript source: {}", external_path.display());
                 return Some(content);
-            }
-        }
-    }
-
-    // 3. On-the-fly render from JSONL (if path exists and is readable)
-    let jsonl_path = Path::new(&session.jsonl_path);
-    if jsonl_path.exists() {
-        match crate::render::session_md::render_session_markdown(jsonl_path) {
-            Ok(content) if !content.trim().is_empty() => {
-                eprintln!(
-                    "  -> transcript source: rendered from {}",
-                    jsonl_path.display()
-                );
-                return Some(content);
-            }
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("  -> on-the-fly render failed: {e}");
             }
         }
     }
@@ -1312,12 +2373,21 @@ fn invoke_agent_mux(
         .map(str::trim)
         .filter(|effort| !effort.is_empty());
 
-    let effective_cwd = mux_config
+    let requested_cwd = mux_config
         .cwd
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty())
         .unwrap_or(cwd);
+    let effective_cwd = if Path::new(requested_cwd).is_dir() {
+        requested_cwd.to_string()
+    } else {
+        let fallback = std::env::current_dir()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+        eprintln!("agent-mux cwd `{requested_cwd}` is not available; falling back to `{fallback}`");
+        fallback
+    };
 
     let mut command = Command::new(&mux_config.path);
     command
@@ -1332,12 +2402,19 @@ fn invoke_agent_mux(
         command.arg("--effort").arg(effort);
     }
 
-    let child = command
+    let prompt_file = TempPromptFile::new(&request).ok();
+    command
         .arg("--timeout")
         .arg(mux_timeout_secs.to_string())
         .arg("--cwd")
-        .arg(effective_cwd)
-        .arg(request)
+        .arg(&effective_cwd);
+    if let Some(ref prompt_file) = prompt_file {
+        command.arg("--prompt-file").arg(prompt_file.path());
+    } else {
+        command.arg(request);
+    }
+
+    let child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1407,6 +2484,32 @@ fn invoke_agent_mux(
     let stdout = String::from_utf8(output.stdout)
         .map_err(|e| GaalError::ParseError(format!("agent-mux output was not valid UTF-8: {e}")))?;
     parse_agent_mux_response(&stdout)
+}
+
+struct TempPromptFile {
+    path: PathBuf,
+}
+
+impl TempPromptFile {
+    fn new(content: &str) -> std::io::Result<Self> {
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "gaal-agent-mux-{}-{timestamp}.md",
+            std::process::id()
+        ));
+        fs::write(&path, content)?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempPromptFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn terminate_process(pid: u32) -> Result<(), GaalError> {
@@ -1617,9 +2720,9 @@ fn build_handoff_frontmatter(
     // Session ID: first 8 chars
     let sid: String = session.id.chars().take(8).collect();
 
-    // Date from started_at (RFC3339)
+    // Date is user-local, matching rendered transcript frontmatter.
     let date_str = DateTime::parse_from_rfc3339(&session.started_at)
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .map(|dt| dt.with_timezone(&Local).format("%Y-%m-%d").to_string())
         .unwrap_or_else(|_| "unknown".to_string());
 
     // Duration in human format "2h 24m" / "45m" / "0m"
@@ -1942,6 +3045,163 @@ fn extract_substance(text: &str) -> i32 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_codex_compaction_type_without_rendering_payload() {
+        let line = r#"{"timestamp":"2026-05-04T00:57:52.496Z","type":"compacted","payload":{"replacement_history":[{"type":"message"}]}}"#;
+        assert!(line_has_top_level_compacted_type(line));
+
+        let nested_only = r#"{"timestamp":"2026-05-04T00:57:52.496Z","type":"response_item","payload":{"replacement_history":[{"type":"compacted"}]}}"#;
+        assert!(!line_has_top_level_compacted_type(nested_only));
+    }
+
+    #[test]
+    fn compaction_boundaries_plan_chunk_and_final_calls() {
+        let stats = JsonlPlanStats {
+            chars: 11_341_402,
+            lines: 5_726,
+            compaction_lines: vec![687, 1584, 2403, 3322, 5119],
+            first_timestamp: None,
+        };
+        let mut warnings = Vec::new();
+        let (strategy, chunks) = plan_chunking(&stats, &mut warnings);
+
+        assert_eq!(strategy, "chunked_compaction");
+        assert_eq!(chunks, 6);
+        assert_eq!(chunks + 1, 7);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn compaction_boundaries_select_chunked_execution_ranges() {
+        let stats = JsonlPlanStats {
+            chars: 11_341_402,
+            lines: 5_726,
+            compaction_lines: vec![687, 1584, 2403, 3322, 5119],
+            first_timestamp: None,
+        };
+        let mut warnings = Vec::new();
+        let plan = plan_execution_chunks(&stats, &mut warnings);
+
+        assert!(plan.is_chunked());
+        assert_eq!(plan.strategy, "chunked_compaction");
+        assert_eq!(plan.chunks.len(), 6);
+        assert_eq!(plan.chunks[0].source_start_line, 1);
+        assert_eq!(plan.chunks[0].source_end_line, 687);
+        assert_eq!(plan.chunks[5].source_start_line, 5120);
+        assert_eq!(plan.chunks[5].source_end_line, 5726);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn transcript_chunk_ranges_cover_every_rendered_line_without_gaps() {
+        let plan = ExecutionPlan {
+            strategy: "chunked_turn_split".to_string(),
+            chunks: vec![
+                ChunkPlan {
+                    index: 1,
+                    total: 3,
+                    source_start_line: 1,
+                    source_end_line: 10,
+                },
+                ChunkPlan {
+                    index: 2,
+                    total: 3,
+                    source_start_line: 11,
+                    source_end_line: 20,
+                },
+                ChunkPlan {
+                    index: 3,
+                    total: 3,
+                    source_start_line: 21,
+                    source_end_line: 30,
+                },
+            ],
+            jsonl_lines: 30,
+            compaction_lines: Vec::new(),
+        };
+        let session = SessionRow {
+            id: "test1234".to_string(),
+            engine: "claude".to_string(),
+            model: Some("claude-opus".to_string()),
+            cwd: Some("/tmp".to_string()),
+            started_at: "2026-05-04T00:00:00Z".to_string(),
+            ended_at: Some("2026-05-04T01:00:00Z".to_string()),
+            exit_signal: None,
+            last_event_at: None,
+            parent_id: None,
+            session_type: "standalone".to_string(),
+            jsonl_path: "/tmp/test.jsonl".to_string(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+            total_tools: 0,
+            total_turns: 0,
+            peak_context: 0,
+            last_indexed_offset: 0,
+            subagent_type: None,
+            gemini_summary: None,
+        };
+        let transcript = (1..=10)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let chunks =
+            build_transcript_chunk_contexts(&session, &transcript, &plan, "agent-mux", "markdown");
+
+        assert_eq!(chunks[0].rendered_start_line, Some(1));
+        assert_eq!(chunks[0].rendered_end_line, Some(4));
+        assert_eq!(chunks[1].rendered_start_line, Some(5));
+        assert_eq!(chunks[1].rendered_end_line, Some(7));
+        assert_eq!(chunks[2].rendered_start_line, Some(8));
+        assert_eq!(chunks[2].rendered_end_line, Some(10));
+    }
+
+    #[test]
+    fn handoff_frontmatter_uses_local_date() {
+        let session = SessionRow {
+            id: "36a6276e".to_string(),
+            engine: "codex".to_string(),
+            model: Some("gpt-5.5".to_string()),
+            cwd: None,
+            started_at: "2026-05-03T23:43:35.159Z".to_string(),
+            ended_at: Some("2026-05-04T17:18:23.770Z".to_string()),
+            exit_signal: None,
+            last_event_at: None,
+            parent_id: None,
+            session_type: "standalone".to_string(),
+            jsonl_path: "/tmp/test.jsonl".to_string(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+            total_tools: 0,
+            total_turns: 0,
+            peak_context: 0,
+            last_indexed_offset: 0,
+            subagent_type: None,
+            gemini_summary: None,
+        };
+        let extracted = ExtractedMetadata {
+            headline: Some("headline".to_string()),
+            projects: vec!["gaal".to_string()],
+            keywords: vec!["handoff".to_string()],
+            substance: 1,
+        };
+
+        let frontmatter = build_handoff_frontmatter(&session, &extracted, "codex", "gpt-5.5");
+
+        assert!(frontmatter.contains("date: 2026-05-04"));
+    }
 }
 
 fn first_nonempty_line(text: &str) -> Option<&str> {
