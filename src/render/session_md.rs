@@ -30,6 +30,8 @@ pub const RENDER_VERSION: u32 = 2;
 const TRUNCATION_LIMIT: usize = 100_000;
 /// Preview size when truncation applies.
 const TRUNCATION_PREVIEW: usize = 5_000;
+const TOOL_RESULT_LIMIT: usize = 20_000;
+const TOOL_RESULT_PREVIEW: usize = 4_000;
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -98,7 +100,7 @@ struct TaskInfo {
 /// Tool annotation: either a simple string or a rich Task.
 #[derive(Debug, Clone)]
 enum ToolAnnotation {
-    Simple(String),
+    Simple { text: String, tool_id: String },
     Task(TaskInfo),
 }
 
@@ -386,6 +388,11 @@ fn fmt_model(model: &str) -> String {
 fn fmt_tool_annotation(name: &str, input: &Value, tool_id: &str) -> Option<ToolAnnotation> {
     let inp = resolve_input(input);
 
+    let simple = |text: String| ToolAnnotation::Simple {
+        text,
+        tool_id: tool_id.to_string(),
+    };
+
     match name {
         "Read" => {
             let path = get_str(&inp, "file_path").unwrap_or("?");
@@ -400,19 +407,19 @@ fn fmt_tool_annotation(name: &str, input: &Value, tool_id: &str) -> Option<ToolA
                 }
                 _ => format!("-> Read: `{path}`"),
             };
-            Some(ToolAnnotation::Simple(annotation))
+            Some(simple(annotation))
         }
         "Write" => {
             let path = get_str(&inp, "file_path").unwrap_or("?");
-            Some(ToolAnnotation::Simple(format!("-> Write: `{path}`")))
+            Some(simple(format!("-> Write: `{path}`")))
         }
         "Edit" => {
             let path = get_str(&inp, "file_path").unwrap_or("?");
-            Some(ToolAnnotation::Simple(format!("-> Edit: `{path}`")))
+            Some(simple(format!("-> Edit: `{path}`")))
         }
         "Grep" | "Glob" => {
             let pattern = get_str(&inp, "pattern").unwrap_or("?");
-            Some(ToolAnnotation::Simple(format!("-> Search: `{pattern}`")))
+            Some(simple(format!("-> Search: `{pattern}`")))
         }
         "Bash" | "exec_command" => {
             let cmd = get_str(&inp, "command")
@@ -424,9 +431,9 @@ fn fmt_tool_annotation(name: &str, input: &Value, tool_id: &str) -> Option<ToolA
             } else {
                 cmd.to_string()
             };
-            Some(ToolAnnotation::Simple(format!("-> Bash: `{display}`")))
+            Some(simple(format!("-> Bash: `{display}`")))
         }
-        "apply_patch" => Some(ToolAnnotation::Simple("-> Patch (apply_patch)".to_string())),
+        "apply_patch" => Some(simple("-> Patch (apply_patch)".to_string())),
         "Task" | "Agent" => {
             let desc = get_str(&inp, "description").unwrap_or("").to_string();
             let prompt = get_str(&inp, "prompt").unwrap_or("").to_string();
@@ -442,13 +449,13 @@ fn fmt_tool_annotation(name: &str, input: &Value, tool_id: &str) -> Option<ToolA
         }
         "WebFetch" => {
             let url = get_str(&inp, "url").unwrap_or("?");
-            Some(ToolAnnotation::Simple(format!("-> WebFetch: `{url}`")))
+            Some(simple(format!("-> WebFetch: `{url}`")))
         }
         "WebSearch" => {
             let query = get_str(&inp, "query").unwrap_or("?");
-            Some(ToolAnnotation::Simple(format!("-> WebSearch: `{query}`")))
+            Some(simple(format!("-> WebSearch: `{query}`")))
         }
-        _ => Some(ToolAnnotation::Simple(format!("-> {name}"))),
+        _ => Some(simple(format!("-> {name}"))),
     }
 }
 
@@ -1650,6 +1657,7 @@ fn flush_pending_tools(
     all_tool_results: &HashMap<String, String>,
     deltas_by_agent_id: &HashMap<String, &SubagentDelta>,
     engine_label: &str,
+    include_tool_results: bool,
 ) {
     if pending_tools.is_empty() {
         return;
@@ -1658,7 +1666,10 @@ fn flush_pending_tools(
     lines.push(format!("### [{time}] {engine_label}"));
     for ann in pending_tools.drain(..) {
         match ann {
-            ToolAnnotation::Simple(s) => lines.push(s),
+            ToolAnnotation::Simple { text, tool_id } => {
+                lines.push(text);
+                render_generic_tool_result(lines, &tool_id, all_tool_results, include_tool_results);
+            }
             ToolAnnotation::Task(task) => {
                 let result = all_tool_results.get(&task.tool_id).map(String::as_str);
                 let delta =
@@ -1677,10 +1688,14 @@ fn render_tool_annotations_inline(
     annotations: &[ToolAnnotation],
     all_tool_results: &HashMap<String, String>,
     deltas_by_agent_id: &HashMap<String, &SubagentDelta>,
+    include_tool_results: bool,
 ) {
     for ann in annotations {
         match ann {
-            ToolAnnotation::Simple(s) => lines.push(s.clone()),
+            ToolAnnotation::Simple { text, tool_id } => {
+                lines.push(text.clone());
+                render_generic_tool_result(lines, tool_id, all_tool_results, include_tool_results);
+            }
             ToolAnnotation::Task(task) => {
                 let result = all_tool_results.get(&task.tool_id).map(String::as_str);
                 let delta =
@@ -1690,6 +1705,36 @@ fn render_tool_annotations_inline(
         }
     }
     lines.push(String::new());
+}
+
+fn render_generic_tool_result(
+    lines: &mut Vec<String>,
+    tool_id: &str,
+    all_tool_results: &HashMap<String, String>,
+    include_tool_results: bool,
+) {
+    if !include_tool_results {
+        return;
+    }
+    let Some(content) = all_tool_results.get(tool_id).map(|raw| raw.trim()) else {
+        return;
+    };
+    if content.is_empty() {
+        return;
+    }
+    lines.push("   Result:".to_string());
+    lines.push(format!(
+        "   {}",
+        truncate_tool_result(content).replace('\n', "\n   ")
+    ));
+}
+
+fn truncate_tool_result(text: &str) -> String {
+    if text.len() <= TOOL_RESULT_LIMIT {
+        return text.to_string();
+    }
+    let preview: String = text.chars().take(TOOL_RESULT_PREVIEW).collect();
+    format!("{}\n\n[... tool result truncated from {} chars]", preview, text.len())
 }
 
 /// Render the conversation section.
@@ -1717,6 +1762,7 @@ fn render_conversation(
     // Accumulator for merging tool-only assistant turns.
     let mut pending_tools: Vec<ToolAnnotation> = Vec::new();
     let mut pending_time: Option<String> = None;
+    let include_tool_results = engine == Engine::Hermes;
 
     for turn in turns {
         let ts = turn.timestamp_start.as_deref();
@@ -1732,6 +1778,7 @@ fn render_conversation(
                 &all_tool_results,
                 &deltas_by_agent_id,
                 engine_label,
+                include_tool_results,
             );
             let filtered = filter_skill_injection(&user_text);
             lines.push(format!("### [{time_str}] User"));
@@ -1756,6 +1803,7 @@ fn render_conversation(
                     &all_tool_results,
                     &deltas_by_agent_id,
                     engine_label,
+                    include_tool_results,
                 );
                 lines.push(format!("### [{time_str_end}] {engine_label}"));
                 lines.push(truncate_claude(&claude_text));
@@ -1767,6 +1815,7 @@ fn render_conversation(
                         &tool_annotations,
                         &all_tool_results,
                         &deltas_by_agent_id,
+                        include_tool_results,
                     );
                 }
             } else if !tool_annotations.is_empty() {
@@ -1787,6 +1836,7 @@ fn render_conversation(
         &all_tool_results,
         &deltas_by_agent_id,
         engine_label,
+        include_tool_results,
     );
 
     lines.join("\n")
@@ -2263,7 +2313,10 @@ mod tests {
         let input = serde_json::json!({"file_path": "/src/main.rs"});
         let ann = fmt_tool_annotation("Read", &input, "id1");
         match ann {
-            Some(ToolAnnotation::Simple(s)) => assert_eq!(s, "-> Read: `/src/main.rs`"),
+            Some(ToolAnnotation::Simple { text, tool_id }) => {
+                assert_eq!(text, "-> Read: `/src/main.rs`");
+                assert_eq!(tool_id, "id1");
+            }
             _ => panic!("expected Simple annotation"),
         }
     }
@@ -2274,9 +2327,9 @@ mod tests {
         let input = serde_json::json!({"command": long_cmd});
         let ann = fmt_tool_annotation("Bash", &input, "id2");
         match ann {
-            Some(ToolAnnotation::Simple(s)) => {
-                assert!(s.contains("..."));
-                assert!(s.len() < 80);
+            Some(ToolAnnotation::Simple { text, .. }) => {
+                assert!(text.contains("..."));
+                assert!(text.len() < 80);
             }
             _ => panic!("expected Simple annotation"),
         }
@@ -2296,7 +2349,7 @@ mod tests {
         // Must not panic.
         let ann = fmt_tool_annotation("Bash", &input, "idu8");
         match ann {
-            Some(ToolAnnotation::Simple(s)) => assert!(s.contains("...")),
+            Some(ToolAnnotation::Simple { text, .. }) => assert!(text.contains("...")),
             _ => panic!("expected Simple annotation"),
         }
     }
@@ -2464,5 +2517,57 @@ mod tests {
             summary.contains("| agenta | Prompt A | Opus | 1s | 10 | - | - |"),
             "agent-a should keep its own model even when deltas are reordered"
         );
+    }
+
+    #[test]
+    fn test_hermes_conversation_renders_generic_tool_result() {
+        let turns = vec![Turn {
+            turn_number: 1,
+            user_content: vec![
+                ContentBlock::Text {
+                    text: "Run the synthetic command.".to_string(),
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "tool_1".to_string(),
+                    content: "synthetic hermes tool output".to_string(),
+                },
+            ],
+            assistant_content: vec![ContentBlock::ToolUse {
+                name: "Bash".to_string(),
+                input: serde_json::json!({"command": "printf synthetic"}),
+                id: "tool_1".to_string(),
+            }],
+            timestamp_start: Some("2026-05-04T10:00:00Z".to_string()),
+            timestamp_end: Some("2026-05-04T10:00:01Z".to_string()),
+            model: None,
+        }];
+
+        let rendered = render_conversation(&turns, &[], Engine::Hermes);
+        assert!(rendered.contains("-> Bash: `printf synthetic`"));
+        assert!(rendered.contains("Result:"));
+        assert!(rendered.contains("synthetic hermes tool output"));
+    }
+
+    #[test]
+    fn test_claude_conversation_keeps_generic_tool_result_compact() {
+        let turns = vec![Turn {
+            turn_number: 1,
+            user_content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tool_1".to_string(),
+                content: "synthetic claude tool output".to_string(),
+            }],
+            assistant_content: vec![ContentBlock::ToolUse {
+                name: "Bash".to_string(),
+                input: serde_json::json!({"command": "printf synthetic"}),
+                id: "tool_1".to_string(),
+            }],
+            timestamp_start: Some("2026-05-04T10:00:00Z".to_string()),
+            timestamp_end: Some("2026-05-04T10:00:01Z".to_string()),
+            model: None,
+        }];
+
+        let rendered = render_conversation(&turns, &[], Engine::Claude);
+        assert!(rendered.contains("-> Bash: `printf synthetic`"));
+        assert!(!rendered.contains("synthetic claude tool output"));
     }
 }
