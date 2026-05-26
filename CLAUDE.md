@@ -188,7 +188,7 @@ If you find yourself re-adding any of these: stop, re-read this section, and ask
 
 ### After writing code
 
-8. **`cargo build --release` — always.** The installed binary is a symlink to `target/release/gaal`. Debug builds don't update it. If you run `cargo build` without `--release`, your fix doesn't take effect. This has burned us multiple times.
+8. **`cargo build --release` — always.** The installed binary is `/opt/homebrew/bin/gaal`, symlinked to `/Users/otonashi/thinking/building/gaal/target/release/gaal`. `~/.cargo/bin/gaal` is compatibility only and must point at the same release artifact. Debug builds and copied cargo-install binaries don't update what services should run. This has burned us multiple times.
 9. **Test against live sessions.** Run the built binary against real JSONL files on this machine. Not mocks, not synthetic data. Use `gaal ls --limit 3` and `gaal inspect latest` as smoke tests.
 10. **Verify the output.** Don't assume "it compiled, so it works." Run the command, read the output, confirm it matches what the real data says.
 

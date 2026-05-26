@@ -33,6 +33,8 @@ gaal index status -H                            # index health
 
 **Output format:** JSON by default (agent-native, pipeable to jq). Add `-H` for human-readable tables.
 
+**Canonical binary on this Mac:** source lives at `/Users/otonashi/thinking/building/gaal`; the stable CLI is `/opt/homebrew/bin/gaal`, symlinked to `/Users/otonashi/thinking/building/gaal/target/release/gaal`. `~/.cargo/bin/gaal` is compatibility only and must point at the same release artifact.
+
 **When in doubt:** `gaal --help` is excellent documentation. Works per-verb too: `gaal who --help`, `gaal create-handoff --help`, etc.
 
 ## Fleet
@@ -181,7 +183,8 @@ Tag with `gaal tag <session-id> research`, remove with `gaal tag <session-id> --
 
 - Read-only commands should be preferred. Mutating commands are `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index import-eywa`, `index recover-orphans`, and `tag`.
 - JSON is the agent default. Stable exit codes: `0` success, `1` no results, `2` ambiguous ID, `3` not found, `10` no index, `11` parse error.
-- The database is derived from local session files. When developing Gaal itself, verify parser claims against real traces and run `cargo build --release`; the installed binary points at the release build.
+- The database is derived from local session files. When developing Gaal itself, verify parser claims against real traces and run `cargo build --release`; `/opt/homebrew/bin/gaal` and `~/.cargo/bin/gaal` must both resolve to the release build.
+- Services and scheduled scripts should prefer `/opt/homebrew/bin/gaal` or put `/opt/homebrew/bin` before cargo paths to avoid duplicate-binary drift.
 
 ## Anti-Patterns
 

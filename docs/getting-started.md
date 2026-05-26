@@ -19,11 +19,23 @@ Rough build times:
 - Clean build: about 8 minutes
 - Incremental build: about 30 seconds
 
-To install `gaal` onto your `PATH`:
+On Nikita's Mac mini, the canonical checkout is:
 
 ```bash
-cargo install --path .
+/Users/otonashi/thinking/building/gaal
 ```
+
+The canonical command is `/opt/homebrew/bin/gaal`, symlinked to that checkout's release artifact:
+
+```bash
+ln -sf /Users/otonashi/thinking/building/gaal/target/release/gaal /opt/homebrew/bin/gaal
+ln -sf /Users/otonashi/thinking/building/gaal/target/release/gaal /Users/otonashi/.cargo/bin/gaal
+```
+
+`~/.cargo/bin/gaal` is compatibility only. If it becomes a real copied binary,
+replace it with the symlink above; otherwise shell PATH order can run stale
+code. For services and scheduled scripts, prefer `/opt/homebrew/bin/gaal` or
+put `/opt/homebrew/bin` before cargo paths.
 
 ## Requirements
 
