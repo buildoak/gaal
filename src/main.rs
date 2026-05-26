@@ -113,6 +113,40 @@ enum Commands {
         stdout: bool,
     },
 
+    /// Render source-backed transcript slices across a time window.
+    #[command(
+        after_long_help = "Examples:\n  gaal activity --since 1d\n  gaal activity --since 2026-05-25 --before 2026-05-26 --stdout\n  gaal activity --session 9ad81c91 --since 2026-05-25 --before 2026-05-26\n  gaal activity --engine codex --since 7d"
+    )]
+    Activity {
+        /// Lower bound: duration/date/RFC3339. Default: 1d.
+        #[arg(long, default_value = "1d")]
+        since: String,
+        /// Upper bound date/time. Default: now.
+        #[arg(long)]
+        before: Option<String>,
+        /// Restrict by engine.
+        #[arg(long)]
+        engine: Option<Engine>,
+        /// Restrict by working directory substring.
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Render one resolved session only.
+        #[arg(long)]
+        session: Option<String>,
+        /// Hide subagent sessions.
+        #[arg(long)]
+        skip_subagents: bool,
+        /// Re-render even if cached activity exists.
+        #[arg(long)]
+        force: bool,
+        /// Dump markdown to stdout instead of returning file path as JSON.
+        #[arg(long)]
+        stdout: bool,
+        /// Max DB candidates to render.
+        #[arg(long, default_value_t = 250)]
+        limit: usize,
+    },
+
     /// Inverted query: which session did X to Y.
     #[command(
         after_long_help = "Available verbs:\n  read       Files opened with the Read tool\n  wrote      Files created/modified with Write or Edit tool\n  ran        Commands executed via Bash tool (matches program names)\n  touched    Any file interaction (read + wrote combined)\n  changed    Files modified (wrote + edited, excludes read-only)\n  deleted    File deletions (rm commands and file removals)"
@@ -475,6 +509,31 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             };
             gaal::commands::transcript::run(args)
         }
+        Commands::Activity {
+            since,
+            before,
+            engine,
+            cwd,
+            session,
+            skip_subagents,
+            force,
+            stdout,
+            limit,
+        } => {
+            let args = gaal::commands::activity::ActivityArgs {
+                since,
+                before,
+                engine: engine.map(convert_engine_string),
+                cwd,
+                session,
+                skip_subagents,
+                force,
+                stdout,
+                limit: usize_to_i64("limit", limit)?,
+                human,
+            };
+            gaal::commands::activity::run(args)
+        }
         Commands::Who {
             verb,
             target,
@@ -757,6 +816,7 @@ fn current_command_name() -> &'static str {
             "ls" => return "ls",
             "inspect" => return "inspect",
             "transcript" => return "transcript",
+            "activity" => return "activity",
             "who" => return "who",
             "search" => return "search",
             "recall" => return "recall",

@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod find;
 pub mod handoff;
 pub mod index;

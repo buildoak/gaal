@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Source-backed activity slices.** New `gaal activity` command renders transcript-shaped markdown for sessions with source-proven events in a half-open time window. Activity output lives under `~/.gaal/data/activity/` and includes carried-in/continues-after metadata for long-running sessions.
+
+### Fixed
+- **Transcript-aware `create-handoff` planning.** Handoff chunk planning now sizes the actual rendered transcript used for extraction instead of raw Codex JSONL bytes. This prevents short rendered sessions with large JSONL tool payloads from exploding into unnecessary map/reduce calls, and makes long rendered transcripts chunk predictably before dispatch.
+
 ## 2026-05-05 — 0.3.0
 
 ### Added

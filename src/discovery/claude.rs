@@ -14,9 +14,7 @@ const HEAD_LINES: usize = 30;
 /// When `newer_than` is set, sessions whose on-disk mtime is older than the
 /// cutoff are skipped before any head-read or JSON parsing.  This keeps the
 /// incremental-backfill hot path off quiet sessions.
-pub fn discover_claude_sessions(
-    newer_than: Option<SystemTime>,
-) -> Result<Vec<DiscoveredSession>> {
+pub fn discover_claude_sessions(newer_than: Option<SystemTime>) -> Result<Vec<DiscoveredSession>> {
     let Some(home) = dirs::home_dir() else {
         return Ok(Vec::new());
     };

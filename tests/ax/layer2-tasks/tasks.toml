@@ -42,6 +42,13 @@ agents_per_task = 3
 category = "transcript"
 
 [[tasks]]
+name = "activity-slice"
+prompt = "Show recent indexed activity from the last day as a transcript-shaped activity slice."
+expected_command_pattern = "gaal activity.*--since 1d"
+agents_per_task = 3
+category = "activity"
+
+[[tasks]]
 name = "handoff-creation"
 prompt = "Generate a handoff document for the most recent session so I can continue the work later."
 expected_command_pattern = "gaal create-handoff (latest|[a-f0-9]+)"

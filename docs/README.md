@@ -7,6 +7,7 @@
 ```bash
 gaal ls -H
 gaal inspect latest --tokens -H
+gaal activity --since 1d -H
 gaal who wrote CLAUDE.md
 gaal recall "auth refactor" --format brief
 ```
@@ -17,6 +18,7 @@ gaal recall "auth refactor" --format brief
 - [Architecture](architecture.md) -- data model, two-source subagent model, session lifecycle
 - [Commands](commands/) -- full command reference (one page per command group)
   - [Fleet View: ls](commands/fleet-view.md)
+  - [Activity: activity](commands/activity.md)
   - [Drill-Down: inspect, transcript](commands/drill-down.md)
   - [Attribution: who](commands/attribution.md)
   - [Search & Recall: search, recall](commands/search-recall.md)
@@ -31,6 +33,7 @@ gaal recall "auth refactor" --format brief
 ## What gaal Does Not Do
 
 - Real-time monitoring of active agent processes
+- Live status via `gaal activity` (`activity` is historical/index-backed)
 - Stuck detection or session health heuristics
 - Process-tree-based session discovery
 - Loop detection over raw model behavior

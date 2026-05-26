@@ -7,7 +7,7 @@ Session observability for AI coding agents. Parses Claude Code, Codex, Gemini CL
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS-lightgrey)
 
-11,000+ sessions. 372K facts. 895 handoffs indexed. Four-engine. 12 commands.
+11,000+ sessions. 372K facts. 895 handoffs indexed. Four-engine. 13 commands.
 
 ---
 
@@ -17,6 +17,7 @@ Claude Code, Codex, Gemini CLI, and Hermes Agent emit session logs -- often 10-5
 
 - **Fleet view** across thousands of sessions, all engines, one table. Filter by engine, model, session type, time window, CWD, or token count.
 - **Drill into any session** -- files touched, commands run, subagent swarms, token breakdown, peak context, cost estimate.
+- **Activity slices** -- render transcript-shaped historical activity across sessions for a time window, including long-running sessions that started earlier.
 - **Attribution** -- which session wrote that file? Which agent ran that command? Traces through coordinator-subagent chains with arrow notation.
 - **Continuity** -- recall past work via BM25 full-text search and ranked handoff retrieval. Each new session is less amnesic than the last.
 - **Self-identification** -- agents find their own session mid-flight via the salt protocol. Emit a token, scan for it, get back the full session context.
@@ -276,6 +277,7 @@ This command costs money -- it runs an LLM extraction pass. Use it on sessions t
 | `gaal recall [topic]` | Ranked handoff retrieval. `--id` for a specific session, `--format brief\|full`, `--limit` |
 | `gaal resolve <id>` | Short ID to JSONL path, transcript path, handoff path, engine, type, model |
 | `gaal transcript <id>` | Session transcript as rendered markdown. `--stdout` dumps inline, otherwise returns the file path |
+| `gaal activity` | Source-backed transcript slices across a time window. Historical/indexed; not live monitoring |
 
 ### Generate
 
@@ -314,6 +316,7 @@ Commands:
   ls              Fleet view across sessions
   inspect         Session details with optional focused views
   transcript      Get session transcript markdown
+  activity        Render source-backed transcript slices across a time window
   who             Inverted query: which session did X to Y
   search          Full-text search over indexed facts
   recall          Semantic session retrieval
@@ -372,6 +375,7 @@ Deliberately excluded. These were built, tested, and removed because they caused
 | PID-based parent-child linking | 1 out of 2,433 sessions ever linked via PID. Replaced by the salt protocol |
 
 If a monitoring feature seems missing, it was probably here once and got killed for cause.
+`gaal activity` is historical/index-backed rendering; it does not inspect running processes or imply live status.
 
 ---
 

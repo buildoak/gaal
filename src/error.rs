@@ -115,6 +115,7 @@ fn command_example(command: &str) -> String {
         "ls" => "gaal ls --since 7d -H".to_string(),
         "inspect" => "gaal inspect 249aad1e -H".to_string(),
         "transcript" => "gaal transcript latest -H".to_string(),
+        "activity" => "gaal activity --since 1d -H".to_string(),
         "who" => "gaal who ran cargo --since 7d -H".to_string(),
         "search" => "gaal search \"database migration\" -H".to_string(),
         "recall" => "gaal recall \"auth migration\" -H".to_string(),
@@ -148,6 +149,11 @@ fn no_results_message(command: &str) -> (String, String, String) {
             "No sessions matched that inspect request.".to_string(),
             "gaal inspect latest -H".to_string(),
             "Try a specific session ID, `latest`, or list recent sessions first with `gaal ls --since 30d -H`.".to_string(),
+        ),
+        "activity" => (
+            "No source-backed activity matched that window.".to_string(),
+            "gaal activity --since 1d -H".to_string(),
+            "Widen the time range, remove restrictive filters, or inspect candidate sessions with `gaal ls --since 7d -H`.".to_string(),
         ),
         _ => (
             "The command completed but did not find any matching results.".to_string(),
@@ -216,6 +222,11 @@ fn parse_error_message(command: &str, detail: &str) -> (String, String, String) 
             "The transcript command needs a session ID or `latest`.".to_string(),
             "gaal transcript latest -H".to_string(),
             "Pass a session ID prefix or `latest`, or run `gaal ls --since 7d -H` to find a session first.".to_string(),
+        ),
+        "activity" if detail.contains("time bound") || detail.contains("--since") || detail.contains("--before") => (
+            format!("The activity time window is invalid: {detail}"),
+            "gaal activity --since 1d -H".to_string(),
+            "Use a relative duration like `1d`, a date like `2026-05-25`, or an RFC3339 timestamp.".to_string(),
         ),
         "inspect" if detail.contains("session id") || detail.contains("requires") => (
             "The inspect command needs a session selector.".to_string(),

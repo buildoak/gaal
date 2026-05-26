@@ -34,7 +34,7 @@ Tests whether agents can accomplish real gaal tasks on their first attempt with 
 - **`tasks.toml`** — Declarative task definitions with prompts, expected command patterns, and agent count per task.
 - **`run-tasks.sh`** — Dispatches agents via agent-mux, collects responses and session metadata.
 
-**Cost:** 3 agents x 12 tasks = 36 Codex dispatches (configurable via `--agents`).
+**Cost:** 3 agents x 13 tasks = 39 Codex dispatches (configurable via `--agents`).
 
 ### Layer 3: Trace Analysis (`layer3-analysis/`)
 

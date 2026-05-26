@@ -123,8 +123,8 @@ pub fn parse_events(path: &Path) -> Result<Vec<SessionEvent>> {
                 if text.is_empty() {
                     continue;
                 }
-                let is_cancellation = msg_type == "info"
-                    && text.to_ascii_lowercase().contains("cancel");
+                let is_cancellation =
+                    msg_type == "info" && text.to_ascii_lowercase().contains("cancel");
                 if is_cancellation || msg_type == "error" {
                     events.push(SessionEvent {
                         timestamp: ts,

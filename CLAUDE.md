@@ -24,6 +24,7 @@ src/
     search.rs          BM25 full-text search via Tantivy
     recall.rs          Ranked handoff retrieval for session continuity
     transcript.rs      Markdown transcript rendering
+    activity.rs        Source-backed activity slices across time windows
     handoff.rs         LLM-powered handoff generation (create-handoff)
     salt.rs            Unique token generation for self-identification
     find.rs            JSONL file discovery by salt token (find-salt)
@@ -126,7 +127,7 @@ Path from parent to subagent file is deterministic:
 
 ## v0.1.0 Scope
 
-Twelve commands. Core session observability without monitoring features.
+Thirteen commands. Core session observability without monitoring features.
 
 | # | Command | What it does |
 |---|---------|-------------|
@@ -136,12 +137,13 @@ Twelve commands. Core session observability without monitoring features.
 | 4 | `gaal search <query>` | BM25 full-text search over indexed facts via Tantivy. |
 | 5 | `gaal recall [topic]` | Ranked retrieval over generated handoffs for session continuity. |
 | 6 | `gaal transcript <id>` | Session transcript markdown — path metadata or `--stdout` dump. |
-| 7 | `gaal create-handoff <id>` | LLM-powered handoff generation via agent-mux dispatch. |
-| 8 | `gaal salt` | Generate unique salt token for self-identification. |
-| 9 | `gaal find-salt <token>` | Find JSONL file by salt token. Content-addressed discovery. |
-| 10 | `gaal index <sub>` | Index maintenance: backfill, reindex, prune, import-eywa, status. |
-| 11 | `gaal tag` | Tag management: add, remove, ls. |
-| 12 | `gaal resolve <id>` | Resolve short ID to full session paths and metadata. |
+| 7 | `gaal activity` | Source-backed transcript slices across a time window. Historical/indexed; not live monitoring. |
+| 8 | `gaal create-handoff <id>` | LLM-powered handoff generation via agent-mux dispatch. |
+| 9 | `gaal salt` | Generate unique salt token for self-identification. |
+| 10 | `gaal find-salt <token>` | Find JSONL file by salt token. Content-addressed discovery. |
+| 11 | `gaal index <sub>` | Index maintenance: backfill, reindex, prune, import-eywa, status. |
+| 12 | `gaal tag` | Tag management: add, remove, ls. |
+| 13 | `gaal resolve <id>` | Resolve short ID to full session paths and metadata. |
 
 **What's in:** Query, search, inspect, resolve, transcript, handoff generation, self-identification, tagging, subagent indexing/attribution, dual Claude+Codex support, AX error messages.
 
@@ -164,6 +166,8 @@ These are **deleted, not deferred**. Do not re-implement.
 | Loop detection | Premature. Insufficient signal in JSONL to detect reliably. |
 
 If you find yourself re-adding any of these: stop, re-read this section, and ask yourself why you think you'll succeed where 5+ attempts failed.
+
+`gaal activity` is allowed because it renders historical, source-backed session slices. It must not become `gaal active`: no process inspection, live status, tailing, stuck detection, or health heuristics.
 
 ## Verification Protocol
 
@@ -254,7 +258,7 @@ cd /Users/otonashi/thinking/building/gaal
 ./tests/suite-1.sh
 ```
 
-The integration suites (`tests/run-all.sh`, `tests/suite-*.sh`) are the current quality gate. They test all 12 commands against live data on this machine. The AX layer harness (`tests/ax/`) is the structured extension point — new error paths and workflows go there.
+The integration suites (`tests/run-all.sh`, `tests/suite-*.sh`) are the current quality gate. They test CLI commands against live data on this machine. The AX layer harness (`tests/ax/`) is the structured extension point — new error paths and workflows go there.
 
 ### What "AX-compliant" Means in Practice
 
