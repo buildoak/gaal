@@ -1,9 +1,9 @@
 {
   "meta": {
-    "timestamp": "2026-03-29T15:44:48Z",
+    "timestamp": "2026-05-26T14:18:48Z",
     "manifest": "/Users/otonashi/thinking/building/gaal/tests/ax/layer1-errors/error-manifest.toml",
-    "total": 32,
-    "pass": 32,
+    "total": 39,
+    "pass": 39,
     "fail": 0
   },
   "errors": [
@@ -104,8 +104,8 @@
       "expected_exit": 0,
       "actual_exit": 0,
       "exit_match": true,
-      "stdout": "[\n  {\n    \"session_id\": \"43fc71df\",\n    \"handoff_path\": \"/Users/otonashi/.gaal/data/codex/handoffs/2026/03/29/43fc71df.md\",\n    \"headline\": \"Updated gaal AX harness coverage and documentation for new session selectors, JSON error fields, and backlog status changes.\",\n    \"projects\": [\n      \"gaal\"\n    ],\n    \"keywords\": [\n      \"gaal\",\n      \"AX harness\",\n      \"TOML\",\n      \"DOCS.md\",\n      \"clap\"\n    ],\n    \"substance\": 2\n  }\n]",
-      "stderr": "  -> transcript source: /Users/otonashi/.gaal/data/codex/sessions/2026/03/29/43fc71df.md\nUsing session transcript (32787 chars) for context"
+      "stdout": "[\n  {\n    \"session_id\": \"9b15660b\",\n    \"status\": \"dry_run\",\n    \"engine\": \"codex\",\n    \"indexed\": true,\n    \"jsonl_path\": \"/Users/otonashi/.codex/sessions/2026/05/26/rollout-2026-05-26T18-16-28-019e64a4-e5ac-7772-a670-849e9b15660b.jsonl\",\n    \"handoff_path\": \"/Users/otonashi/.gaal/data/codex/handoffs/2026/05/26/9b15660b.md\",\n    \"strategy\": \"single\",\n    \"estimated_transcript_chars\": 2142,\n    \"estimated_transcript_tokens\": 536,\n    \"jsonl_lines\": 66,\n    \"compaction_lines\": [],\n    \"chunk_count\": 1,\n    \"estimated_llm_calls\": 1,\n    \"single_context_limit_chars\": 80000,\n    \"max_chunks\": 8,\n    \"max_llm_calls_per_session\": 9,\n    \"provider\": \"agent-mux\",\n    \"provider_supported\": true,\n    \"model\": \"gpt-5.4-mini\",\n    \"effort\": \"high\",\n    \"format\": \"eywa-compatible\",\n    \"session_model\": \"gpt-5.5\",\n    \"side_effects\": {\n      \"spawn_provider_worker\": false,\n      \"spend_tokens\": false,\n      \"write_handoff_markdown\": false,\n      \"upsert_db_rows\": false,\n      \"index_jsonl\": false\n    },\n    \"warnings\": []\n  }\n]",
+      "stderr": ""
     },
     {
       "name": "inspect-ambiguous",
@@ -135,7 +135,7 @@
       "actual_exit": 11,
       "exit_match": true,
       "stdout": "",
-      "stderr": "{\"error\":\"The `who` command needs a verb such as `read`, `wrote`, or `ran`.\",\"example\":\"gaal who ran cargo --since 7d -H\",\"exit_code\":11,\"hint\":\"Choose one supported verb, then provide an optional target to narrow the match.\",\"ok\":false}"
+      "stderr": "{\"error\":\"Unrecognized verb `docs.md`. Valid verbs: read, wrote, ran, touched, changed, deleted.\",\"example\":\"gaal who ran cargo --since 7d -H\",\"exit_code\":11,\"hint\":\"Pick one of the listed verbs, then optionally provide a target to narrow the match.\",\"ok\":false}"
     },
     {
       "name": "who-no-verb-human",
@@ -145,7 +145,7 @@
       "actual_exit": 11,
       "exit_match": true,
       "stdout": "",
-      "stderr": "What went wrong: The `who` command needs a verb such as `read`, `wrote`, or `ran`.\nExample: gaal who ran cargo --since 7d -H\nHint: Choose one supported verb, then provide an optional target to narrow the match."
+      "stderr": "What went wrong: Unrecognized verb `docs.md`. Valid verbs: read, wrote, ran, touched, changed, deleted.\nExample: gaal who ran cargo --since 7d -H\nHint: Pick one of the listed verbs, then optionally provide a target to narrow the match."
     },
     {
       "name": "who-invalid-verb",
@@ -155,7 +155,7 @@
       "actual_exit": 11,
       "exit_match": true,
       "stdout": "",
-      "stderr": "{\"error\":\"The `who` command needs a verb such as `read`, `wrote`, or `ran`.\",\"example\":\"gaal who ran cargo --since 7d -H\",\"exit_code\":11,\"hint\":\"Choose one supported verb, then provide an optional target to narrow the match.\",\"ok\":false}"
+      "stderr": "{\"error\":\"Unrecognized verb `ate`. Valid verbs: read, wrote, ran, touched, changed, deleted.\",\"example\":\"gaal who ran cargo --since 7d -H\",\"exit_code\":11,\"hint\":\"Pick one of the listed verbs, then optionally provide a target to narrow the match.\",\"ok\":false}"
     },
     {
       "name": "search-empty-parse-error",
@@ -208,6 +208,26 @@
       "stderr": "{\"error\":\"The command arguments are invalid: invalid time value: garbage (use 7d, 24h, today, YYYY-MM-DD, or RFC3339)\",\"example\":\"gaal who ran cargo --since 7d -H\",\"exit_code\":11,\"hint\":\"Adjust the arguments shown above, then rerun the command.\",\"ok\":false}"
     },
     {
+      "name": "activity-since-garbage",
+      "command": "gaal activity --since garbage",
+      "description": "Invalid date in --since for activity",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"The activity time window is invalid: invalid time bound `garbage` (expected duration like 1h, date, or RFC3339)\",\"example\":\"gaal activity --since 1d -H\",\"exit_code\":11,\"hint\":\"Use a relative duration like `1d`, a date like `2026-05-25`, or an RFC3339 timestamp.\",\"ok\":false}"
+    },
+    {
+      "name": "activity-inverted-window",
+      "command": "gaal activity --since 2026-05-26 --before 2026-05-25",
+      "description": "Activity rejects inverted half-open windows",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"The activity time window is invalid: `--since` must be earlier than `--before`\",\"example\":\"gaal activity --since 1d -H\",\"exit_code\":11,\"hint\":\"Use a relative duration like `1d`, a date like `2026-05-25`, or an RFC3339 timestamp.\",\"ok\":false}"
+    },
+    {
       "name": "inspect-no-selector",
       "command": "gaal inspect",
       "description": "Inspect with no ID, no --ids, no --tag",
@@ -236,6 +256,16 @@
       "exit_match": true,
       "stdout": "",
       "stderr": "{\"error\":\"No sessions matched those filters.\",\"example\":\"gaal ls --since 30d -H\",\"exit_code\":1,\"hint\":\"Widen the time range, remove restrictive filters like `--tag`, or add `--all` to include short noise sessions.\",\"ok\":false}"
+    },
+    {
+      "name": "activity-no-results",
+      "command": "gaal activity --since 2020-01-01 --before 2020-01-02",
+      "description": "activity over an empty time window returns NoResults",
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"No source-backed activity matched that window.\",\"example\":\"gaal activity --since 1d -H\",\"exit_code\":1,\"hint\":\"Widen the time range, remove restrictive filters, or inspect candidate sessions with `gaal ls --since 7d -H`.\",\"ok\":false}"
     },
     {
       "name": "search-no-results",
@@ -274,8 +304,48 @@
       "expected_exit": 0,
       "actual_exit": 0,
       "exit_match": true,
-      "stdout": "[\n  \"session: 5c2cc93f\\ndate: 2026-03-29\\nheadline: Booted Jenkins and discussed the longer-term AgentMUX coordinator model, including centralized dispatch and worker lifecycle management.\\nprojects: coordinator, pratchett-os\\nkeywords: AgentMUX, Claude Code, subagents, orchestration, research\\nsubstance: 1 duration_minutes: 16 score: 43.526\"\n]",
+      "stdout": "[\n  \"session: 28131978\\ndate: 2026-04-02\\nheadline: Built a standalone codex-tickets orchestration core with SQLite state, agent-mux dispatch, and best-effort GAAL linkage, then pressure-tested whether v4 should become the long-term workhorse.\\nprojects: codex-tickets, coordinator, pratchett-os\\nkeywords: agent-mux, gaal, sqlite, orchestration, ticket-work\\nsubstance: 3 duration_minutes: 250 score: 0.473\",\n  \"session: 5c2cc93f\\ndate: 2026-03-29\\nheadline: Booted Jenkins and discussed the longer-term AgentMUX coordinator model, including centralized dispatch and worker lifecycle management.\\nprojects: coordinator, pratchett-os\\nkeywords: AgentMUX, Claude Code, subagents, orchestration, research\\nsubstance: 1 duration_minutes: 16 score: 0.263\"\n]",
       "stderr": ""
+    },
+    {
+      "name": "recall-id-not-found",
+      "command": "gaal recall --id zzzzzzzz",
+      "description": "recall --id with nonexistent session ID",
+      "expected_exit": 3,
+      "actual_exit": 3,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"Session `zzzzzzzz` was not found.\",\"example\":\"gaal recall --id latest -H\",\"exit_code\":3,\"hint\":\"List recent sessions with `gaal ls --since 7d -H` to find a valid session ID.\",\"ok\":false}"
+    },
+    {
+      "name": "recall-id-not-found-human",
+      "command": "gaal recall --id zzzzzzzz -H",
+      "description": "recall --id with nonexistent session ID (human mode)",
+      "expected_exit": 3,
+      "actual_exit": 3,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "What went wrong: Session `zzzzzzzz` was not found.\nExample: gaal recall --id latest -H\nHint: List recent sessions with `gaal ls --since 7d -H` to find a valid session ID."
+    },
+    {
+      "name": "recall-id-and-query-conflict",
+      "command": "gaal recall --id abc12345 'some query'",
+      "description": "recall --id and positional QUERY are mutually exclusive",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "{\"error\":\"The `--id` flag and a positional QUERY cannot be used together.\",\"example\":\"gaal recall --id abc12345 --format brief -H\",\"exit_code\":11,\"hint\":\"Use `--id <session-id>` for direct lookup or a positional query for semantic search, but not both.\",\"ok\":false}"
+    },
+    {
+      "name": "recall-id-and-query-conflict-human",
+      "command": "gaal recall --id abc12345 'some query' -H",
+      "description": "recall --id and positional QUERY are mutually exclusive (human mode)",
+      "expected_exit": 11,
+      "actual_exit": 11,
+      "exit_match": true,
+      "stdout": "",
+      "stderr": "What went wrong: The `--id` flag and a positional QUERY cannot be used together.\nExample: gaal recall --id abc12345 --format brief -H\nHint: Use `--id <session-id>` for direct lookup or a positional query for semantic search, but not both."
     },
     {
       "name": "recall-no-args",
@@ -285,7 +355,7 @@
       "actual_exit": 0,
       "exit_match": true,
       "stdout": "",
-      "stderr": "gaal recall — Ranked session retrieval for continuity and context\n\nUsage: gaal recall <query> [flags]\n\nFlags:\n  --days-back <n>    Recency window in days (default: 14)\n  --limit <n>        Max number of sessions to return (default: 3)\n  --format <fmt>     Output format: summary, brief, handoff, full, eywa (default: brief)\n  --substance <n>    Minimum substance score (default: 1)\n  -H                 Human-readable output\n\nExamples:\n  gaal recall \"gaussian moat\" -H\n  gaal recall \"auth migration\" --days-back 30 --limit 5\n  gaal recall \"deploy\" --format handoff"
+      "stderr": "gaal recall — Ranked session retrieval for continuity and context\n\nUsage: gaal recall <query> [flags]\n       gaal recall --id <session-id> [flags]\n\nFlags:\n  --id <id>          Direct handoff lookup by session ID (bypasses search)\n  --days-back <n>    Recency window in days (default: 14)\n  --limit <n>        Max number of sessions to return (default: 3)\n  --format <fmt>     Output format: summary, brief, handoff, full, eywa (default: brief)\n  --substance <n>    Minimum substance score (default: 1)\n  -H                 Human-readable output\n\nExamples:\n  gaal recall \"gaussian moat\" -H\n  gaal recall \"auth migration\" --days-back 30 --limit 5\n  gaal recall \"deploy\" --format handoff\n  gaal recall --id abc12345 --format brief -H\n  gaal recall --id latest -H"
     },
     {
       "name": "salt-generate",
@@ -294,7 +364,7 @@
       "expected_exit": 0,
       "actual_exit": 0,
       "exit_match": true,
-      "stdout": "GAAL_SALT_0657027ca372f66a",
+      "stdout": "GAAL_SALT_442f02212b916b88",
       "stderr": ""
     },
     {
@@ -304,7 +374,7 @@
       "expected_exit": 0,
       "actual_exit": 0,
       "exit_match": true,
-      "stdout": "[\n  \"bot\",\n  \"build-gaal\",\n  \"coordinator\",\n  \"legacy\",\n  \"test-tag\",\n  \"worker\"\n]",
+      "stdout": "[\n  \"Explore\",\n  \"Plan\",\n  \"_recovered\",\n  \"bot\",\n  \"build-gaal\",\n  \"claude-code-guide\",\n  \"coordinator\",\n  \"general-purpose\",\n  \"gsd-coordinator\",\n  \"gsd-heavy\",\n  \"gsd-light\",\n  \"legacy\",\n  \"statusline-setup\",\n  \"test-tag\",\n  \"worker\"\n]",
       "stderr": ""
     },
     {
@@ -314,7 +384,7 @@
       "expected_exit": 0,
       "actual_exit": 0,
       "exit_match": true,
-      "stdout": "{\n  \"db_path\": \"/Users/otonashi/.gaal/index.db\",\n  \"db_size_bytes\": 387366912,\n  \"facts_total\": 252209,\n  \"handoffs_total\": 883,\n  \"last_indexed_at\": \"2026-03-29T15:43:30.618Z\",\n  \"newest_session\": \"2026-03-29T15:43:20.522Z\",\n  \"oldest_session\": \"2026-01-08\",\n  \"sessions_by_engine\": {\n    \"claude\": 4298,\n    \"codex\": 3004\n  },\n  \"sessions_total\": 7302\n}",
+      "stdout": "{\n  \"db_path\": \"/Users/otonashi/.gaal/index.db\",\n  \"db_size_bytes\": 825032704,\n  \"facts_total\": 658139,\n  \"handoffs_total\": 1200,\n  \"last_indexed_at\": \"2026-05-26T14:18:00.353Z\",\n  \"newest_session\": \"2026-05-26T14:16:29.025Z\",\n  \"oldest_session\": \"2026-01-08\",\n  \"sessions_by_engine\": {\n    \"claude\": 10256,\n    \"codex\": 7441,\n    \"gemini\": 381\n  },\n  \"sessions_total\": 18078\n}",
       "stderr": ""
     },
     {
@@ -324,8 +394,8 @@
       "expected_exit": 0,
       "actual_exit": 0,
       "exit_match": true,
-      "stdout": "{\n  \"query_window\": {\n    \"from\": \"2026-01-08\",\n    \"to\": \"2026-03-29T15:44:48Z\"\n  },\n  \"filter\": \"hiding sessions with 0 tool calls and <30s duration\",\n  \"shown\": 1,\n  \"total\": 1,\n  \"total_unfiltered\": 7302,\n  \"sessions\": [\n    {\n      \"id\": \"5e8cf196\",\n      \"engine\": \"codex\",\n      \"model\": \"gpt-5.4-mini\",\n      \"cwd\": \"gaal\",\n      \"started_at\": \"2026-03-29T15:37:57.974Z\",\n      \"ended_at\": \"2026-03-29T15:41:26.189Z\",\n      \"duration_secs\": 208,\n      \"tokens\": {\n        \"input\": 48422,\n        \"output\": 18404\n      },\n      \"peak_context\": 56110,\n      \"tools_used\": 47,\n      \"headline\": \"Updated the gaal AX harness and docs to cover new session...\",\n      \"session_type\": \"standalone\"\n    }\n  ]\n}",
-      "stderr": "Showing 1 of 7302 sessions — use --limit N for more"
+      "stdout": "{\n  \"query_window\": {\n    \"from\": \"2026-01-08\",\n    \"to\": \"2026-05-26T14:18:48Z\"\n  },\n  \"filter\": \"hiding sessions with 0 tool calls and <30s duration\",\n  \"shown\": 1,\n  \"total\": 1,\n  \"total_unfiltered\": 18078,\n  \"sessions\": [\n    {\n      \"id\": \"9b15660b\",\n      \"engine\": \"codex\",\n      \"model\": \"gpt-5.5\",\n      \"cwd\": \"coordinator\",\n      \"started_at\": \"2026-05-26T14:16:29.025Z\",\n      \"ended_at\": \"2026-05-26T14:16:57.336Z\",\n      \"duration_secs\": 28,\n      \"tokens\": {\n        \"input\": 65178,\n        \"output\": 1178\n      },\n      \"peak_context\": 35638,\n      \"tools_used\": 11,\n      \"headline\": \"<tg_message from=\\\"etheac\\\" ts=\\\"2026-05-26T14:16:13.000Z\\\"> ...\",\n      \"session_type\": \"standalone\",\n      \"task\": \"<tg_message from=\\\"etheac\\\" ts=\\\"2026-05-26T14:16:13.000Z\\\"> ...\"\n    }\n  ]\n}",
+      "stderr": "Showing 1 of 18078 sessions — use --limit N for more"
     }
   ]
 }

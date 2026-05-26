@@ -51,6 +51,17 @@ pub struct ListFilter {
     pub subagent_type: Option<String>,
 }
 
+/// Filters for source-rendered activity slices.
+#[derive(Debug, Clone, Default)]
+pub struct ActivityFilter {
+    pub engine: Option<String>,
+    pub since: String,
+    pub before: String,
+    pub cwd: Option<String>,
+    pub include_subagents: bool,
+    pub limit: Option<i64>,
+}
+
 /// Supported fact types for `who` queries and fact filtering.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FactType {
@@ -489,6 +500,57 @@ pub fn list_sessions(conn: &Connection, filter: &ListFilter) -> Result<Vec<Sessi
             ":tag": filter.tag.as_deref(),
             ":include_subagents": filter.include_subagents as i64,
             ":subagent_type": filter.subagent_type.as_deref(),
+            ":limit": limit,
+        })
+        .map_err(db_err)?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(db_err)? {
+        out.push(row_to_session(row).map_err(db_err)?);
+    }
+
+    Ok(out)
+}
+
+/// List coarse session candidates whose indexed interval overlaps a half-open window.
+///
+/// Parsed source events are still authoritative for final inclusion; this query
+/// only avoids rendering clearly unrelated sessions.
+pub fn list_sessions_overlapping_window(
+    conn: &Connection,
+    filter: &ActivityFilter,
+) -> Result<Vec<SessionRow>, GaalError> {
+    let cwd_like = filter.cwd.as_ref().map(|value| format!("%{value}%"));
+    let limit = filter.limit.unwrap_or(250).max(1);
+
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                s.id, s.engine, s.model, s.cwd, s.started_at, s.ended_at, s.exit_signal, s.last_event_at,
+                s.parent_id, s.session_type, s.jsonl_path, s.total_input_tokens, s.total_output_tokens,
+                s.cache_read_tokens, s.cache_creation_tokens, s.reasoning_tokens,
+                s.total_tools, s.total_turns, s.peak_context, s.last_indexed_offset, s.subagent_type,
+                s.gemini_summary
+            FROM sessions s
+            WHERE (:engine IS NULL OR s.engine = :engine)
+              AND (:cwd_like IS NULL OR s.cwd LIKE :cwd_like)
+              AND (:include_subagents = 1 OR s.session_type != 'subagent')
+              AND s.started_at < :before
+              AND COALESCE(s.ended_at, s.last_event_at, s.started_at) >= :since
+            ORDER BY COALESCE(s.last_event_at, s.ended_at, s.started_at) DESC
+            LIMIT :limit
+            "#,
+        )
+        .map_err(db_err)?;
+
+    let mut rows = stmt
+        .query(named_params! {
+            ":engine": filter.engine.as_deref(),
+            ":cwd_like": cwd_like.as_deref(),
+            ":include_subagents": filter.include_subagents as i64,
+            ":since": &filter.since,
+            ":before": &filter.before,
             ":limit": limit,
         })
         .map_err(db_err)?;
@@ -1180,5 +1242,72 @@ mod meta_tests {
             get_meta(&conn, "backfill:claude").unwrap(),
             Some("9999999999".to_string())
         );
+    }
+
+    #[test]
+    fn activity_overlap_query_does_not_let_stale_open_sessions_starve_limit() {
+        let conn = fresh_conn();
+        upsert_session(
+            &conn,
+            &test_session("staleopen", "2026-01-01T00:00:00Z", None, None),
+        )
+        .unwrap();
+        upsert_session(
+            &conn,
+            &test_session(
+                "realmay25",
+                "2026-05-20T00:00:00Z",
+                None,
+                Some("2026-05-25T12:00:00Z"),
+            ),
+        )
+        .unwrap();
+
+        let rows = list_sessions_overlapping_window(
+            &conn,
+            &ActivityFilter {
+                since: "2026-05-25T00:00:00Z".to_string(),
+                before: "2026-05-26T00:00:00Z".to_string(),
+                include_subagents: true,
+                limit: Some(1),
+                ..ActivityFilter::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "realmay25");
+    }
+
+    fn test_session(
+        id: &str,
+        started_at: &str,
+        ended_at: Option<&str>,
+        last_event_at: Option<&str>,
+    ) -> SessionRow {
+        SessionRow {
+            id: id.to_string(),
+            engine: "codex".to_string(),
+            model: Some("gpt-5.5".to_string()),
+            cwd: Some("/tmp/gaal-test".to_string()),
+            started_at: started_at.to_string(),
+            ended_at: ended_at.map(str::to_string),
+            exit_signal: None,
+            last_event_at: last_event_at.map(str::to_string),
+            parent_id: None,
+            session_type: "standalone".to_string(),
+            jsonl_path: "/tmp/missing.jsonl".to_string(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+            total_tools: 0,
+            total_turns: 1,
+            peak_context: 0,
+            last_indexed_offset: 0,
+            subagent_type: None,
+            gemini_summary: None,
+        }
     }
 }

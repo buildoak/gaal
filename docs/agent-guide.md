@@ -13,6 +13,7 @@ Use this table first. It is the fastest way to choose the correct command.
 | Fleet overview / recent sessions | `gaal ls` |
 | Drill into one session | `gaal inspect <id>` |
 | Get rendered transcript markdown | `gaal transcript <id>` |
+| Render activity across a time window | `gaal activity --since <window>` |
 | Fleet totals | `gaal ls --aggregate` |
 | Who wrote/read/ran X? | `gaal who <verb> <target>` |
 | Free-text search across content | `gaal search <query>` |
@@ -32,6 +33,7 @@ The core mental model:
 - `gaal ls` answers "what sessions exist?"
 - `gaal inspect` answers "what happened in this session?"
 - `gaal transcript` answers "give me the rendered markdown artifact"
+- `gaal activity` answers "what happened across sessions in this time window?"
 - `gaal who` answers "which sessions touched this thing?"
 - `gaal search` answers "where does this text appear?"
 - `gaal recall` answers "what past handoffs are relevant to this work?"
@@ -187,6 +189,7 @@ Avoid these patterns. They usually create incorrect assumptions or unnecessary w
 | Pipe `gaal who` directly | Capture to a variable first |
 | Assume `gaal ls` has `--status active` | Use `gaal ls --all` plus `gaal inspect <id>` |
 | Read entire session JSONL manually | Use `gaal inspect --trace` or `gaal transcript` |
+| Treat `gaal activity` as live process status | Use it for historical/indexed activity; use fleet/process tools for live status |
 | Call `gaal inspect` in a loop | Use `gaal inspect --ids a1b2,c3d4` |
 | Assume `gaal recall` works without handoffs | Check gaal index status first |
 | Run `gaal create-handoff` without `agent-mux` | Verify `agent-mux` availability first |

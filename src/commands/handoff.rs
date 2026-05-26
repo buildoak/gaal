@@ -549,7 +549,7 @@ fn build_dry_run_plan(
     session: &DryRunSession,
     request: DryRunRequest<'_>,
 ) -> Result<HandoffDryRunResult, GaalError> {
-    let stats = scan_dry_run_session_for_plan(session)?;
+    let stats = scan_dry_run_session_for_handoff_plan(session)?;
     let mut warnings = Vec::new();
     let execution_plan = plan_execution_chunks(&stats, &mut warnings);
     let estimated_llm_calls = match execution_plan.strategy.as_str() {
@@ -757,6 +757,43 @@ fn scan_indexed_session_for_plan(session: &SessionRow) -> Result<JsonlPlanStats,
         );
     }
     scan_jsonl_for_plan(Path::new(&session.jsonl_path))
+}
+
+fn scan_dry_run_session_for_handoff_plan(
+    session: &DryRunSession,
+) -> Result<JsonlPlanStats, GaalError> {
+    if let Some(transcript) = resolve_dry_run_session_transcript(session) {
+        return Ok(scan_transcript_text_for_plan(
+            &transcript,
+            Some(session.started_at.clone()),
+        ));
+    }
+    scan_dry_run_session_for_plan(session)
+}
+
+fn scan_indexed_session_for_handoff_plan(
+    session: &SessionRow,
+    transcript: Option<&str>,
+) -> Result<JsonlPlanStats, GaalError> {
+    if let Some(transcript) = transcript {
+        return Ok(scan_transcript_text_for_plan(
+            transcript,
+            Some(session.started_at.clone()),
+        ));
+    }
+    scan_indexed_session_for_plan(session)
+}
+
+fn scan_transcript_text_for_plan(
+    transcript: &str,
+    first_timestamp: Option<String>,
+) -> JsonlPlanStats {
+    JsonlPlanStats {
+        chars: transcript.len() as u64,
+        lines: transcript.lines().count().max(1),
+        compaction_lines: Vec::new(),
+        first_timestamp,
+    }
 }
 
 fn scan_hermes_source_for_plan(
@@ -1102,8 +1139,9 @@ fn process_session_handoff(
         )));
     }
 
+    let transcript = resolve_session_transcript(session, config);
     let mut plan_warnings = Vec::new();
-    let execution_plan = scan_indexed_session_for_plan(session)
+    let execution_plan = scan_indexed_session_for_handoff_plan(session, transcript.as_deref())
         .map(|stats| plan_execution_chunks(&stats, &mut plan_warnings))
         .ok();
     if let Some(plan) = execution_plan {
@@ -1111,13 +1149,15 @@ fn process_session_handoff(
             eprintln!("Handoff planner warning: {warning}");
         }
         if plan.is_chunked() {
-            return process_chunked_session_handoff(conn, config, session, request, plan);
+            return process_chunked_session_handoff(
+                conn, config, session, request, plan, transcript,
+            );
         }
     }
 
     // Try session markdown transcript first (full narrative context),
     // fall back to DB facts (lossy structured context).
-    let context = match resolve_session_transcript(session, config) {
+    let context = match transcript {
         Some(transcript) => {
             eprintln!(
                 "Using session transcript ({} chars) for context",
@@ -1144,6 +1184,7 @@ fn process_chunked_session_handoff(
     session: &SessionRow,
     request: HandoffRequest<'_>,
     plan: ExecutionPlan,
+    transcript: Option<String>,
 ) -> Result<ProcessedSessionHandoff, GaalError> {
     eprintln!(
         "Using chunked handoff execution: {} ({} mapper calls + 1 reducer call)",
@@ -1151,8 +1192,14 @@ fn process_chunked_session_handoff(
         plan.chunks.len()
     );
 
-    let chunk_contexts =
-        build_chunk_contexts(session, config, &plan, request.provider, request.format)?;
+    let chunk_contexts = build_chunk_contexts(
+        session,
+        config,
+        &plan,
+        request.provider,
+        request.format,
+        transcript.as_deref(),
+    )?;
     let mapper_prompt = build_chunk_mapper_prompt(request.prompt);
     let timeout_secs = config
         .agent_mux
@@ -1312,7 +1359,23 @@ fn build_chunk_contexts(
     plan: &ExecutionPlan,
     provider: &str,
     format: &str,
+    transcript: Option<&str>,
 ) -> Result<Vec<ChunkContext>, GaalError> {
+    if let Some(transcript) = transcript {
+        eprintln!(
+            "Using session transcript ({} chars) split into {} chunk contexts",
+            transcript.len(),
+            plan.chunks.len()
+        );
+        return Ok(build_transcript_chunk_contexts(
+            session,
+            &transcript,
+            plan,
+            provider,
+            format,
+        ));
+    }
+
     if let Some(transcript) = resolve_session_transcript(session, config) {
         eprintln!(
             "Using session transcript ({} chars) split into {} chunk contexts",
@@ -2239,6 +2302,44 @@ fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Opti
     None
 }
 
+fn resolve_dry_run_session_transcript(session: &DryRunSession) -> Option<String> {
+    let artifact_id = crate::util::session_artifact_id(&session.engine, &session.id);
+    let (year, month, day) = date_parts(&session.started_at);
+
+    let source_path = &session.jsonl_path;
+    if source_path.exists() {
+        let render_result = if session.engine == "hermes" {
+            match open_db_readonly() {
+                Ok(conn) => crate::render::session_md::render_hermes_session_markdown(
+                    source_path,
+                    &conn,
+                    &session.id,
+                ),
+                Err(err) => Err(anyhow!("open gaal DB for Hermes transcript: {err}")),
+            }
+        } else {
+            crate::render::session_md::render_session_markdown(source_path)
+        };
+        if let Ok(content) = render_result {
+            if !content.trim().is_empty() {
+                return Some(content);
+            }
+        }
+    }
+
+    let gaal_md_path = gaal_home()
+        .join("data")
+        .join(&session.engine)
+        .join("sessions")
+        .join(&year)
+        .join(&month)
+        .join(&day)
+        .join(format!("{artifact_id}.md"));
+    fs::read_to_string(&gaal_md_path)
+        .ok()
+        .filter(|content| !content.trim().is_empty())
+}
+
 /// Build LLM context from a full session markdown transcript.
 ///
 /// Wraps the transcript with the same session metadata header used by
@@ -3145,6 +3246,33 @@ mod tests {
         assert_eq!(plan.chunks[0].source_end_line, 687);
         assert_eq!(plan.chunks[5].source_start_line, 5120);
         assert_eq!(plan.chunks[5].source_end_line, 5726);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn rendered_transcript_plan_uses_transcript_size_not_raw_jsonl_size() {
+        let transcript = "short handoff transcript\nwith only a few lines\n";
+        let stats = scan_transcript_text_for_plan(transcript, None);
+        let mut warnings = Vec::new();
+        let plan = plan_execution_chunks(&stats, &mut warnings);
+
+        assert_eq!(stats.chars, transcript.len() as u64);
+        assert_eq!(stats.lines, 2);
+        assert_eq!(plan.strategy, "single");
+        assert_eq!(plan.chunks.len(), 1);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn rendered_transcript_plan_chunks_large_transcript_without_compaction_bias() {
+        let line = format!("{}\n", "x".repeat(1_000));
+        let transcript = line.repeat((SINGLE_CONTEXT_LIMIT_CHARS as usize / line.len()) + 2);
+        let stats = scan_transcript_text_for_plan(&transcript, None);
+        let mut warnings = Vec::new();
+        let plan = plan_execution_chunks(&stats, &mut warnings);
+
+        assert_eq!(plan.strategy, "chunked_turn_split");
+        assert_eq!(plan.chunks.len(), 2);
         assert!(warnings.is_empty());
     }
 

@@ -62,10 +62,15 @@ struct Turn {
     turn_number: i32,
     user_content: Vec<ContentBlock>,
     assistant_content: Vec<ContentBlock>,
+    timestamps: Vec<String>,
     timestamp_start: Option<String>,
     timestamp_end: Option<String>,
     #[allow(dead_code)]
     model: Option<String>,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read_tokens: i64,
+    cache_creation_tokens: i64,
 }
 
 /// Parsed session ready for rendering.
@@ -84,6 +89,70 @@ struct SessionData {
     cache_read_tokens: i64,
     cache_creation_tokens: i64,
     subagent_deltas: Vec<SubagentDelta>,
+}
+
+/// Half-open time window for activity rendering.
+#[derive(Debug, Clone)]
+pub struct TimeWindow {
+    pub since: String,
+    pub before: String,
+}
+
+/// Rendered activity slice plus source-derived metadata.
+#[derive(Debug, Clone)]
+pub struct ActivityRender {
+    pub markdown: String,
+    pub has_activity: bool,
+    pub carried_in: bool,
+    pub continues_after: bool,
+    pub session_latest_event_at: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderKind {
+    Transcript,
+    ActivitySlice,
+}
+
+#[derive(Debug, Clone)]
+struct ActivityMeta {
+    slice_since: String,
+    slice_before: String,
+    session_started_at: Option<String>,
+    session_latest_event_at: Option<String>,
+    carried_in: bool,
+    continues_after: bool,
+    source_state: String,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RenderOptions {
+    kind: RenderKind,
+    heading_offset: usize,
+    include_frontmatter: bool,
+    activity: Option<ActivityMeta>,
+}
+
+impl RenderOptions {
+    fn transcript() -> Self {
+        Self {
+            kind: RenderKind::Transcript,
+            heading_offset: 0,
+            include_frontmatter: true,
+            activity: None,
+        }
+    }
+
+    fn activity_slice(meta: ActivityMeta) -> Self {
+        Self {
+            kind: RenderKind::ActivitySlice,
+            heading_offset: 0,
+            include_frontmatter: true,
+            activity: Some(meta),
+        }
+    }
 }
 
 /// Rich Task annotation returned by tool annotation formatting.
@@ -216,6 +285,69 @@ pub fn render_hermes_session_markdown(
     }
 
     Ok(session_to_markdown(&session))
+}
+
+/// Render a source-backed activity slice for one session.
+///
+/// The full source is parsed first, then the normalized SessionData is sliced.
+/// This preserves logical tool/result turns across the requested boundary.
+pub fn render_session_activity_markdown_with_db(
+    path: &Path,
+    conn: Option<&Connection>,
+    override_session_id: Option<&str>,
+    window: &TimeWindow,
+) -> Result<ActivityRender> {
+    let engine = detect_engine(path)?;
+    let events = match engine {
+        Engine::Claude => claude::parse_events(path)?,
+        Engine::Codex => codex::parse_events(path)?,
+        Engine::Gemini => gemini::parse_events(path)?,
+        Engine::Hermes => {
+            let Some(session_id) = override_session_id else {
+                bail!("Hermes activity rendering requires override_session_id")
+            };
+            hermes::parse_events(path, session_id)?
+        }
+    };
+    let mut session = events_to_session_data(&events, path, engine);
+
+    if let Some(sid) = override_session_id {
+        session.session_id = sid.to_string();
+    }
+
+    if session.subagent_deltas.is_empty() {
+        if let Some(conn) = conn {
+            if let Some(db_deltas) =
+                load_subagent_deltas_from_db_window(conn, &session.session_id, window)
+            {
+                session.subagent_deltas = db_deltas;
+            }
+        }
+    }
+
+    Ok(render_activity_slice(session, window))
+}
+
+/// Render an activity slice for one logical Hermes session from a SQLite state DB.
+pub fn render_hermes_session_activity_markdown(
+    path: &Path,
+    conn: &Connection,
+    session_id: &str,
+    window: &TimeWindow,
+) -> Result<ActivityRender> {
+    let events = hermes::parse_events(path, session_id)?;
+    let mut session = events_to_session_data(&events, path, Engine::Hermes);
+    session.session_id = session_id.to_string();
+
+    if session.subagent_deltas.is_empty() {
+        if let Some(db_deltas) =
+            load_subagent_deltas_from_db_window(conn, &session.session_id, window)
+        {
+            session.subagent_deltas = db_deltas;
+        }
+    }
+
+    Ok(render_activity_slice(session, window))
 }
 
 // ---------------------------------------------------------------------------
@@ -919,6 +1051,16 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path, engine: Engine) 
                     total_output_tokens += output_tokens;
                     cache_read_tokens += cache_read_input_tokens;
                     cache_creation_tokens += cache_creation_input_tokens;
+                    if let Some(ref mut turn) = current_turn {
+                        turn.input_tokens += input_tokens;
+                        turn.output_tokens += output_tokens;
+                        turn.cache_read_tokens += cache_read_input_tokens;
+                        turn.cache_creation_tokens += cache_creation_input_tokens;
+                        if let Some(ts) = &event.timestamp {
+                            turn.timestamps.push(ts.clone());
+                            turn.timestamp_end = Some(ts.clone());
+                        }
+                    }
                 }
             }
 
@@ -966,9 +1108,14 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path, engine: Engine) 
                     turn_number,
                     user_content: user_blocks,
                     assistant_content: Vec::new(),
+                    timestamps: event.timestamp.iter().cloned().collect(),
                     timestamp_start: event.timestamp.clone(),
                     timestamp_end: None,
                     model: None,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                 });
             }
 
@@ -979,9 +1126,14 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path, engine: Engine) 
                         turn_number,
                         user_content: Vec::new(),
                         assistant_content: Vec::new(),
+                        timestamps: event.timestamp.iter().cloned().collect(),
                         timestamp_start: event.timestamp.clone(),
                         timestamp_end: None,
                         model: None,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                     });
                 }
 
@@ -993,6 +1145,9 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path, engine: Engine) 
 
                 let blocks = convert_content_blocks(content);
                 if let Some(ref mut turn) = current_turn {
+                    if let Some(ts) = &event.timestamp {
+                        turn.timestamps.push(ts.clone());
+                    }
                     turn.assistant_content.extend(blocks);
                     turn.timestamp_end = event.timestamp.clone();
                     turn.model = model.clone();
@@ -1011,6 +1166,12 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path, engine: Engine) 
                         if let Some((agent_id, stats)) = extract_subagent_tool_result_stats(text) {
                             subagent_stats_by_agent_id.insert(agent_id, stats);
                         }
+                    }
+                }
+                if let Some(ref mut turn) = current_turn {
+                    if let Some(ts) = &event.timestamp {
+                        turn.timestamps.push(ts.clone());
+                        turn.timestamp_end = Some(ts.clone());
                     }
                 }
             }
@@ -1066,6 +1227,10 @@ fn events_to_session_data(events: &[SessionEvent], path: &Path, engine: Engine) 
             // must be injected into the current turn's assistant_content.
             EventKind::ToolUse(tool_event) => {
                 if let Some(ref mut turn) = current_turn {
+                    if let Some(ts) = &event.timestamp {
+                        turn.timestamps.push(ts.clone());
+                        turn.timestamp_end = Some(ts.clone());
+                    }
                     turn.assistant_content.push(ContentBlock::ToolUse {
                         name: tool_event.name.clone(),
                         input: tool_event.input.clone(),
@@ -1226,6 +1391,60 @@ fn load_subagent_deltas_from_db(conn: &Connection, session_id: &str) -> Option<V
     Some(deltas)
 }
 
+fn load_subagent_deltas_from_db_window(
+    conn: &Connection,
+    session_id: &str,
+    window: &TimeWindow,
+) -> Option<Vec<SubagentDelta>> {
+    let child_rows = {
+        let rows = load_child_sessions_window(conn, session_id, window)?;
+        if rows.is_empty() {
+            let short_id: String = session_id.chars().take(8).collect();
+            if short_id == session_id {
+                return None;
+            }
+            let fallback = load_child_sessions_window(conn, &short_id, window)?;
+            if fallback.is_empty() {
+                return None;
+            }
+            fallback
+        } else {
+            rows
+        }
+    };
+
+    let mut deltas = Vec::with_capacity(child_rows.len());
+    for (
+        child_id,
+        input_tokens,
+        output_tokens,
+        cache_read,
+        cache_creation,
+        tool_count,
+        started_at,
+        ended_at,
+    ) in child_rows
+    {
+        let (files_read, files_written, commands) =
+            load_child_facts_window(conn, &child_id, window)?;
+        let prompt = load_first_user_prompt(conn, &child_id).unwrap_or_default();
+        deltas.push(SubagentDelta {
+            agent_id: child_id,
+            prompt,
+            files_read,
+            files_written,
+            commands,
+            tool_counts: HashMap::new(),
+            timestamps: vec![started_at.clone()],
+            total_tokens: Some(input_tokens + output_tokens + cache_read + cache_creation),
+            total_duration_ms: calculate_duration_ms(&started_at, ended_at.as_deref()),
+            total_tool_use_count: Some(tool_count),
+        });
+    }
+
+    Some(deltas)
+}
+
 /// Load the first user_prompt fact's detail text for a subagent session.
 /// Returns a truncated version suitable for the Task column in transcripts.
 fn load_first_user_prompt(conn: &Connection, session_id: &str) -> Option<String> {
@@ -1283,6 +1502,49 @@ fn load_child_sessions(conn: &Connection, parent_id: &str) -> Option<Vec<ChildSe
     rows.collect::<std::result::Result<Vec<_>, _>>().ok()
 }
 
+fn load_child_sessions_window(
+    conn: &Connection,
+    parent_id: &str,
+    window: &TimeWindow,
+) -> Option<Vec<ChildSessionRow>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, total_input_tokens, total_output_tokens,
+                    COALESCE(cache_read_tokens, 0), COALESCE(cache_creation_tokens, 0),
+                    total_tools, started_at, ended_at
+             FROM sessions
+             WHERE parent_id = :parent_id
+               AND started_at < :before
+               AND COALESCE(ended_at, last_event_at, started_at) >= :since
+             ORDER BY started_at ASC",
+        )
+        .ok()?;
+
+    let rows = stmt
+        .query_map(
+            named_params! {
+                ":parent_id": parent_id,
+                ":since": &window.since,
+                ":before": &window.before,
+            },
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                ))
+            },
+        )
+        .ok()?;
+
+    rows.collect::<std::result::Result<Vec<_>, _>>().ok()
+}
+
 fn load_child_facts(conn: &Connection, child_id: &str) -> Option<ChildFacts> {
     let mut stmt = conn
         .prepare(
@@ -1335,6 +1597,77 @@ fn load_child_facts(conn: &Connection, child_id: &str) -> Option<ChildFacts> {
     }
 
     Some((files_read, files_written, commands))
+}
+
+fn load_child_facts_window(
+    conn: &Connection,
+    child_id: &str,
+    window: &TimeWindow,
+) -> Option<ChildFacts> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT fact_type, subject, detail
+             FROM facts
+             WHERE session_id = :sid
+               AND ts >= :since
+               AND ts < :before
+               AND fact_type IN ('file_read', 'file_write', 'command')
+             ORDER BY ts ASC",
+        )
+        .ok()?;
+
+    let rows = stmt
+        .query_map(
+            named_params! {
+                ":sid": child_id,
+                ":since": &window.since,
+                ":before": &window.before,
+            },
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .ok()?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+
+    Some(child_facts_from_rows(rows))
+}
+
+fn child_facts_from_rows(rows: Vec<(String, Option<String>, Option<String>)>) -> ChildFacts {
+    let mut files_read = Vec::new();
+    let mut files_written = Vec::new();
+    let mut commands = Vec::new();
+
+    for (fact_type, subject, detail) in rows {
+        match fact_type.as_str() {
+            "file_read" => {
+                if let Some(path) = subject {
+                    if !files_read.contains(&path) {
+                        files_read.push(path);
+                    }
+                }
+            }
+            "file_write" => {
+                if let Some(path) = subject {
+                    files_written.push((path, detail.unwrap_or_default()));
+                }
+            }
+            "command" => {
+                let command = detail.or(subject);
+                if let Some(command) = command {
+                    commands.push(command);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (files_read, files_written, commands)
 }
 
 fn calculate_duration_ms(started: &str, ended: Option<&str>) -> Option<i64> {
@@ -1536,6 +1869,139 @@ fn compute_duration(start: Option<&str>, end: Option<&str>) -> Option<f64> {
     Some(diff.num_seconds() as f64)
 }
 
+fn render_activity_slice(mut session: SessionData, window: &TimeWindow) -> ActivityRender {
+    let source_started_at = session.timestamp_start.clone();
+    let source_latest_event_at = session.timestamp_end.clone();
+    let mut warnings = Vec::new();
+
+    let selected_turns: Vec<Turn> = session
+        .turns
+        .iter()
+        .filter(|turn| turn_overlaps_window(turn, window))
+        .cloned()
+        .collect();
+
+    let selected_deltas: Vec<SubagentDelta> = session
+        .subagent_deltas
+        .iter()
+        .filter(|delta| {
+            delta
+                .timestamps
+                .iter()
+                .any(|ts| timestamp_in_window(ts, window))
+        })
+        .cloned()
+        .collect();
+
+    let has_activity = !selected_turns.is_empty() || !selected_deltas.is_empty();
+    let carried_in = source_started_at
+        .as_deref()
+        .is_some_and(|ts| timestamp_before(ts, &window.since))
+        && has_activity;
+    let continues_after = source_latest_event_at
+        .as_deref()
+        .is_some_and(|ts| !timestamp_before(ts, &window.before));
+
+    if has_activity {
+        warnings.push("token totals are best-effort from selected turns".to_string());
+    }
+
+    session.turns = selected_turns;
+    session.subagent_deltas = selected_deltas;
+    session.timestamp_start = session
+        .turns
+        .iter()
+        .flat_map(|turn| turn.timestamps.iter().cloned())
+        .chain(
+            session
+                .subagent_deltas
+                .iter()
+                .flat_map(|delta| delta.timestamps.iter().cloned()),
+        )
+        .filter(|ts| timestamp_in_window(ts, window))
+        .min()
+        .or_else(|| Some(window.since.clone()));
+    session.timestamp_end = session
+        .turns
+        .iter()
+        .flat_map(|turn| turn.timestamps.iter().cloned())
+        .chain(
+            session
+                .subagent_deltas
+                .iter()
+                .flat_map(|delta| delta.timestamps.iter().cloned()),
+        )
+        .filter(|ts| timestamp_in_window(ts, window))
+        .max()
+        .or_else(|| Some(window.before.clone()));
+    session.duration_seconds = compute_duration(
+        session.timestamp_start.as_deref(),
+        session.timestamp_end.as_deref(),
+    );
+    session.total_input_tokens = session.turns.iter().map(|turn| turn.input_tokens).sum();
+    session.total_output_tokens = session.turns.iter().map(|turn| turn.output_tokens).sum();
+    session.cache_read_tokens = session
+        .turns
+        .iter()
+        .map(|turn| turn.cache_read_tokens)
+        .sum();
+    session.cache_creation_tokens = session
+        .turns
+        .iter()
+        .map(|turn| turn.cache_creation_tokens)
+        .sum();
+
+    let meta = ActivityMeta {
+        slice_since: window.since.clone(),
+        slice_before: window.before.clone(),
+        session_started_at: source_started_at,
+        session_latest_event_at: source_latest_event_at.clone(),
+        carried_in,
+        continues_after,
+        source_state: if continues_after {
+            "continues_after_window".to_string()
+        } else {
+            "complete".to_string()
+        },
+        warnings: warnings.clone(),
+    };
+    let options = RenderOptions::activity_slice(meta);
+
+    ActivityRender {
+        markdown: session_to_markdown_with_options(&session, &options),
+        has_activity,
+        carried_in,
+        continues_after,
+        session_latest_event_at: source_latest_event_at,
+        warnings,
+    }
+}
+
+fn turn_overlaps_window(turn: &Turn, window: &TimeWindow) -> bool {
+    turn.timestamps
+        .iter()
+        .any(|ts| timestamp_in_window(ts, window))
+        || turn
+            .timestamp_start
+            .as_deref()
+            .is_some_and(|ts| timestamp_in_window(ts, window))
+        || turn
+            .timestamp_end
+            .as_deref()
+            .is_some_and(|ts| timestamp_in_window(ts, window))
+}
+
+fn timestamp_in_window(ts: &str, window: &TimeWindow) -> bool {
+    !timestamp_before(ts, &window.since) && timestamp_before(ts, &window.before)
+}
+
+fn timestamp_before(left: &str, right: &str) -> bool {
+    match (parse_ts(Some(left)), parse_ts(Some(right))) {
+        (Some(left), Some(right)) => left < right,
+        _ => left < right,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Subagent delta extraction
 // ---------------------------------------------------------------------------
@@ -1546,11 +2012,17 @@ fn compute_duration(start: Option<&str>, end: Option<&str>) -> Option<f64> {
 
 /// Convert a SessionData to a markdown string.
 fn session_to_markdown(session: &SessionData) -> String {
+    session_to_markdown_with_options(session, &RenderOptions::transcript())
+}
+
+fn session_to_markdown_with_options(session: &SessionData, options: &RenderOptions) -> String {
     let mut parts = Vec::new();
 
     // Frontmatter.
-    parts.push(render_frontmatter(session));
-    parts.push(String::new());
+    if options.include_frontmatter {
+        parts.push(render_frontmatter(session, options));
+        parts.push(String::new());
+    }
 
     // Title.
     let summary = session
@@ -1565,11 +2037,11 @@ fn session_to_markdown(session: &SessionData) -> String {
     } else {
         summary
     };
-    parts.push(format!("# Session: {title}"));
+    parts.push(heading(options, 1, &format!("Session: {title}")));
     parts.push(String::new());
 
     // Executive Summary.
-    let exec = render_executive_summary(&session.turns, &session.subagent_deltas);
+    let exec = render_executive_summary(&session.turns, &session.subagent_deltas, options);
     if !exec.is_empty() {
         parts.push(exec);
     }
@@ -1579,16 +2051,18 @@ fn session_to_markdown(session: &SessionData) -> String {
         &session.turns,
         &session.subagent_deltas,
         session.engine,
+        options,
     ));
 
     // Open Threads.
-    let threads = render_open_threads(&session.turns);
+    let threads = render_open_threads(&session.turns, options);
     if !threads.is_empty() {
         parts.push(threads);
     }
 
     // Subagent Activity.
-    let subagent_section = render_subagent_activity(&session.subagent_deltas, &session.turns);
+    let subagent_section =
+        render_subagent_activity(&session.subagent_deltas, &session.turns, options);
     if !subagent_section.is_empty() {
         parts.push(subagent_section);
     }
@@ -1596,8 +2070,12 @@ fn session_to_markdown(session: &SessionData) -> String {
     parts.join("\n")
 }
 
+fn heading(options: &RenderOptions, level: usize, title: &str) -> String {
+    format!("{} {title}", "#".repeat(level + options.heading_offset))
+}
+
 /// Render YAML frontmatter.
-fn render_frontmatter(session: &SessionData) -> String {
+fn render_frontmatter(session: &SessionData, options: &RenderOptions) -> String {
     let sid = crate::util::session_artifact_id(&session.engine.to_string(), &session.session_id);
     let ts_start = parse_ts(session.timestamp_start.as_deref());
     let ts_end = parse_ts(session.timestamp_end.as_deref());
@@ -1618,7 +2096,7 @@ fn render_frontmatter(session: &SessionData) -> String {
         .cloned()
         .unwrap_or_else(|| "unknown".to_string());
 
-    format!(
+    let mut frontmatter = format!(
         "---\nsession_id: {sid}\ndate: {date_str}\nstart: {start_str}\nend: {end_str}\nduration: {duration_str}\nmodel: {model_str}\nturns: {}\ntotal_input_tokens: {}\ntotal_output_tokens: {}\ncache_read_tokens: {}\ncache_creation_tokens: {}\nrender_version: {}\n---",
         session.turns.len(),
         session.total_input_tokens,
@@ -1626,7 +2104,39 @@ fn render_frontmatter(session: &SessionData) -> String {
         session.cache_read_tokens,
         session.cache_creation_tokens,
         RENDER_VERSION
-    )
+    );
+
+    if options.kind != RenderKind::Transcript {
+        if let Some(activity) = &options.activity {
+            let warnings = if activity.warnings.is_empty() {
+                "[]".to_string()
+            } else {
+                format!(
+                    "[{}]",
+                    activity
+                        .warnings
+                        .iter()
+                        .map(|w| format!("\"{}\"", w.replace('"', "\\\"")))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            frontmatter = frontmatter.trim_end_matches("---").trim_end().to_string();
+            frontmatter.push_str(&format!(
+                "\nrender_kind: activity_slice\nslice_since: {}\nslice_before: {}\nwindow_semantics: \"[since,before)\"\nsession_started_at: {}\nsession_latest_event_at: {}\ncarried_in: {}\ncontinues_after: {}\nsource_state: {}\nwarnings: {}\n---",
+                activity.slice_since,
+                activity.slice_before,
+                activity.session_started_at.as_deref().unwrap_or("unknown"),
+                activity.session_latest_event_at.as_deref().unwrap_or("unknown"),
+                activity.carried_in,
+                activity.continues_after,
+                activity.source_state,
+                warnings
+            ));
+        }
+    }
+
+    frontmatter
 }
 
 /// Extract agentId from tool result content string.
@@ -1658,12 +2168,13 @@ fn flush_pending_tools(
     deltas_by_agent_id: &HashMap<String, &SubagentDelta>,
     engine_label: &str,
     include_tool_results: bool,
+    options: &RenderOptions,
 ) {
     if pending_tools.is_empty() {
         return;
     }
     let time = pending_time.as_deref().unwrap_or("??:??");
-    lines.push(format!("### [{time}] {engine_label}"));
+    lines.push(heading(options, 3, &format!("[{time}] {engine_label}")));
     for ann in pending_tools.drain(..) {
         match ann {
             ToolAnnotation::Simple { text, tool_id } => {
@@ -1734,7 +2245,11 @@ fn truncate_tool_result(text: &str) -> String {
         return text.to_string();
     }
     let preview: String = text.chars().take(TOOL_RESULT_PREVIEW).collect();
-    format!("{}\n\n[... tool result truncated from {} chars]", preview, text.len())
+    format!(
+        "{}\n\n[... tool result truncated from {} chars]",
+        preview,
+        text.len()
+    )
 }
 
 /// Render the conversation section.
@@ -1742,9 +2257,10 @@ fn render_conversation(
     turns: &[Turn],
     subagent_deltas: &[SubagentDelta],
     engine: Engine,
+    options: &RenderOptions,
 ) -> String {
     let engine_label = engine_label(engine);
-    let mut lines = vec!["## Conversation".to_string(), String::new()];
+    let mut lines = vec![heading(options, 2, "Conversation"), String::new()];
 
     // Build index of tool_results across all turns for Task matching.
     let mut all_tool_results: HashMap<String, String> = HashMap::new();
@@ -1779,9 +2295,10 @@ fn render_conversation(
                 &deltas_by_agent_id,
                 engine_label,
                 include_tool_results,
+                options,
             );
             let filtered = filter_skill_injection(&user_text);
-            lines.push(format!("### [{time_str}] User"));
+            lines.push(heading(options, 3, &format!("[{time_str}] User")));
             lines.push(truncate_human(&filtered));
             lines.push(String::new());
         }
@@ -1804,8 +2321,13 @@ fn render_conversation(
                     &deltas_by_agent_id,
                     engine_label,
                     include_tool_results,
+                    options,
                 );
-                lines.push(format!("### [{time_str_end}] {engine_label}"));
+                lines.push(heading(
+                    options,
+                    3,
+                    &format!("[{time_str_end}] {engine_label}"),
+                ));
                 lines.push(truncate_claude(&claude_text));
                 lines.push(String::new());
 
@@ -1837,19 +2359,24 @@ fn render_conversation(
         &deltas_by_agent_id,
         engine_label,
         include_tool_results,
+        options,
     );
 
     lines.join("\n")
 }
 
 /// Render the Executive Summary section.
-fn render_executive_summary(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -> String {
-    let mut lines = vec!["## Executive Summary".to_string(), String::new()];
+fn render_executive_summary(
+    turns: &[Turn],
+    subagent_deltas: &[SubagentDelta],
+    options: &RenderOptions,
+) -> String {
+    let mut lines = vec![heading(options, 2, "Executive Summary"), String::new()];
 
     // Files Touched (Main Session).
     let (reads, writes) = collect_files(turns);
     if !reads.is_empty() || !writes.is_empty() {
-        lines.push("### Files Touched (Main Session)".to_string());
+        lines.push(heading(options, 3, "Files Touched (Main Session)"));
         lines.push(String::new());
 
         if !reads.is_empty() {
@@ -1893,7 +2420,7 @@ fn render_executive_summary(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -
     }
 
     if !subagent_reads.is_empty() || !subagent_writes.is_empty() {
-        lines.push("### Files Touched by Subagents".to_string());
+        lines.push(heading(options, 3, "Files Touched by Subagents"));
         lines.push(String::new());
 
         if !subagent_writes.is_empty() {
@@ -1922,7 +2449,7 @@ fn render_executive_summary(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -
     // Commands Executed.
     let commands = collect_commands(turns);
     if !commands.is_empty() {
-        lines.push("### Commands Executed".to_string());
+        lines.push(heading(options, 3, "Commands Executed"));
         lines.push(String::new());
         for cmd in commands.iter().take(15) {
             let display = if cmd.len() > 120 {
@@ -1943,7 +2470,11 @@ fn render_executive_summary(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -
     if !subagent_deltas.is_empty() {
         let agent_model_map = build_agent_model_map(turns);
 
-        lines.push(format!("### Subagents ({})", subagent_deltas.len()));
+        lines.push(heading(
+            options,
+            3,
+            &format!("Subagents ({})", subagent_deltas.len()),
+        ));
         lines.push(String::new());
         lines.push(
             "| Agent | Task | Model | Duration | Tokens | Files Written | Commands |".to_string(),
@@ -2019,7 +2550,7 @@ fn render_executive_summary(turns: &[Turn], subagent_deltas: &[SubagentDelta]) -
 }
 
 /// Render the Open Threads section.
-fn render_open_threads(turns: &[Turn]) -> String {
+fn render_open_threads(turns: &[Turn], options: &RenderOptions) -> String {
     let threads = extract_open_threads(turns);
     if threads.is_empty() {
         return String::new();
@@ -2028,7 +2559,7 @@ fn render_open_threads(turns: &[Turn]) -> String {
     let mut lines = vec![
         "---".to_string(),
         String::new(),
-        "## Open Threads".to_string(),
+        heading(options, 2, "Open Threads"),
     ];
     for thread in &threads {
         lines.push(format!("- {thread}"));
@@ -2038,7 +2569,11 @@ fn render_open_threads(turns: &[Turn]) -> String {
 }
 
 /// Render detailed Subagent Activity section at end of document.
-fn render_subagent_activity(subagent_deltas: &[SubagentDelta], _turns: &[Turn]) -> String {
+fn render_subagent_activity(
+    subagent_deltas: &[SubagentDelta],
+    _turns: &[Turn],
+    options: &RenderOptions,
+) -> String {
     if subagent_deltas.is_empty() {
         return String::new();
     }
@@ -2046,7 +2581,7 @@ fn render_subagent_activity(subagent_deltas: &[SubagentDelta], _turns: &[Turn]) 
     let mut lines = vec![
         "---".to_string(),
         String::new(),
-        "## Subagent Activity".to_string(),
+        heading(options, 2, "Subagent Activity"),
         String::new(),
     ];
 
@@ -2065,7 +2600,11 @@ fn render_subagent_activity(subagent_deltas: &[SubagentDelta], _turns: &[Turn]) 
             prompt_raw
         };
 
-        lines.push(format!("### Agent {short_id} ({prompt_short})"));
+        lines.push(heading(
+            options,
+            3,
+            &format!("Agent {short_id} ({prompt_short})"),
+        ));
 
         // Duration and tokens.
         let mut stats_parts = Vec::new();
@@ -2268,7 +2807,7 @@ mod tests {
             cache_creation_tokens: 90,
             subagent_deltas: vec![],
         };
-        let fm = render_frontmatter(&session);
+        let fm = render_frontmatter(&session, &RenderOptions::transcript());
         assert!(fm.contains("session_id: abcdef12"));
         assert!(fm.contains("date: 2026-03-07"));
         assert!(fm.contains("start: 14:00")); // UTC+4
@@ -2300,6 +2839,11 @@ mod tests {
             timestamp_start: None,
             timestamp_end: None,
             model: None,
+            timestamps: vec![],
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         }];
 
         assert_eq!(
@@ -2396,6 +2940,11 @@ mod tests {
             timestamp_start: None,
             timestamp_end: None,
             model: None,
+            timestamps: vec![],
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         };
         let threads = extract_open_threads(&[turn]);
         assert_eq!(threads.len(), 2);
@@ -2479,6 +3028,11 @@ mod tests {
             timestamp_start: None,
             timestamp_end: None,
             model: None,
+            timestamps: vec![],
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         }];
 
         let subagent_deltas = vec![
@@ -2508,7 +3062,8 @@ mod tests {
             },
         ];
 
-        let summary = render_executive_summary(&turns, &subagent_deltas);
+        let summary =
+            render_executive_summary(&turns, &subagent_deltas, &RenderOptions::transcript());
         assert!(
             summary.contains("| agentb | Prompt B | Sonnet | 2s | 20 | - | - |"),
             "agent-b should keep its own model even when deltas are reordered"
@@ -2540,9 +3095,18 @@ mod tests {
             timestamp_start: Some("2026-05-04T10:00:00Z".to_string()),
             timestamp_end: Some("2026-05-04T10:00:01Z".to_string()),
             model: None,
+            timestamps: vec![
+                "2026-05-04T10:00:00Z".to_string(),
+                "2026-05-04T10:00:01Z".to_string(),
+            ],
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         }];
 
-        let rendered = render_conversation(&turns, &[], Engine::Hermes);
+        let rendered =
+            render_conversation(&turns, &[], Engine::Hermes, &RenderOptions::transcript());
         assert!(rendered.contains("-> Bash: `printf synthetic`"));
         assert!(rendered.contains("Result:"));
         assert!(rendered.contains("synthetic hermes tool output"));
@@ -2564,10 +3128,71 @@ mod tests {
             timestamp_start: Some("2026-05-04T10:00:00Z".to_string()),
             timestamp_end: Some("2026-05-04T10:00:01Z".to_string()),
             model: None,
+            timestamps: vec![
+                "2026-05-04T10:00:00Z".to_string(),
+                "2026-05-04T10:00:01Z".to_string(),
+            ],
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
         }];
 
-        let rendered = render_conversation(&turns, &[], Engine::Claude);
+        let rendered =
+            render_conversation(&turns, &[], Engine::Claude, &RenderOptions::transcript());
         assert!(rendered.contains("-> Bash: `printf synthetic`"));
         assert!(!rendered.contains("synthetic claude tool output"));
+    }
+
+    #[test]
+    fn activity_slice_uses_half_open_turn_boundaries() {
+        let session = SessionData {
+            session_id: "activitytest".to_string(),
+            summary: None,
+            engine: Engine::Codex,
+            turns: vec![
+                test_turn("2026-05-25T00:00:00Z", "included at since"),
+                test_turn("2026-05-26T00:00:00Z", "excluded at before"),
+            ],
+            timestamp_start: Some("2026-05-25T00:00:00Z".to_string()),
+            timestamp_end: Some("2026-05-26T00:00:00Z".to_string()),
+            duration_seconds: None,
+            models_used: vec!["gpt-5.5".to_string()],
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            subagent_deltas: vec![],
+        };
+
+        let rendered = render_activity_slice(
+            session,
+            &TimeWindow {
+                since: "2026-05-25T00:00:00Z".to_string(),
+                before: "2026-05-26T00:00:00Z".to_string(),
+            },
+        );
+
+        assert!(rendered.has_activity);
+        assert!(rendered.markdown.contains("included at since"));
+        assert!(!rendered.markdown.contains("excluded at before"));
+    }
+
+    fn test_turn(ts: &str, text: &str) -> Turn {
+        Turn {
+            turn_number: 1,
+            user_content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
+            assistant_content: vec![],
+            timestamps: vec![ts.to_string()],
+            timestamp_start: Some(ts.to_string()),
+            timestamp_end: Some(ts.to_string()),
+            model: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+        }
     }
 }

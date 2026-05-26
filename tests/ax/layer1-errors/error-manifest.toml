@@ -139,6 +139,18 @@ expected_exit = 11
 description = "Invalid date in --since for who"
 
 [[errors]]
+name = "activity-since-garbage"
+command = "gaal activity --since garbage"
+expected_exit = 11
+description = "Invalid date in --since for activity"
+
+[[errors]]
+name = "activity-inverted-window"
+command = "gaal activity --since 2026-05-26 --before 2026-05-25"
+expected_exit = 11
+description = "Activity rejects inverted half-open windows"
+
+[[errors]]
 name = "inspect-no-selector"
 command = "gaal inspect"
 expected_exit = 11
@@ -157,6 +169,12 @@ name = "ls-no-results"
 command = "gaal ls --since 2020-01-01 --before 2020-01-02"
 expected_exit = 1
 description = "ls with a window that has zero sessions"
+
+[[errors]]
+name = "activity-no-results"
+command = "gaal activity --since 2020-01-01 --before 2020-01-02"
+expected_exit = 1
+description = "activity over an empty time window returns NoResults"
 
 [[errors]]
 name = "search-no-results"

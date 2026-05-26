@@ -334,18 +334,12 @@ mod tests {
         };
 
         let paths = compute_paths_from_home(&session, &base);
-        assert!(paths
-            .transcript_path
-            .as_deref()
-            .is_some_and(|path| path.ends_with(
-                "/data/hermes/sessions/2026/05/04/20260504_101010_a1b2c3.md"
-            )));
-        assert!(paths
-            .handoff_path
-            .as_deref()
-            .is_some_and(|path| path.ends_with(
-                "/data/hermes/handoffs/2026/05/04/20260504_101010_a1b2c3.md"
-            )));
+        assert!(paths.transcript_path.as_deref().is_some_and(
+            |path| path.ends_with("/data/hermes/sessions/2026/05/04/20260504_101010_a1b2c3.md")
+        ));
+        assert!(paths.handoff_path.as_deref().is_some_and(
+            |path| path.ends_with("/data/hermes/handoffs/2026/05/04/20260504_101010_a1b2c3.md")
+        ));
 
         fs::remove_dir_all(&base).expect("cleanup");
     }

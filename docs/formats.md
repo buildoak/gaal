@@ -11,6 +11,7 @@ Most commands emit JSON by default. Exceptions:
 - `salt` prints a raw token string
 - `recall` prints help and exits successfully when no query is given
 - `transcript` prints markdown when `--stdout` is used
+- `activity` prints markdown when `--stdout` is used
 
 ### Human Mode (`-H` / `--human`)
 
@@ -83,6 +84,21 @@ Default response fields:
 - `sessions` array
 
 Aggregate mode returns totals and engine buckets instead of session rows.
+
+## activity Output Envelope
+
+Default response fields:
+
+- `path`
+- `size_bytes`
+- `estimated_tokens`
+- `warning`
+- `query_window` with `[since,before)` semantics
+- `sessions_rendered`
+- `skipped`
+- `degraded`
+
+`--stdout` prints a markdown activity bundle. Each included session slice is rendered from raw source and keeps transcript-shaped sections with extra activity frontmatter.
 
 ## Time Filters
 

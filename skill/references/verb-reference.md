@@ -15,17 +15,18 @@ Current top-level commands:
 1. `ls` — fleet view across indexed sessions
 2. `inspect` — session details with focused views; **formerly `show`**
 3. `transcript` — rendered transcript markdown path or stdout dump
-4. `who` — inverted queries
-5. `search` — full-text search over indexed facts
-6. `recall` — semantic session retrieval
-7. `salt` — self-identification token
-8. `find-salt` — JSONL discovery by salt
-9. `create-handoff` — LLM extraction into handoff markdown
-10. `index` — index maintenance
-11. `tag` — apply/remove tags
-12. `resolve` — resolve short ID to full paths and metadata
+4. `activity` — source-backed historical activity slices
+5. `who` — inverted queries
+6. `search` — full-text search over indexed facts
+7. `recall` — semantic session retrieval
+8. `salt` — self-identification token
+9. `find-salt` — JSONL discovery by salt
+10. `create-handoff` — LLM extraction into handoff markdown
+11. `index` — index maintenance
+12. `tag` — apply/remove tags
+13. `resolve` — resolve short ID to full paths and metadata
 
-There is **no separate `active` command** in the current binary.
+There is **no separate `active` command**. `activity` is historical and source-backed; it is not process monitoring.
 
 ---
 
@@ -141,7 +142,42 @@ gaal transcript latest --stdout
 
 ---
 
-## 4. `who`
+## 4. `activity`
+
+Source-backed historical activity slices across a time window.
+
+### Flags
+
+| Flag | Meaning |
+|------|---------|
+| `--since <SINCE>` | Lower bound; default `1d`; supports durations, dates, and RFC3339 |
+| `--before <BEFORE>` | Upper bound; default now; windows are `[since,before)` |
+| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, or `hermes` |
+| `--cwd <CWD>` | Restrict by working directory substring |
+| `--session <ID>` | Render one resolved session only |
+| `--skip-subagents` | Hide subagent sessions |
+| `--limit <LIMIT>` | Max DB candidates to render |
+| `--stdout` | Print markdown bundle instead of JSON path metadata |
+| `--force` | Accepted for cache parity; activity output is regenerated |
+| `-H, --human` | Human-readable metadata |
+
+### Notes
+
+- `activity` parses raw session sources after DB candidate discovery.
+- Single-session slices keep transcript-shaped sections and add activity frontmatter.
+- This command is not live monitoring and does not inspect running processes.
+
+### Examples
+
+```bash
+gaal activity --since 1d -H
+gaal activity --since 2026-05-25 --before 2026-05-26 --stdout
+gaal activity --session 9ad81c91 --since 2026-05-25 --before 2026-05-26
+```
+
+---
+
+## 5. `who`
 
 Inverted query: which session did X to Y?
 
@@ -183,7 +219,7 @@ echo "$OUTPUT" | jq '.'
 
 ---
 
-## 5. `search`
+## 6. `search`
 
 Full-text search over indexed facts.
 
@@ -208,7 +244,7 @@ gaal search "gaussian moat" --field commands --limit 5 -H
 
 ---
 
-## 6. `recall`
+## 7. `recall`
 
 Semantic session retrieval. This is the eywa replacement surface.
 
@@ -233,7 +269,7 @@ gaal recall --format eywa
 
 ---
 
-## 7. `create-handoff`
+## 8. `create-handoff`
 
 LLM-powered handoff generation.
 
@@ -267,7 +303,7 @@ gaal create-handoff --jsonl "$JSONL"
 
 ---
 
-## 8. `index`
+## 9. `index`
 
 Index maintenance commands.
 
@@ -292,7 +328,7 @@ gaal index reindex 249aad1e
 
 ---
 
-## 9. `tag`
+## 10. `tag`
 
 Apply or remove tags on a session.
 
@@ -315,7 +351,7 @@ gaal tag ls
 
 ---
 
-## 10. `salt`
+## 11. `salt`
 
 Generate a random salt token for self-identification.
 
@@ -327,7 +363,7 @@ gaal salt
 
 ---
 
-## 11. `find-salt`
+## 12. `find-salt`
 
 Find the first JSONL file containing the provided salt token.
 
@@ -346,7 +382,7 @@ gaal find-salt GAAL_SALT_abc123    # use the literal token from `gaal salt`, nev
 
 ---
 
-## 12. `resolve`
+## 13. `resolve`
 
 Resolve a short session ID to full session paths and metadata.
 

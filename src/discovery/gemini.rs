@@ -13,9 +13,7 @@ use crate::parser::types::Engine;
 /// When `newer_than` is set, sessions whose on-disk mtime is older than the
 /// cutoff are skipped before the full JSON read + parse.  This keeps the
 /// incremental-backfill hot path off quiet sessions.
-pub fn discover_gemini_sessions(
-    newer_than: Option<SystemTime>,
-) -> Result<Vec<DiscoveredSession>> {
+pub fn discover_gemini_sessions(newer_than: Option<SystemTime>) -> Result<Vec<DiscoveredSession>> {
     let Some(home) = dirs::home_dir() else {
         return Ok(Vec::new());
     };

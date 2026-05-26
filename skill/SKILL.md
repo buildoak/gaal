@@ -17,6 +17,7 @@ gaal inspect latest --tokens -H                 # inspect one session
 gaal inspect latest --files write               # file writes only
 gaal transcript latest                          # rendered transcript path metadata
 gaal transcript latest --stdout                 # full transcript markdown
+gaal activity --since 1d -H                     # source-backed activity slices
 gaal who wrote skill/SKILL.md --since 7d        # attribution
 gaal who ran cargo --failed                     # failed command attribution
 gaal search "handoff provider" --limit 5        # full-text fact search
@@ -69,6 +70,12 @@ gaal transcript latest --force         # re-render cached transcript
 ```
 
 Prefer `inspect --trace` or `transcript` over raw file parsing. Gaal normalizes incompatible Claude Code JSONL, Codex JSONL, Gemini JSON, and Hermes SQLite formats.
+
+## Activity
+
+Use `gaal activity` for source-backed historical slices across sessions. It renders transcript-shaped markdown for `[since,before)` windows, including long-running sessions that started earlier; it is not live monitoring.
+
+Examples: `gaal activity --since 1d -H`, `gaal activity --since 2026-05-25 --before 2026-05-26 --stdout`.
 
 ## Attribution
 
@@ -144,6 +151,7 @@ Key flags: `--engine claude|codex|gemini|hermes`, `--provider agent-mux|openrout
 gaal ls
 gaal who
 gaal search
+gaal activity
 gaal resolve
 gaal create-handoff
 gaal index backfill
@@ -186,6 +194,7 @@ Tag with `gaal tag <session-id> research`, remove with `gaal tag <session-id> --
 | Read raw session files for normal work | Use `inspect`, `transcript`, `who`, `search`, or `recall` |
 | Run paid handoff batches cold | Start with `create-handoff --batch --dry-run` |
 | Use debug builds when changing Gaal | Run `cargo build --release` |
+| Treat activity as live process status | It is source-backed history; use fleet/process tools for live status |
 
 ## Reference
 

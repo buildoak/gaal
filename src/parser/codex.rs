@@ -23,6 +23,9 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
     let mut events: Vec<SessionEvent> = Vec::new();
     let mut tool_meta_by_call_id: HashMap<String, (String, Value)> = HashMap::new();
     let mut line_offset = 0_u64;
+    let mut forked_child_session = false;
+    let mut child_stream_started = true;
+    let mut skipped_fork_baseline_total: Option<i64> = None;
 
     loop {
         let mut line = String::new();
@@ -54,9 +57,6 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
 
         match record_type {
             "session_meta" => {
-                if !should_emit {
-                    continue;
-                }
                 let session_id = record
                     .pointer("/payload/id")
                     .and_then(Value::as_str)
@@ -69,16 +69,40 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                     .pointer("/payload/cli_version")
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                let parent_thread_id = record
+                    .pointer("/payload/source/subagent/thread_spawn/parent_thread_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 let forked_from_id = record
                     .pointer("/payload/forked_from_id")
                     .and_then(Value::as_str)
-                    .map(str::to_string);
+                    .map(str::to_string)
+                    .or(parent_thread_id);
+                let is_forked_child_meta = forked_from_id.is_some();
+                if is_forked_child_meta {
+                    // Codex forked subagent logs may preserve the parent's
+                    // context by copying parent records before the child's own
+                    // turn_context. Those inherited records contain valid
+                    // parent usage counters, but they are not child-local work.
+                    forked_child_session = true;
+                    child_stream_started = false;
+                } else if forked_child_session && !child_stream_started {
+                    // Parent session_meta copied into a forked child log.
+                    continue;
+                }
+                if !should_emit {
+                    continue;
+                }
                 let agent_role = record
                     .pointer("/payload/agent_role")
+                    .or_else(|| record.pointer("/payload/source/subagent/thread_spawn/agent_role"))
                     .and_then(Value::as_str)
                     .map(str::to_string);
                 let agent_nickname = record
                     .pointer("/payload/agent_nickname")
+                    .or_else(|| {
+                        record.pointer("/payload/source/subagent/thread_spawn/agent_nickname")
+                    })
                     .and_then(Value::as_str)
                     .map(str::to_string);
                 events.push(SessionEvent {
@@ -95,6 +119,9 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                 });
             }
             "turn_context" => {
+                if forked_child_session {
+                    child_stream_started = true;
+                }
                 if !should_emit {
                     continue;
                 }
@@ -124,6 +151,16 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                 });
             }
             "event_msg" => {
+                if forked_child_session && !child_stream_started {
+                    if record.pointer("/payload/type").and_then(Value::as_str)
+                        == Some("token_count")
+                    {
+                        skipped_fork_baseline_total = record
+                            .pointer("/payload/info/total_token_usage/total_tokens")
+                            .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)));
+                    }
+                    continue;
+                }
                 if !should_emit {
                     continue;
                 }
@@ -222,6 +259,15 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                             .pointer("/payload/info/total_token_usage/total_tokens")
                             .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)))
                             .map(|n| format!("codex_tc_{n}"));
+                        let total_tokens = record
+                            .pointer("/payload/info/total_token_usage/total_tokens")
+                            .and_then(|v| v.as_i64().or_else(|| v.as_u64().map(|u| u as i64)));
+                        if forked_child_session
+                            && skipped_fork_baseline_total.is_some()
+                            && total_tokens == skipped_fork_baseline_total
+                        {
+                            continue;
+                        }
 
                         let raw_input =
                             as_i64(record.pointer("/payload/info/last_token_usage/input_tokens"));
@@ -262,6 +308,9 @@ pub fn parse_events_from_offset(path: &Path, offset: u64) -> Result<Vec<SessionE
                 }
             }
             "response_item" => {
+                if forked_child_session && !child_stream_started {
+                    continue;
+                }
                 let payload_type = record
                     .pointer("/payload/type")
                     .and_then(Value::as_str)
@@ -489,5 +538,104 @@ mod tests {
             }
             other => panic!("expected ToolResult, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn forked_codex_child_skips_inherited_parent_context_before_turn_context() {
+        let path = temp_path("forked-child");
+        let child_meta = "{\"timestamp\":\"2026-05-05T21:51:57.991Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"child-session\",\"forked_from_id\":\"parent-session\",\"cwd\":\"/repo\",\"cli_version\":\"0.128.0\"}}\n";
+        let inherited_parent_meta = "{\"timestamp\":\"2026-05-05T21:51:57.992Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"parent-session\",\"cwd\":\"/repo\",\"cli_version\":\"0.128.0\"}}\n";
+        let inherited_user = "{\"timestamp\":\"2026-05-05T21:51:57.993Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"parent prompt copied into child log\"}}\n";
+        let inherited_usage = "{\"timestamp\":\"2026-05-05T21:51:57.994Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":116000,\"cached_input_tokens\":114000,\"output_tokens\":1000,\"total_tokens\":117000},\"last_token_usage\":{\"input_tokens\":73000,\"cached_input_tokens\":72000,\"output_tokens\":500,\"total_tokens\":73500}}}}\n";
+        let turn_context = "{\"timestamp\":\"2026-05-05T21:51:58.947Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\",\"cwd\":\"/repo\"}}\n";
+        let repeated_baseline_usage = "{\"timestamp\":\"2026-05-05T21:51:58.947Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":116000,\"cached_input_tokens\":114000,\"output_tokens\":1000,\"total_tokens\":117000},\"last_token_usage\":{\"input_tokens\":73000,\"cached_input_tokens\":72000,\"output_tokens\":500,\"total_tokens\":73500}}}}\n";
+        let child_user = "{\"timestamp\":\"2026-05-05T21:51:58.948Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"child-local prompt\"}}\n";
+        let child_usage = "{\"timestamp\":\"2026-05-05T21:51:59.253Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":117500,\"cached_input_tokens\":115000,\"output_tokens\":1200,\"total_tokens\":118700},\"last_token_usage\":{\"input_tokens\":1500,\"cached_input_tokens\":1000,\"output_tokens\":200,\"reasoning_output_tokens\":50,\"total_tokens\":1700}}}}\n";
+        fs::write(
+            &path,
+            format!(
+                "{child_meta}{inherited_parent_meta}{inherited_user}{inherited_usage}{turn_context}{repeated_baseline_usage}{child_user}{child_usage}"
+            ),
+        )
+        .unwrap();
+
+        let events = parse_events(&path).unwrap();
+        let _ = fs::remove_file(&path);
+
+        let user_messages = events
+            .iter()
+            .filter(|event| matches!(event.kind, EventKind::UserMessage { .. }))
+            .count();
+        assert_eq!(user_messages, 1);
+
+        let usage = events
+            .iter()
+            .find_map(|event| {
+                if let EventKind::Usage {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    reasoning_tokens,
+                    ..
+                } = event.kind
+                {
+                    Some((
+                        input_tokens,
+                        output_tokens,
+                        cache_read_input_tokens,
+                        reasoning_tokens,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .expect("child-local usage should be emitted");
+        assert_eq!(usage, (500, 200, 1000, 50));
+
+        let model = events.iter().find_map(|event| {
+            if let EventKind::Meta { model, .. } = &event.kind {
+                model.clone()
+            } else {
+                None
+            }
+        });
+        assert_eq!(model.as_deref(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn codex_child_uses_thread_spawn_parent_when_forked_from_id_missing() {
+        let path = temp_path("thread-spawn-child");
+        let meta = "{\"timestamp\":\"2026-05-25T11:51:13.000Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"child-session\",\"thread_source\":\"subagent\",\"agent_role\":\"explorer\",\"agent_nickname\":\"Copernicus\",\"cwd\":\"/repo\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"parent-session\",\"agent_role\":\"explorer\",\"agent_nickname\":\"Copernicus\"}}}}}\n";
+        let turn_context = "{\"timestamp\":\"2026-05-25T11:51:14.000Z\",\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\",\"cwd\":\"/repo\"}}\n";
+        let child_user = "{\"timestamp\":\"2026-05-25T11:51:15.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"child-local prompt\"}}\n";
+        fs::write(&path, format!("{meta}{turn_context}{child_user}")).unwrap();
+
+        let events = parse_events(&path).unwrap();
+        let _ = fs::remove_file(&path);
+
+        let meta = events
+            .iter()
+            .find_map(|event| {
+                if let EventKind::Meta {
+                    forked_from_id,
+                    agent_role,
+                    agent_nickname,
+                    ..
+                } = &event.kind
+                {
+                    Some((
+                        forked_from_id.clone(),
+                        agent_role.clone(),
+                        agent_nickname.clone(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .expect("session meta should be emitted");
+
+        assert_eq!(meta.0.as_deref(), Some("parent-session"));
+        assert_eq!(meta.1.as_deref(), Some("explorer"));
+        assert_eq!(meta.2.as_deref(), Some("Copernicus"));
     }
 }
