@@ -32,7 +32,7 @@ Output:
 
 ### Incremental behavior
 
-`index backfill` is incremental. Each engine (Claude, Codex, Gemini) keeps its own mtime cursor in the `meta` SQLite table under keys `backfill:claude`, `backfill:codex`, and `backfill:gemini`. On every run, discovery for an engine skips files whose on-disk mtime is older than `cursor - 10s` before any head-read, JSON parse, or SQLite lookup. The 10-second safety margin covers actively-appending session files whose mtime is close to wall-clock.
+`index backfill` is incremental. Each engine keeps its own mtime cursor in the `meta` SQLite table, for example `backfill:claude`, `backfill:codex`, `backfill:gemini`, and `backfill:hermes`. On every run, discovery for an engine skips files whose on-disk mtime is older than `cursor - 10s` before any head-read, JSON parse, or SQLite lookup. The 10-second safety margin covers actively-appending session files whose mtime is close to wall-clock.
 
 Cursor advancement rules:
 
@@ -69,7 +69,7 @@ Real example:
 ```bash
 $ gaal index status
 {
-  "db_path": "/Users/otonashi/.gaal/index.db",
+  "db_path": "/home/alex/.gaal/index.db",
   "db_size_bytes": 387366912,
   "facts_total": 249747,
   "handoffs_total": 871,
@@ -173,7 +173,7 @@ gaal tag [OPTIONS] [ID] [TAGS]...
 ## Output
 
 - `tag ls` returns a JSON array of strings
-- add/remove returns `{ "session_id": "...", "action": "added|removed", "tags": [...] }`
+- tag mutations return `{ "session_id": "...", "action": "added|removed", "tags": [...] }`
 
 ## Real Example
 

@@ -46,7 +46,7 @@ impl Default for LlmConfig {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct HandoffConfig {
-    /// Prompt path used by `gaal handoff`.
+    /// Prompt path used by `gaal create-handoff`.
     pub prompt: PathBuf,
     /// Output format identifier.
     pub format: String,

@@ -46,8 +46,8 @@ $ gaal search subagent --limit 2
       "engine": "claude",
       "turn": 29,
       "fact_type": "command",
-      "subject": "grep -rn \"20\\b\\|subagent.*limit\\|table.*cap\\|MAX.*SUBAGENT\\|SUBAGENT.*MAX\\|top.*subagent\\|subagent.*",
-      "snippet": "grep -rn \"20\\b\\|subagent.*limit\\|table.*cap\\|MAX.*SUBAGENT\\|SUBAGENT.*MAX\\|top.*subagent\\|subagent.*top\" /Users/otonashi/thinking/building/gaal/src/ --include=\"*.rs\" | grep -v \"target\" | head -20",
+      "subject": "rg -n \"subagent.*limit|table.*cap|MAX.*SUBAGENT\" src",
+      "snippet": "rg -n \"subagent.*limit|table.*cap|MAX.*SUBAGENT\" src",
       "ts": "2026-03-29T05:29:59.567Z",
       "score": 15.346081,
       "session_headline": "",
@@ -70,7 +70,7 @@ gaal recall [OPTIONS] [QUERY]
 
 ## Flags
 
-- `--id <session-id>`: direct handoff lookup by session ID (bypasses semantic search). Supports prefix and `latest`. Mutually exclusive with positional QUERY.
+- `--id <session-id>`: direct handoff lookup by session ID (bypasses query scoring). Supports prefix and `latest`. Mutually exclusive with positional QUERY.
 - `--days-back <n>`: default `14`
 - `--limit <n>`: default `3`
 - `--format <summary|handoff|brief|full|eywa>`: default `brief`
@@ -111,7 +111,7 @@ Keywords: agent-mux, gaal, AX testing, LaunchAgent, Telegram bot
 Substance: 3 | Duration: 532m | Score: 0.0
 ```
 
-Direct lookup bypasses semantic search entirely — it queries the handoffs table by session ID. No scoring, no recency weighting, no query tokenization. Supports prefix matching and `latest`.
+Direct lookup bypasses query scoring entirely — it queries the handoffs table by session ID. No scoring, no recency weighting, no query tokenization. Supports prefix matching and `latest`.
 
 ## Related Commands
 

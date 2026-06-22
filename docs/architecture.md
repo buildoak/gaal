@@ -35,7 +35,7 @@ src/
     index/             Index maintenance (module directory)
       mod.rs           backfill, reindex, prune, import-eywa, status
       recover_orphans.rs  Orphaned subagent recovery
-    tag.rs             Tag management (add, remove, ls)
+    tag.rs             Tag management
     runtime.rs         Shared command runtime (DB handle, config, output mode)
     mod.rs             Module declarations
 
@@ -90,7 +90,7 @@ src/
 ## Data Flow
 
 ```text
-JSONL files on disk
+engine source artifacts on disk
   -> discovery/
   -> parser/
   -> db/
@@ -98,7 +98,7 @@ JSONL files on disk
   -> output/ or render/
 ```
 
-The indexing and query path is: JSONL files on disk -> discovery/ -> parser/ -> db/ -> commands/ -> output/ or render/.
+The indexing and query path is: engine source artifacts on disk -> discovery/ -> parser/ -> db/ -> commands/ -> output/ or render/. Today that means Claude and Codex JSONL, Gemini JSON, and Hermes SQLite.
 
 ## Data Model
 
@@ -290,7 +290,7 @@ Token accounting is parser-driven and model-aware:
 - Cache tokens are fully tracked as `cache_read_tokens` and `cache_creation_tokens`.
 - Peak context is the maximum of `input_tokens + cache_read_tokens + cache_creation_tokens` across all counted turns.
 - Model-aware cost estimation uses per-model pricing instead of one flat rate.
-- Tool counting includes Claude, Codex, and Gemini tool uses.
+- Tool counting includes Claude, Codex, Gemini, and Hermes tool uses.
 - Usage deduplication differs by engine: Claude uses `dedup_key`, while Codex uses cumulative `total_tokens`.
 - Error deduplication uses `tool:{tool_use_id}` when available, otherwise `ts:{timestamp}|exit:{code}`.
 
@@ -309,6 +309,9 @@ Token accounting is parser-driven and model-aware:
       sessions/YYYY/MM/DD/<id>.md
       handoffs/YYYY/MM/DD/<id>.md
     gemini/
+      sessions/YYYY/MM/DD/<id>.md
+      handoffs/YYYY/MM/DD/<id>.md
+    hermes/
       sessions/YYYY/MM/DD/<id>.md
       handoffs/YYYY/MM/DD/<id>.md
 ```

@@ -17,16 +17,16 @@ Use this table first. It is the fastest way to choose the correct command.
 | Fleet totals | `gaal ls --aggregate` |
 | Who wrote/read/ran X? | `gaal who <verb> <target>` |
 | Free-text search across content | `gaal search <query>` |
-| Semantic recall for continuity | `gaal recall [query]` |
+| Handoff recall for continuity | `gaal recall [query]` |
 | Generate handoff document | `gaal create-handoff <id>` |
-| Self-identify current session | `gaal salt` -> `gaal find-salt` -> `gaal create-handoff --jsonl` |
+| Self-identify current session | `gaal salt` -> later `gaal find-salt` -> optional `gaal create-handoff --jsonl ... --dry-run` |
 | Cross-session prompt injection | `session-ctl` (different tool) |
 
 ## Overview
 
 The primary consumers of `gaal` are agents, not humans. Prefer machine-readable JSON unless a human explicitly asks for a table or card view.
 
-`gaal` supports three engines: Claude Code (JSONL), Codex (JSONL), and Gemini (single JSON). All three are indexed uniformly. The `engine` field on every session row tells you which parser produced it.
+`gaal` supports four engines: Claude Code (JSONL), Codex (JSONL), Gemini (single JSON), and Hermes Agent (SQLite). All four are indexed into the same session, fact, transcript, tag, and handoff model. Hermes support is newer and has been tested against one real installation shape plus sanitized fixtures; treat unusual Hermes installations as compatibility work until fixtures cover them.
 
 The core mental model:
 
@@ -43,9 +43,10 @@ Before depending on `recall`, make sure handoffs and the index actually exist.
 
 ## Output Contract
 
-- Default output is JSON.
+- Default output is JSON for normal query commands.
 - Use `-H` for human-readable tables or cards.
-- JSON errors include `hint` and `example` fields alongside `ok`, `error`, and `exit_code`.
+- `gaal salt` is an intentional exception: it prints a raw token string.
+- JSON errors include `hint` and `example` fields alongside `ok`, `error`, and `exit_code` after CLI parsing succeeds. Argument parsing errors come from the CLI parser and may be plain text.
 - Exit codes are stable:
 
 | Exit code | Meaning |
@@ -78,7 +79,6 @@ Smallest defensible rule: use short IDs when you have them, and use `latest` whe
 Use `recall` when you are resuming work and want continuity, not when you need raw session facts. Use `recall --id <session-id>` when you know which session's handoff you want. Use `recall <query>` when searching by topic.
 
 ```bash
-gaal recall --format eywa
 gaal recall 'topic' --format eywa --limit 5
 gaal recall --id abc12345 --format brief -H
 gaal recall --id latest --format handoff
@@ -89,8 +89,9 @@ gaal recall --id latest --format handoff
 Use `create-handoff` when wrapping up a session or producing a continuity artifact for another agent.
 
 ```bash
-gaal create-handoff
-gaal create-handoff --effort high           # override effort level (low/medium/high/xhigh)
+gaal create-handoff latest --dry-run
+gaal create-handoff latest                  # only after reviewing the dry run
+gaal create-handoff latest --effort high --dry-run
 gaal create-handoff --batch --since 1d --dry-run
 ```
 
@@ -98,20 +99,30 @@ gaal create-handoff --batch --since 1d --dry-run
 
 Use this when the agent must identify its own current session and generate a handoff from that exact JSONL. `find-salt` returns enriched session context (model, type, tokens, transcript path, handoff status) when the session is indexed, so you get full self-identification in one call.
 
+First tool call:
+
 ```bash
-SALT=$(gaal salt)
-echo "$SALT"
-# find-salt returns full session context: model, type, tokens, transcript, handoff status
-RESULT=$(gaal find-salt "$SALT")
-JSONL=$(echo "$RESULT" | jq -r .jsonl_path)
-# Check if handoff already exists before generating
-HAS_HANDOFF=$(echo "$RESULT" | jq -r .handoff.exists)
-if [ "$HAS_HANDOFF" != "true" ]; then
-  gaal create-handoff --jsonl "$JSONL"
-fi
+gaal salt
 ```
 
-CRITICAL: `gaal salt` and `gaal find-salt` must be separate tool calls. The JSONL must flush between those calls or `find-salt` may miss the current session.
+Second, later tool call after the salt has been written into the session log:
+
+```bash
+gaal find-salt GAAL_SALT_<hex>
+```
+
+`find-salt` returns full session context when indexed: model, type, tokens,
+transcript path, JSONL path, and handoff status. Inspect that JSON before
+generating anything.
+
+If a handoff is needed, preview first:
+
+```bash
+gaal create-handoff --jsonl /path/to/session.jsonl --dry-run
+gaal create-handoff --jsonl /path/to/session.jsonl
+```
+
+CRITICAL: `gaal salt` and `gaal find-salt` must be separate tool calls. The JSONL must flush between those calls or `find-salt` may miss the current session. Do not hide this split inside one shell script.
 
 ### Filtering by engine
 
@@ -128,22 +139,19 @@ gaal who wrote CLAUDE.md --engine gemini
 gaal search "parser" --engine gemini
 ```
 
-### Finding GSD dispatches
+### Finding subagent dispatches
 
 Use `--subagent-type` to filter sessions by the type of Agent tool dispatch.
 
 ```bash
-# All GSD-Heavy dispatches in the last 7 days
-gaal ls --subagent-type gsd-heavy --since 7d -H
-
-# All GSD-coordinator (legacy GSD-Heavy type name) dispatches
-gaal ls --subagent-type gsd-coordinator --since 7d -H
+# All worker dispatches in the last 7 days
+gaal ls --subagent-type worker --since 7d -H
 
 # Explore-type dispatches
 gaal ls --subagent-type Explore --since 7d -H
 
 # Or use tags (auto-applied on indexing)
-gaal ls --tag gsd-heavy -H
+gaal ls --tag worker -H
 ```
 
 The `subagent_type` field is extracted from the Agent `tool_use` input in parent JSONL and populated during `gaal index backfill`. Run `gaal index backfill --force` after upgrading to populate existing sessions.
@@ -192,7 +200,7 @@ Avoid these patterns. They usually create incorrect assumptions or unnecessary w
 | Treat `gaal activity` as live process status | Use it for historical/indexed activity; use fleet/process tools for live status |
 | Call `gaal inspect` in a loop | Use `gaal inspect --ids a1b2,c3d4` |
 | Assume `gaal recall` works without handoffs | Check gaal index status first |
-| Run `gaal create-handoff` without `agent-mux` | Verify `agent-mux` availability first |
+| Run default `gaal create-handoff` without a configured handoff backend | Verify `agent-mux` availability first, or choose and test another supported provider |
 
 ## Sandbox Usage
 
@@ -232,7 +240,7 @@ gaal ls --cwd /path/to/project --aggregate -H
 
 - Read-only commands are the safe default for agents
 - Mutation commands include `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index import-eywa`, and `tag`
-- `create-handoff` dispatches to an LLM through `agent-mux` or OpenRouter, so it can cost money
+- `create-handoff` dispatches to an LLM/agent backend and may consume subscription quota, API credits, metered usage, or local compute. `agent-mux` is the default backend for handoff generation, but core indexing, search, inspect, attribution, transcript, and tag workflows do not require it.
 - Use `--dry-run` before batch handoff generation
 - `index backfill` is operationally safe: it reads JSONL and writes derived state under `~/.gaal/`
 

@@ -1,6 +1,6 @@
 # Getting Started
 
-This page is the shortest path from a fresh clone to your first useful `gaal` query. If you already have local Claude Code or Codex session logs, you can usually get from zero to indexed sessions in under five minutes.
+This page is the shortest path from a fresh clone to your first useful `gaal` query. If you already have local Claude Code, Codex, Gemini, or Hermes session logs, you can usually get from zero to indexed sessions in under five minutes.
 
 ## Build
 
@@ -19,17 +19,17 @@ Rough build times:
 - Clean build: about 8 minutes
 - Incremental build: about 30 seconds
 
-On Nikita's Mac mini, the canonical checkout is:
+For a local install, keep one checkout and point your shell path at its release binary. For example:
 
 ```bash
-/Users/otonashi/thinking/building/gaal
+~/src/gaal
 ```
 
-The canonical command is `/opt/homebrew/bin/gaal`, symlinked to that checkout's release artifact:
+On macOS with Homebrew, a typical setup is:
 
 ```bash
-ln -sf /Users/otonashi/thinking/building/gaal/target/release/gaal /opt/homebrew/bin/gaal
-ln -sf /Users/otonashi/thinking/building/gaal/target/release/gaal /Users/otonashi/.cargo/bin/gaal
+ln -sf ~/src/gaal/target/release/gaal /opt/homebrew/bin/gaal
+ln -sf ~/src/gaal/target/release/gaal ~/.cargo/bin/gaal
 ```
 
 `~/.cargo/bin/gaal` is compatibility only. If it becomes a real copied binary,
@@ -41,8 +41,10 @@ put `/opt/homebrew/bin` before cargo paths.
 
 `gaal` indexes session artifacts that already exist on disk. Before your first run, make sure you have:
 
-- Local access to session logs under `~/.claude/projects/`, `~/.codex/`, and/or `~/.gemini/tmp/`
+- Local access to session logs under `~/.claude/projects/`, `~/.codex/`, `~/.gemini/tmp/`, and/or `~/.hermes/state.db`
 - A writable gaal home at `~/.gaal/`
+
+If this is a brand-new machine with no agent sessions yet, `gaal index backfill` may create the index and still leave you with zero sessions. That is expected. Run an agent for a bit, then backfill again.
 
 ## First Index
 
@@ -86,7 +88,7 @@ What each part is for:
 - `data/{engine}/sessions/YYYY/MM/DD/<id>.md`: rendered transcript markdown
 - `data/{engine}/handoffs/YYYY/MM/DD/<id>.md`: generated handoff markdown
 
-`{engine}` is usually `claude`, `codex`, or `gemini`.
+`{engine}` is usually `claude`, `codex`, `gemini`, or `hermes`.
 
 ## Four Commands to Learn First
 
@@ -135,7 +137,7 @@ These are the practical defaults in `~/.gaal/config.toml`:
 | `llm.default_model` | `gpt-5.3-codex-spark` |
 | `llm.timeout_secs` | `120` |
 | `handoff.prompt` | `prompts/handoff.md` |
-| `handoff.format` | `eywa` |
+| `handoff.format` | `eywa-compatible` |
 | `agent-mux.path` | `agent-mux` |
 
 You do not need to change any of these to build, index, or run the first query. The usual first useful loop is:

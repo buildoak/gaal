@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Persisted handoff metadata produced by `gaal handoff`.
+/// Persisted handoff metadata produced by `gaal create-handoff`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HandoffRecord {
     /// Session ID for the handoff.

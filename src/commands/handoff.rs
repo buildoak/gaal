@@ -1599,13 +1599,13 @@ Chunk Coverage:\n\
 fn build_chunk_mapper_prompt(base_prompt: &str) -> String {
     format!(
         "{base_prompt}\n\n\
-You are running the mapper phase of a chunked gaal handoff. Analyze only the supplied chunk. \
+You are running the mapper phase of chunked Gaal handoff generation. Analyze only the supplied chunk. \
 Return concise markdown with concrete facts, decisions, open threads, files, commands, and risks visible in this chunk. \
 Do not claim whole-session coverage and do not invent missing continuity.\n\n\
 Path and state fidelity rules:\n\
 - Preserve exact file paths as written in the chunk; never rewrite path roots or move files into a more familiar repo.\n\
 - Because final handoffs live under ~/.gaal, repo-relative paths are unsafe for continuation. If the chunk provides an absolute path, copy the absolute path.\n\
-- If the chunk contains a known worktree root such as /Users/otonashi/thinking/building/<repo> and later mentions repo-relative paths from that worktree, resolve them to absolute paths in your mapper output.\n\
+- If the chunk establishes a worktree root and later mentions repo-relative paths from that worktree, resolve them to absolute paths in your mapper output.\n\
 - If the chunk contains final git/worktree status, dirty files, uncommitted changes, or explicit not-committed/not-pushed state, preserve it.\n\
 - Preserve the exact dirty-file list when present.\n\
 - Preserve concrete verification facts, falsifiers, endpoint diagnostics, and residual risks even when they look too detailed.\n\
@@ -1616,7 +1616,7 @@ Path and state fidelity rules:\n\
 fn build_chunk_reducer_prompt(base_prompt: &str) -> String {
     format!(
         "{base_prompt}\n\n\
-You are running the reducer phase of a chunked gaal handoff. Synthesize the mapper outputs into one final handoff for the whole session. \
+You are running the reducer phase of chunked Gaal handoff generation. Synthesize the mapper outputs into one final handoff for the whole session. \
 Preserve the normal handoff sections and metadata expectations from the base prompt. \
 Use only mapper evidence and the coverage manifest supplied in context.\n\n\
 Continuation-critical fidelity rules:\n\
@@ -2230,7 +2230,7 @@ fn load_prompt(path: &Path) -> Result<String, GaalError> {
 /// Checks three sources in priority order:
 /// 1. On-the-fly render from the session's JSONL file
 /// 2. Gaal's own rendered markdown (~/.gaal/data/{engine}/sessions/YYYY/MM/DD/{id}.md)
-/// 3. External output directory (e.g. pratchett-os/data/claude-code-sessions/) via config
+/// 3. External output directory configured for rendered session markdown
 ///
 /// Returns `None` if all sources fail.
 fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Option<String> {

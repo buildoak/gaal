@@ -27,6 +27,7 @@ use crate::discovery::codex::truncate_codex_id;
 use crate::discovery::{discover_sessions_with_cutoff, DiscoveredSession};
 use crate::error::GaalError;
 use crate::model::{Fact, HandoffRecord};
+use crate::output::human::print_table;
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
 use crate::parser::{
@@ -372,9 +373,14 @@ fn run_engine_pass(
 }
 
 /// Run `gaal index status`.
-pub fn run_status() -> Result<(), GaalError> {
+pub fn run_status(human: bool) -> Result<(), GaalError> {
     let conn = open_db()?;
     let status = get_index_status(&conn)?;
+    if human {
+        print_status_human(&status);
+        return Ok(());
+    }
+
     let payload = json!({
         "db_path": crate::db::db_path().to_string_lossy().to_string(),
         "db_size_bytes": status.db_size_bytes,
@@ -387,6 +393,36 @@ pub fn run_status() -> Result<(), GaalError> {
         "newest_session": status.newest_session
     });
     print_json(&payload).map_err(GaalError::from)
+}
+
+fn print_status_human(status: &crate::db::queries::IndexStatus) {
+    println!("Index status");
+    println!("Sessions: {}", status.sessions_total);
+    println!("Facts: {}", status.facts_total);
+    println!("Handoffs: {}", status.handoffs_total);
+    println!(
+        "Oldest session: {}",
+        status.oldest_session.as_deref().unwrap_or("-")
+    );
+    println!(
+        "Newest session: {}",
+        status.newest_session.as_deref().unwrap_or("-")
+    );
+    println!(
+        "Last indexed event: {}",
+        status.last_indexed_at.as_deref().unwrap_or("-")
+    );
+
+    if !status.sessions_by_engine.is_empty() {
+        let mut rows: Vec<Vec<String>> = status
+            .sessions_by_engine
+            .iter()
+            .map(|(engine, count)| vec![engine.clone(), count.to_string()])
+            .collect();
+        rows.sort_by(|a, b| a[0].cmp(&b[0]));
+        println!();
+        print_table(&["Engine", "Sessions"], &rows);
+    }
 }
 
 /// Run `gaal index reindex`.

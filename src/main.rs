@@ -674,7 +674,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 };
                 gaal::commands::index::run_backfill(args)
             }
-            IndexCommand::Status => gaal::commands::index::run_status(),
+            IndexCommand::Status => gaal::commands::index::run_status(human),
             IndexCommand::Reindex { id } => {
                 let args = gaal::commands::index::ReindexArgs { id };
                 gaal::commands::index::run_reindex(args)

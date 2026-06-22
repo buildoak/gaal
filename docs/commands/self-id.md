@@ -27,7 +27,7 @@ GAAL_SALT_d0a6e1d5530bf6c9
 
 # `gaal find-salt`
 
-Purpose: scan Claude, Codex, and Gemini session logs and return the first file containing a salt token. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
+Purpose: scan Claude and Codex session logs and return the first file containing a salt token. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
 
 ## Usage
 
@@ -44,7 +44,7 @@ gaal find-salt [OPTIONS] [SALT]
 When the session is indexed (has been processed by `gaal index backfill`):
 
 - `session_id` — raw filename-derived session identifier
-- `engine` — `claude`, `codex`, or `gemini`
+- `engine` — `claude` or `codex`
 - `jsonl_path` — absolute path to the JSONL file
 - `indexed` — `true`
 - `model` — model name (e.g. `claude-opus-4-6`)
@@ -68,7 +68,7 @@ When not indexed:
 Notes:
 
 - The returned `session_id` is derived from the JSONL filename stem, so Codex and Claude shapes differ.
-- This command scans `~/.claude/projects/`, `~/.codex/`, and `~/.gemini/tmp/`.
+- This command scans `~/.claude/projects/` and `~/.codex/`.
 - Enrichment is best-effort: if the DB is unavailable or the session is not indexed, the command still succeeds with the base 3 fields plus `"indexed": false`.
 
 ## Real Examples
@@ -77,7 +77,7 @@ Enriched output (indexed session):
 
 ```bash
 $ gaal find-salt GAAL_SALT_40e4d9ceb25e0dd1
-{"cwd":"/Users/otonashi/thinking/pratchett-os/coordinator","engine":"claude","handoff":{"exists":true,"generated_at":"2026-03-27T09:45:04Z"},"indexed":true,"input_tokens":883,"jsonl_path":"/Users/otonashi/.claude/projects/.../5e54db27-a30e-455c-af24-26a3c55e511e.jsonl","last_event_at":"2026-03-27T09:45:20Z","model":"claude-opus-4-6","output_tokens":1400,"session_id":"5e54db27-a30e-455c-af24-26a3c55e511e","session_type":"coordinator","total_tokens":2283,"transcript_exists":true,"transcript_path":"/Users/otonashi/.gaal/data/claude/sessions/2026/03/27/5e54db27.md","turns":31}
+{"cwd":"/home/alex/src/agent-project","engine":"claude","handoff":{"exists":true,"generated_at":"2026-03-27T09:45:04Z"},"indexed":true,"input_tokens":883,"jsonl_path":"/home/alex/.claude/projects/.../5e54db27-a30e-455c-af24-26a3c55e511e.jsonl","last_event_at":"2026-03-27T09:45:20Z","model":"claude-opus-4-6","output_tokens":1400,"session_id":"5e54db27-a30e-455c-af24-26a3c55e511e","session_type":"coordinator","total_tokens":2283,"transcript_exists":true,"transcript_path":"/home/alex/.gaal/data/claude/sessions/2026/03/27/5e54db27.md","turns":31}
 ```
 
 Human-readable output (`-H`):
@@ -87,11 +87,11 @@ $ gaal find-salt GAAL_SALT_40e4d9ceb25e0dd1 -H
 Session: 5e54db27-a30e-455c-af24-26a3c55e511e
 Engine:  claude (claude-opus-4-6)
 Type:    coordinator
-CWD:     /Users/otonashi/thinking/pratchett-os/coordinator
+CWD:     /home/alex/src/agent-project
 Tokens:  2K (883 in / 1K out) | 31 turns
 Last:    2026-03-27T09:45:20.375Z
-JSONL:   /Users/otonashi/.claude/projects/.../5e54db27-a30e-455c-af24-26a3c55e511e.jsonl
-Transcript: /Users/otonashi/.gaal/data/claude/sessions/2026/03/27/5e54db27.md
+JSONL:   /home/alex/.claude/projects/.../5e54db27-a30e-455c-af24-26a3c55e511e.jsonl
+Transcript: /home/alex/.gaal/data/claude/sessions/2026/03/27/5e54db27.md
 Handoff: yes (generated 2026-03-27T09:45:04Z)
 ```
 
@@ -125,8 +125,8 @@ gaal resolve [OPTIONS] [ID]
 
 - `session_id` — full session identifier from the index
 - `short_id` — first 8 characters of `session_id`
-- `engine` — `claude`, `codex`, or `gemini`
-- `jsonl_path` — absolute path to the source JSONL file
+- `engine` — `claude`, `codex`, `gemini`, or `hermes`
+- `jsonl_path` — legacy field name for the resolved source artifact path
 - `transcript_path` — expected rendered transcript markdown path
 - `transcript_exists` — whether the transcript file exists on disk
 - `handoff_path` — expected handoff markdown path
@@ -144,10 +144,10 @@ $ target/release/gaal resolve dc5e98dc
   "session_id": "dc5e98dc",
   "short_id": "dc5e98dc",
   "engine": "claude",
-  "jsonl_path": "/Users/otonashi/.claude/projects/-Users-otonashi-thinking-pratchett-os-coordinator/dc5e98dc-5ed4-4de3-a440-d92defaeb9b1.jsonl",
-  "transcript_path": "/Users/otonashi/.gaal/data/claude/sessions/2026/03/30/dc5e98dc.md",
+  "jsonl_path": "/home/alex/.claude/projects/example-project/dc5e98dc-5ed4-4de3-a440-d92defaeb9b1.jsonl",
+  "transcript_path": "/home/alex/.gaal/data/claude/sessions/2026/03/30/dc5e98dc.md",
   "transcript_exists": true,
-  "handoff_path": "/Users/otonashi/.gaal/data/claude/handoffs/2026/03/30/dc5e98dc.md",
+  "handoff_path": "/home/alex/.gaal/data/claude/handoffs/2026/03/30/dc5e98dc.md",
   "handoff_exists": false,
   "session_type": "coordinator",
   "model": "claude-opus-4-6"
@@ -159,7 +159,7 @@ Human-readable output (`-H`):
 ```bash
 $ target/release/gaal resolve dc5e98dc -H
 Session:    dc5e98dc (claude-opus-4-6, coordinator)
-JSONL:      ~/.claude/projects/-Users-otonashi-thinking-pratchett-os-coordinator/dc5e98dc-5ed4-4de3-a440-d92defaeb9b1.jsonl
+JSONL:      ~/.claude/projects/example-project/dc5e98dc-5ed4-4de3-a440-d92defaeb9b1.jsonl
 Transcript: ~/.gaal/data/claude/sessions/2026/03/30/dc5e98dc.md [ok]
 Handoff:    ~/.gaal/data/claude/handoffs/2026/03/30/dc5e98dc.md [not generated]
 ```

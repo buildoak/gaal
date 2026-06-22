@@ -16,7 +16,7 @@ gaal ls [OPTIONS]
 - `--cwd <substring>`
 - `--tag <tag>`: repeatable, AND semantics
 - `--session-type <coordinator|standalone|subagent>`
-- `--subagent-type <type>`: filter by subagent type (e.g. `gsd-heavy`, `gsd-coordinator`, `Explore`, `general-purpose`)
+- `--subagent-type <type>`: filter by subagent type (for example `worker`, `explorer`, `Explore`, or `general-purpose`)
 - `--sort <started|ended|tokens|cost|duration>`
 - `--limit <n>`: default `10`
 - `--aggregate`: return totals instead of session rows

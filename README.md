@@ -1,30 +1,25 @@
 # gaal
 
-Session observability for AI coding agents. Parses Claude Code, Codex, Gemini CLI, and Hermes Agent session logs, indexes into SQLite + Tantivy FTS, answers any question about any session in seconds.
+Gaal makes local AI coding-agent traces searchable, attributable, and handoff-ready.
 
 [![crates.io](https://img.shields.io/crates/v/gaal.svg)](https://crates.io/crates/gaal)
 [![CI](https://github.com/buildoak/gaal/actions/workflows/ci.yml/badge.svg)](https://github.com/buildoak/gaal/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS-lightgrey)
 
-11,000+ sessions. 372K facts. 895 handoffs indexed. Four-engine. 13 commands.
+I built Gaal because my agents were doing real work and leaving behind almost
+no usable memory. Claude Code, Codex, Gemini CLI, and Hermes Agent all write
+session traces, but each one writes a different shape of log. After enough
+sessions, "I know we solved this last week" becomes an archaeological problem.
 
----
+Gaal is the small tool I wanted in that moment: index the local traces, normalize
+the useful facts, and let a human or a future agent ask practical questions.
+Who changed this file? Which session ran that command? What did yesterday's
+coordinator actually do? Is there already a handoff for this work?
 
-## What It Does
+Not a cloud platform. Not a daemon. Just a local memory layer for agent work.
 
-Claude Code, Codex, Gemini CLI, and Hermes Agent emit session logs -- often 10-50MB blobs of undocumented, engine-specific event streams. Raw, they're useless. Gaal parses all four formats, normalizes their event models, and turns raw traces into queryable artifacts.
-
-- **Fleet view** across thousands of sessions, all engines, one table. Filter by engine, model, session type, time window, CWD, or token count.
-- **Drill into any session** -- files touched, commands run, subagent swarms, token breakdown, peak context, cost estimate.
-- **Activity slices** -- render transcript-shaped historical activity across sessions for a time window, including long-running sessions that started earlier.
-- **Attribution** -- which session wrote that file? Which agent ran that command? Traces through coordinator-subagent chains with arrow notation.
-- **Continuity** -- recall past work via BM25 full-text search and ranked handoff retrieval. Each new session is less amnesic than the last.
-- **Self-identification** -- agents find their own session mid-flight via the salt protocol. Emit a token, scan for it, get back the full session context.
-
----
-
-## Install
+## Quick Start
 
 Requires Rust 1.80+.
 
@@ -34,423 +29,299 @@ cd gaal
 cargo install --path .
 ```
 
-Index existing sessions:
+Index your existing local session traces:
 
 ```bash
 gaal index backfill
 gaal index status
 ```
 
-`create-handoff` dispatches to an LLM via [agent-mux](https://github.com/buildoak/agent-mux). Have agent-mux installed before using that command.
-
----
-
-## Examples
-
-All output below is from live runs on a real machine. These are not mockups.
-
-### Fleet Overview
+Then ask the first useful question:
 
 ```bash
 gaal ls -H --limit 5
 ```
 
-```
-ID        Type   Task             Engine  Started      Duration  Tokens    Peak  Tools  Model            CWD
---------  -----  ---------------  ------  -----------  --------  --------  ----  -----  ---------------  -----------
-a6eec194  [sub]  **Task: Desi...  claude  today 22:56  2m 15s    13 / 179  61K   28     claude-opus-4-6  coordinator
-abcf7430  [sub]  **Fix: Subag...  claude  today 22:43  3m 33s    36 / 1K   64K   44     claude-opus-4-6  coordinator
-07282aef  -      # Scout You ...  codex   today 22:42  13s       12K / 1K  15K   2      gpt-5.4-mini     radiation
-a97eff05  [sub]  You are a se...  claude  today 22:37  4m 12s    33 / 2K   71K   42     claude-opus-4-6  coordinator
-a4b8c9c5  [sub]  **Investigat...  claude  today 22:35  2m 23s    20 / 1K   67K   28     claude-opus-4-6  coordinator
-(filtered: hiding sessions with 0 tool calls and <30s duration. Use --all to show everything)
-Showing 5 of 11366 sessions
-```
+On a brand-new machine, `index backfill` can succeed with zero sessions if no
+supported agent has written traces yet. Run an agent for a bit, then backfill
+again.
 
-All engines in one table. `[sub]` marks subagent sessions. Tokens column shows `input / output`. Peak is max single-turn context window usage. The default filter hides trivial sessions -- `--all` shows everything.
-
-Narrow the view:
+By default, Gaal stores its derived database, Tantivy index, rendered
+transcripts, config, and generated handoffs under `~/.gaal/`. In CI or sandboxed
+agent runs, move that state somewhere disposable:
 
 ```bash
-gaal ls --session-type coordinator --since 1d -H    # parent sessions today
-gaal ls --subagent-type gsd-heavy --since 3d         # GSD dispatches this week
-gaal ls --engine codex --limit 10 -H                 # Codex sessions only
-gaal ls --engine gemini --limit 10 -H                # Gemini sessions only
-gaal ls --engine hermes --limit 10 -H                # Hermes sessions only
-gaal ls --model claude-opus-4-6 --since 7d -H        # Opus sessions this week
+export GAAL_HOME=/tmp/gaal-home
+gaal index backfill
+gaal ls -H --limit 5
 ```
 
-### Coordinator Drill-Down
+`GAAL_HOME` does not move the source traces written by Claude Code, Codex,
+Gemini CLI, or Hermes Agent. It only changes where Gaal stores its own derived
+state.
+
+## Privacy
+
+Core Gaal is local: indexing, fleet views, inspection, transcript rendering,
+search, attribution, tags, and recall all operate over files on your machine.
+
+Those local traces can still contain secrets, private prompts, source code,
+terminal output, file paths, credentials accidentally printed into logs, and
+tool results. Treat `~/.claude/`, `~/.codex/`, `~/.gemini/`, `~/.hermes/`, and
+`~/.gaal/` as private working data unless you have audited them.
+
+`gaal create-handoff` is different. It uses the configured LLM/agent backend
+and may consume subscription quota, API credits, metered usage, or local
+compute. The default supported backend for real handoff generation is
+[agent-mux](https://github.com/buildoak/agent-mux). Agent-mux is optional for
+core Gaal; it is only needed when you want Gaal to generate handoff artifacts.
+
+Run handoff generation with `--dry-run` first.
+
+## First Useful Commands
 
 ```bash
-gaal inspect 23af2de9 -H
+gaal ls -H --limit 10
+gaal inspect latest -H
+gaal inspect latest --files write
+gaal transcript latest
+gaal transcript latest --stdout
+gaal activity --since 1d
+gaal who wrote src/main.rs --since 30d -H
+gaal who ran cargo --failed --limit 20 -H
+gaal search "migration error" --field all --limit 10 -H
+gaal recall "release prep" --limit 3 -H
+gaal resolve 3c18caec -H
 ```
 
-```
-ID: 23af2de9
-Engine: claude
-Model: claude-opus-4-6
-Started: 2026-03-30T09:45:43.771Z
-Duration: 33374s
-CWD: /Users/otonashi/thinking/pratchett-os/coordinator
-Peak Context: 164K peak (max single-turn input incl. cache)
-Subagents (28):
-ID        Model              Tokens  Duration
---------  -----------------  ------  --------
-ac526a97  claude-sonnet-4-6  62K     26s
-a46e7c77  claude-sonnet-4-6  69K     30s
-a81e1444  claude-sonnet-4-6  135K    53s
-a7aaffc9  claude-sonnet-4-6  998K    3m 9s
-a7f4bc0f  claude-opus-4-6    1.3M    3m 4s
-a68852f9  claude-opus-4-6    40.6M   32m 40s
-afc3009c  claude-sonnet-4-6  5.0M    22m 21s
-a43292dd  claude-opus-4-6    8.3M    29m 48s
-...
-Files: read=10 written=1 edited=2
-Ops: commands=28 errors=2 git=0
-Tokens: in(non-cache)=2087 out=26663  Peak(max turn incl. cache): 164K peak  Turns: 141  Tools: 98
-```
+Default output is JSON for normal query commands. Add `-H` or `--human` when
+you want a table or card instead of machine-readable output. Two practical
+exceptions matter for agents: `gaal salt` prints a raw token string, and CLI
+argument-parser errors may be plain text before Gaal's JSON error formatter
+runs.
 
-A coordinator session with 28 subagents. The subagent table shows per-agent model, total tokens consumed, and wall-clock duration. One subagent burned 40.6M tokens over 32 minutes -- that's a GSD-Heavy swarm doing deep work.
+Replace sample session IDs with IDs from your own `gaal ls` output.
 
-Add `--tokens` for the full breakdown including cache read/creation, per-turn averages, and cost estimate.
+## What Gaal Answers
 
-### Session Resolve
+- Which sessions happened recently, across supported engines?
+- Which files did a session read, write, or edit?
+- Which session wrote a file or ran a command?
+- What errors or failed shell commands happened in a time window?
+- What did a long session look like as a readable transcript?
+- Which past generated handoffs are relevant to this topic?
+- Where is the raw source trace for this short session ID?
+- Can a Claude Code or Codex agent identify its own session and leave continuity
+  behind?
+
+The core idea is boring in the best way: agent sessions should be queryable
+artifacts, not mystery blobs.
+
+## Handoffs
+
+Handoffs are the part that made Gaal feel like more than log search.
+
+A handoff is a compact markdown artifact generated from a session trace:
+headline, projects, keywords, useful summary, and enough continuity for the next
+agent to pick up the thread. Once generated, handoffs are indexed and retrieved
+by `gaal recall`.
+
+They are optional. You can use `ls`, `inspect`, `transcript`, `activity`, `who`,
+`search`, `resolve`, `salt`, `find-salt`, `index`, and `tag` without installing
+agent-mux or calling any LLM backend.
+
+For one session, using an ID from `gaal ls`:
 
 ```bash
-gaal resolve 23af2de9 -H
+gaal create-handoff 3c18caec --dry-run
+gaal create-handoff 3c18caec
+gaal recall --id 3c18caec --format handoff -H
 ```
 
-```
-Session:    23af2de9 (claude-opus-4-6, coordinator)
-JSONL:      ~/.claude/projects/-Users-otonashi-thinking-pratchett-os-coordinator/23af2de9-....jsonl
-Transcript: ~/.gaal/data/claude/sessions/2026/03/30/23af2de9.md [ok]
-Handoff:    ~/.gaal/data/claude/handoffs/2026/03/30/23af2de9.md [not generated]
-```
-
-Maps a short ID to all associated artifacts. `[ok]` means the transcript has been rendered. `[not generated]` means no handoff exists yet -- run `gaal create-handoff 23af2de9` to generate one.
-
-JSON output drops the `-H` flag:
-
-```bash
-gaal resolve 23af2de9
-```
-
-```json
-{
-  "session_id": "23af2de9",
-  "engine": "claude",
-  "jsonl_path": "~/.claude/projects/.../23af2de9-....jsonl",
-  "transcript_path": "~/.gaal/data/claude/sessions/2026/03/30/23af2de9.md",
-  "transcript_exists": true,
-  "handoff_path": "~/.gaal/data/claude/handoffs/2026/03/30/23af2de9.md",
-  "handoff_exists": false,
-  "session_type": "coordinator",
-  "model": "claude-opus-4-6"
-}
-```
-
-### Attribution
-
-Which sessions wrote a file:
-
-```bash
-gaal who wrote CLAUDE.md --limit 3 -H
-```
-
-```
-Searching last 7 days (2026-03-23 -> 2026-03-30)
-Session              Engine  When         Facts  Subjects   Headline
--------------------  ------  -----------  -----  ---------  --------
-23af2de9 -> aee2c84b  claude  today 22:35  1      CLAUDE.md  -
-23af2de9             claude  today 21:33  1      CLAUDE.md  -
-0e49b03c -> aa755b14  claude  today 09:14  1      CLAUDE.md  -
-Showing 3 of 7 results
-```
-
-The arrow notation (`23af2de9 -> aee2c84b`) means the write happened inside a subagent spawned by that coordinator. Attribution flows through the chain -- gaal traces subagent activity back to the parent.
-
-Six verbs: `read`, `wrote`, `ran`, `touched`, `changed`, `deleted`. Each maps to the corresponding tool operations in the JSONL.
-
-```bash
-gaal who ran cargo --since 30d -H              # who ran cargo commands
-gaal who read src/main.rs --since 7d -H        # who read this file
-gaal who touched "*.toml" --since 14d -H       # who interacted with any TOML file
-```
-
-### Full-Text Search
-
-```bash
-gaal search "handoff" --limit 3 -H
-```
-
-```
-Score  Session   Engine  Turn  Type     Time          Snippet
------  --------  ------  ----  -------  ------------  -----------------------------------------------
-13.96  a3fa9934  claude  59    command  Mar 09 11:23  grep -n "gaal handoff --batch\|handoff.*--ba...
-13.96  acompact  claude  59    command  Mar 09 11:23  grep -n "gaal handoff --batch\|handoff.*--ba...
-13.93  a3fa9934  claude  47    command  Mar 09 11:22  grep -n "gaal handoff\|agent-mux.*handoff\|...
-```
-
-BM25 ranking over indexed facts via Tantivy. Searches across commands, file operations, errors, and extracted content from all sessions. Results show the session, the turn where the match occurred, and a snippet.
-
-### Recall
-
-Retrieve past context by topic:
-
-```bash
-gaal recall "continuity" --limit 2 -H
-```
-
-```
---- Session a244dee3 (2026-03-29) ---
-Headline: Read and summarized the handoff file for coordinator continuity.
-Projects: coordinator
-Keywords: handoff, summary, coordinator, gaal, session-analysis
-Substance: 1 | Duration: 0m | Score: 30.5
-
---- Session 0a795b39 (2026-02-07) ---
-Headline: Multi-agent context mechanics experiment bootstrapped
-Projects: pratchett-os, eywa
-Keywords: multi-agent-orchestration, codex-pipeline, context-continuity
-Substance: 2 | Duration: 260m | Score: 0.5
-```
-
-Ranked retrieval over generated handoffs. Handoffs are LLM-extracted summaries of what a session accomplished -- the headline, projects involved, keywords, and a substance score. `recall` searches them with BM25 and returns the most relevant prior context for your current task.
-
-For a specific session's handoff:
-
-```bash
-gaal recall --id 23af2de9 -H
-```
-
-### Self-Identification (Salt Protocol)
-
-Agents need to know their own session ID mid-flight. The salt protocol solves this in two steps.
-
-**Step 1:** Emit a unique token. This gets written into the session's JSONL as a tool result.
+For a running agent that needs to identify itself:
 
 ```bash
 gaal salt
 # GAAL_SALT_716a02ca9642c721
 ```
 
-**Step 2:** In a separate tool call (JSONL must flush between steps), scan for the token:
+Run the second command in a later tool call, after the salt token has been
+written into the session log:
 
 ```bash
 gaal find-salt GAAL_SALT_716a02ca9642c721 -H
 ```
 
-```
-Session: 23af2de9-2eac-49e2-bc6a-f7841568b818
-Engine:  claude (claude-opus-4-6)
-Type:    coordinator
-Tokens:  18K (961 in / 17K out) | 102 turns
-JSONL:   ~/.claude/projects/.../23af2de9-....jsonl
-Handoff: no
-```
-
-Now the agent has its own session ID, JSONL path, and can generate its own handoff via `create-handoff`. The two-step split is mandatory -- the salt must exist in the JSONL file before `find-salt` scans the file tree.
-
-### Handoff Generation
+If that returns a JSONL path and you want a continuity artifact:
 
 ```bash
-gaal create-handoff 23af2de9
+gaal create-handoff --jsonl /path/to/session.jsonl --dry-run
+gaal create-handoff --jsonl /path/to/session.jsonl
 ```
 
-Dispatches to an LLM (via agent-mux) that reads the session transcript and produces a structured handoff: headline, projects, keywords, substance score, and a summary of what happened. Generated handoffs are stored at `~/.gaal/data/{engine}/handoffs/` and indexed for `recall`.
+The split matters. The salt has to exist in the trace before Gaal can find it.
+Tiny thing. Surprisingly useful.
 
-This command costs money -- it runs an LLM extraction pass. Use it on sessions that matter for continuity, not on every throwaway Codex dispatch.
+Provider note: `gaal create-handoff --help` may show provider selectors. Real
+execution is currently supported through `agent-mux`; dry-run output reports
+whether the chosen provider is supported before anything is generated.
 
----
+## Examples
 
-## Command Reference
+These examples are shaped from live output and sanitized for public docs.
 
-### Query
+Fleet view:
 
-| Command | What it does |
-|---------|-------------|
-| `gaal ls` | Fleet view. Filters: `--engine`, `--model`, `--session-type`, `--subagent-type`, `--since`, `--cwd`, `--limit`, `--sort`, `--all`, `--skip-subagents` |
-| `gaal inspect <id>` | Session detail. Files, commands, subagents, token breakdown. `--tokens` for full accounting, `--trace` for turn-by-turn |
-| `gaal who <verb> <target>` | Attribution. Verbs: `read`, `wrote`, `ran`, `touched`, `changed`, `deleted`. `--since`, `--limit` |
-| `gaal search <query>` | BM25 full-text search over all indexed facts. `--limit`, `--since` |
-| `gaal recall [topic]` | Ranked handoff retrieval. `--id` for a specific session, `--format brief\|full`, `--limit` |
-| `gaal resolve <id>` | Short ID to JSONL path, transcript path, handoff path, engine, type, model |
-| `gaal transcript <id>` | Session transcript as rendered markdown. `--stdout` dumps inline, otherwise returns the file path |
-| `gaal activity` | Source-backed transcript slices across a time window. Historical/indexed; not live monitoring |
-
-### Generate
-
-| Command | What it does |
-|---------|-------------|
-| `gaal create-handoff <id>` | LLM-powered handoff extraction. Costs $. Requires agent-mux |
-
-### Identity
-
-| Command | What it does |
-|---------|-------------|
-| `gaal salt` | Emit a unique content token for self-identification |
-| `gaal find-salt <token>` | Locate the JSONL containing that token, return enriched session metadata |
-
-### Maintain
-
-| Command | What it does |
-|---------|-------------|
-| `gaal index backfill` | Incremental scan for new/modified sessions. Per-engine mtime cursors skip unchanged files before discovery I/O |
-| `gaal index reindex` | Re-parse all indexed sessions from source JSONL |
-| `gaal index prune` | Remove entries for sessions whose JSONL no longer exists on disk |
-| `gaal index status` | Index statistics: session counts, fact counts, engine breakdown |
-| `gaal index recover-orphans` | Find and index subagent JSONL files not linked to any parent |
-| `gaal tag add <id> <tag>` | Tag a session |
-| `gaal tag remove <id> <tag>` | Remove a tag |
-| `gaal tag ls <id>` | List tags on a session |
-
-### Full CLI
-
-```
-Agent session observability CLI
-
-Usage: gaal [OPTIONS] <COMMAND>
-
-Commands:
-  ls              Fleet view across sessions
-  inspect         Session details with optional focused views
-  transcript      Get session transcript markdown
-  activity        Render source-backed transcript slices across a time window
-  who             Inverted query: which session did X to Y
-  search          Full-text search over indexed facts
-  recall          Semantic session retrieval
-  resolve         Resolve a short session ID to paths and metadata
-  salt            Generate a random salt token for session identification
-  find-salt       Find the first JSONL file containing the provided salt token
-  create-handoff  Generate/create a session handoff markdown via LLM extraction
-  index           Index maintenance and backfill operations
-  tag             Apply or remove tags on a session
-
-Options:
-  -H, --human    Human-readable output (otherwise JSON)
-  -h, --help     Print help
-  -V, --version  Print version
+```bash
+gaal ls -H --limit 3
 ```
 
----
+```text
+ID        Type        Task            Engine  Started      Duration  Tokens    Peak  Tools  Model    CWD
+--------  ----------  --------------  ------  -----------  --------  --------  ----  -----  -------  -------------
+3c18caec  [worker]    Rewrite REA...  codex   today 15:56  55s       25K / 2K  43K   16     gpt-5.5  agent-project
+4a17843a  [explorer]  Audit CLI h...  codex   today 15:50  3m 10s    99K / 8K  114K  47     gpt-5.5  agent-project
+bd914364  [worker]    Fix handof...   codex   today 15:50  2m 26s    51K / 6K  54K   31     gpt-5.5  agent-project
+```
+
+Resolve a session:
+
+```bash
+gaal resolve 3c18caec -H
+```
+
+```text
+Session:    3c18caec (gpt-5.5, worker)
+JSONL:      ~/.codex/sessions/2026/06/22/rollout-...-3c18caec.jsonl
+Transcript: ~/.gaal/data/codex/sessions/2026/06/22/3c18caec.md [ok]
+Handoff:    ~/.gaal/data/codex/handoffs/2026/06/22/3c18caec.md [not generated]
+```
+
+Preview handoff generation:
+
+```bash
+gaal create-handoff latest --dry-run
+```
+
+```json
+[
+  {
+    "session_id": "3c18caec",
+    "status": "dry_run",
+    "provider": "agent-mux",
+    "provider_supported": true,
+    "estimated_llm_calls": 1,
+    "side_effects": {
+      "spawn_provider_worker": false,
+      "spend_tokens": false,
+      "write_handoff_markdown": false,
+      "upsert_db_rows": false,
+      "index_jsonl": false
+    }
+  }
+]
+```
+
+On the author's local machine during release prep, `gaal index status` reported
+about 19k sessions, 700k+ indexed facts, and 1k+ handoffs. That is real-world
+scale, not a benchmark promise and not a demo dataset requirement.
 
 ## Architecture
 
-```
-Session files on disk
-  -> discovery/ (scan ~/.claude/projects/, ~/.codex/, and ~/.gemini/tmp/)
-  -> parser/ (Claude/Codex/Gemini parsers -> events -> facts)
-  -> db/ (SQLite for structured data + Tantivy for FTS)
-  -> commands/ (query DB and Tantivy)
-  -> output/ (JSON or human-readable tables)
+```text
+local agent traces
+  -> discovery
+  -> parser per engine
+  -> normalized sessions + facts
+  -> SQLite + Tantivy
+  -> CLI commands
+  -> JSON or human output
 ```
 
-**Four-engine.** Claude Code, Codex, Gemini CLI, and Hermes Agent each use different session formats (JSONL, JSON, or SQLite). Gaal has a dedicated adapter for each, normalizes all four into the same fact model, and exposes one query surface. You never need to know which engine produced a session -- `ls`, `inspect`, `who`, `search`, and `recall` work the same across all engines.
+Gaal currently indexes:
 
-**Session taxonomy.** Three types, deterministically classified from JSONL structure:
+- Claude Code JSONL traces
+- Codex JSONL traces
+- Gemini CLI JSON session files
+- Hermes Agent SQLite session stores, experimentally
+
+Hermes support is useful but cautious. It has been tested against one real
+installation/version plus sanitized fixtures; broader Hermes layouts should be
+treated as compatibility work until there are fixtures for them.
+
+The database stores structured session metadata and extracted facts. Tantivy
+handles BM25 full-text search. Rendered transcripts and generated handoffs live
+as markdown files under `~/.gaal/data/{engine}/...`.
+
+Session classification is deterministic:
 
 | Type | Meaning |
-|------|---------|
-| `standalone` | Normal session, no subagents |
-| `coordinator` | Parent session that spawned subagents via Agent tool |
-| `subagent` | Child session spawned by a coordinator |
+| --- | --- |
+| `standalone` | Normal session, no known child agent sessions |
+| `coordinator` | Parent session that spawned child agent sessions |
+| `subagent` | Child session spawned by a parent |
 
-Coordinator-subagent relationships are indexed from two sources: parent `toolUseResult` blocks (fleet-level metadata) and child JSONL files (full turn-by-turn trace). Attribution via `who` traces through both.
+Attribution follows those relationships, so `gaal who wrote path/to/file` can
+show both the child session and the parent chain when the source traces expose
+that link.
 
-**Output modes.** JSON by default -- stable, composable with `jq`, assertable with `jq -e`. `-H` switches to human-readable tables with adaptive column widths. Agents use JSON. Humans use `-H`.
+## What It Does Not Do
 
----
+- It does not upload your traces for core indexing or search.
+- It does not sanitize secrets out of source logs for you.
+- It does not monitor live processes or act as a daemon.
+- It does not tail sessions in real time; use normal shell tools for that.
+- It does not make every session worth preserving. Handoffs are for sessions
+  that matter.
+- It does not promise broad Hermes compatibility yet.
 
-## What gaal Does NOT Do
+If a monitoring feature looks conspicuously absent, there is a decent chance it
+was removed because local traces were the more reliable source of truth.
 
-Deliberately excluded. These were built, tested, and removed because they caused more problems than they solved.
+## Command Reference
 
-| Excluded | Why |
-|----------|-----|
-| Process monitoring (`gaal active`) | Too fragile. PID-based session tracking broke across reparenting, SSH, tmux, and container boundaries |
-| Live tailing (`--live`, `--watch`) | Gaal is a query tool, not a daemon. Tailing JSONL is better done with `tail -f` |
-| Stuck/loop detection | Heuristic garbage. Wrong more often than right. 50+ edge cases for near-zero value |
-| Velocity / context % | Calculated metrics were unreliable and misleading. Removed rather than shipped lies |
-| PID-based parent-child linking | 1 out of 2,433 sessions ever linked via PID. Replaced by the salt protocol |
+Run `gaal --help` and `gaal <command> --help` for the full current contract.
 
-If a monitoring feature seems missing, it was probably here once and got killed for cause.
-`gaal activity` is historical/index-backed rendering; it does not inspect running processes or imply live status.
+### Query
 
----
+| Command | Purpose |
+| --- | --- |
+| `gaal ls` | Fleet view across sessions. Useful filters include `--engine`, `--session-type`, `--subagent-type`, `--since`, `--before`, `--cwd`, `--tag`, `--sort`, `--limit`, `--aggregate`, `--all`, and `--skip-subagents`. |
+| `gaal inspect <id>` | Session details. Focus with `--files`, `--errors`, `--commands`, `--git`, `--tokens`, `--trace`, `--source`, `--ids`, or `--tag`. |
+| `gaal transcript <id>` | Render or locate session transcript markdown. Use `--stdout` to print the markdown. |
+| `gaal activity` | Render source-backed transcript slices across a time window. Filters include `--since`, `--before`, `--engine`, `--cwd`, `--session`, and `--skip-subagents`. |
+| `gaal who <verb> <target>` | Attribution query. Verbs: `read`, `wrote`, `ran`, `touched`, `changed`, `deleted`. |
+| `gaal search <query>` | Full-text search over indexed facts. Filter with `--since`, `--cwd`, `--engine`, `--field`, and `--limit`. |
+| `gaal recall <query>` | Search generated handoffs. Use `--id <id>` for direct lookup, `--format` for output shape, and `--substance` to filter low-signal handoffs. |
+| `gaal resolve <id>` | Resolve a short session ID to source trace, transcript, handoff path, engine, type, and related metadata. |
 
-## Error Design
+### Continuity
 
-Errors are structured for agent self-recovery. Every error message includes what went wrong, a working example, and a hint for what to try next.
+| Command | Purpose |
+| --- | --- |
+| `gaal salt` | Emit a unique token for self-identification. |
+| `gaal find-salt <token>` | Find the Claude Code or Codex JSONL file containing that token and return enriched session metadata when indexed. |
+| `gaal create-handoff <id>` | Generate a handoff markdown artifact through the configured backend. Use `--dry-run` first. Agent-mux is the default supported backend for real execution. |
+| `gaal create-handoff --jsonl <path>` | Generate from an explicit JSONL file path. Useful after `find-salt`. |
+| `gaal create-handoff --batch --since 1d --min-turns 3 --dry-run` | Preview batch handoff candidates before generating anything. |
 
-```bash
-gaal who badverb test
-```
+### Maintain
 
-```json
-{
-  "error": "Unrecognized verb `badverb`. Valid verbs: read, wrote, ran, touched, changed, deleted.",
-  "example": "gaal who ran cargo --since 7d -H",
-  "hint": "Pick one of the listed verbs, then optionally provide a target to narrow the match."
-}
-```
-
-Exit codes are stable contracts:
-
-| Code | Meaning |
-|------|---------|
-| `0` | Success |
-| `1` | No results matched |
-| `2` | Ambiguous session ID (multiple matches) |
-| `3` | Session not found |
-| `10` | No index (run `gaal index backfill`) |
-| `11` | Parse error (bad input) |
-
-An agent encountering any error can parse the JSON, extract the example, and self-correct. No cryptic failures.
-
----
-
-## Scale
-
-```bash
-gaal index status
-```
-
-```json
-{
-  "sessions_total": 11366,
-  "sessions_by_engine": { "claude": 7861, "codex": 3505 },
-  "facts_total": 372400,
-  "handoffs_total": 895,
-  "db_size_bytes": 431050752,
-  "oldest_session": "2026-01-08",
-  "newest_session": "2026-03-30T18:56:24.949Z"
-}
-```
-
-411 MB SQLite database. 82 days of sessions from two engines. Full backfill from cold takes under 2 minutes. Incremental indexing runs in seconds — per-engine mtime cursors in the `meta` table skip unmodified session files before any discovery I/O, so steady-state runs only touch files that actually changed. Queries return in single-digit milliseconds.
-
-If a backfill cursor ever gets stuck, force a full rescan with:
-
-```bash
-sqlite3 ~/.gaal/index.db "DELETE FROM meta WHERE key LIKE 'backfill:%'"
-```
-
----
-
-## Built With
-
-- [Rust](https://www.rust-lang.org/) (edition 2021, stable toolchain)
-- [rusqlite](https://github.com/rusqlite/rusqlite) (bundled SQLite)
-- [tantivy](https://github.com/quickwit-oss/tantivy) (BM25 full-text search)
-- [clap](https://github.com/clap-rs/clap) (CLI parsing, derive mode)
-- [serde](https://serde.rs/) + [serde_json](https://github.com/serde-rs/json)
-
-No async runtime. Synchronous by design.
+| Command | Purpose |
+| --- | --- |
+| `gaal index backfill` | Incrementally index discovered sessions. Supports `--engine`, `--since`, `--force`, `--with-markdown`, and `--output-dir`. |
+| `gaal index status` | Show index health and counts. |
+| `gaal index reindex <id>` | Force re-index of one session. |
+| `gaal index prune --before <date>` | Remove old facts before a date. |
+| `gaal index import-eywa` | Import legacy handoff index data. |
+| `gaal index recover-orphans` | Recover orphaned subagent files whose parent trace was deleted. |
+| `gaal tag <id> <tag>` | Add a local tag to a session. |
+| `gaal tag <id> --remove <tag>` | Remove a local tag from a session. |
+| `gaal tag ls` | List known tags. |
 
 ## Docs
 
-Full documentation lives in [`docs/`](./docs/):
+Full docs live in [`docs/`](./docs/):
 
 - [Getting started](./docs/getting-started.md)
 - [Architecture](./docs/architecture.md)
@@ -458,10 +329,16 @@ Full documentation lives in [`docs/`](./docs/):
 - [Agent guide](./docs/agent-guide.md)
 - [Formats and exit codes](./docs/formats.md)
 
+## Built With
+
+- [Rust](https://www.rust-lang.org/) edition 2021
+- [rusqlite](https://github.com/rusqlite/rusqlite)
+- [tantivy](https://github.com/quickwit-oss/tantivy)
+- [clap](https://github.com/clap-rs/clap)
+- [serde](https://serde.rs/) and [serde_json](https://github.com/serde-rs/json)
+
+No async runtime. Synchronous by design.
+
 ## License
 
-MIT -- [Nick Oak](https://nickoak.com), 2026
-
----
-
-Built by [Nick Oak](https://nickoak.com)
+MIT. See [LICENSE](LICENSE).

@@ -14,7 +14,7 @@
 - **Hermes Agent engine support.** Gaal now discovers, parses, indexes, searches, resolves, renders transcripts for, and dry-run plans handoffs for Hermes sessions from `~/.hermes/state.db`.
 - **Hermes transcript and handoff paths use full session IDs.** Hermes date-prefixed IDs collide under first-8 aliases, so derived artifacts preserve the full sanitized Hermes ID.
 - **Hermes sanitized SQLite fixtures.** Local tests cover CLI, Telegram, cron, tool-call, and parent-linked continuation session shapes without committing private Hermes content.
-- **Dad-Mac Hermes scheduling path.** A user LaunchAgent can run `gaal index backfill --engine hermes --with-markdown` every minute without touching Hermes services or config.
+- **Hermes scheduling path.** A user LaunchAgent can run `gaal index backfill --engine hermes --with-markdown` every minute without touching Hermes services or config.
 
 ### Fixed
 - **Hermes tool result rendering.** Hermes transcripts now include generic `tool` result bodies with truncation instead of only showing tool-call annotations.

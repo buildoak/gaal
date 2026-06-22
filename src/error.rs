@@ -6,6 +6,9 @@ pub enum GaalError {
     /// No matching results were found.
     #[error("no results")]
     NoResults,
+    /// The index exists but contains no indexed sessions yet.
+    #[error("no sessions indexed")]
+    NoSessionsIndexed,
     /// The provided ID matched multiple sessions.
     #[error("ambiguous id: {0}")]
     AmbiguousId(String),
@@ -40,6 +43,7 @@ impl GaalError {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::NoResults => 1,
+            Self::NoSessionsIndexed => 1,
             Self::AmbiguousId(_) => 2,
             Self::NotFound(_) => 3,
             Self::NoIndex => 10,
@@ -51,6 +55,11 @@ impl GaalError {
     fn fields(&self, command: &str) -> (String, String, String) {
         match self {
             Self::NoResults => no_results_message(command),
+            Self::NoSessionsIndexed => (
+                "No sessions are indexed yet.".to_string(),
+                "gaal index backfill".to_string(),
+                "Run `gaal index backfill`, then `gaal ls -H`. If backfill reports `\"indexed\": 0`, start an agent session or set `HOME`/`GAAL_HOME` to the profile that contains your agent logs.".to_string(),
+            ),
             Self::AmbiguousId(id) => (
                 format!("Multiple sessions match `{id}`."),
                 command_example(command),

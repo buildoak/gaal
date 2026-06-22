@@ -11,12 +11,16 @@
 
 ## Stderr Format
 
-On non-zero exit, stderr contains a full JSON error envelope:
+After CLI argument parsing succeeds, non-zero exits emit a JSON error envelope:
 ```json
 {"ok": false, "error": "descriptive message", "hint": "what to try next", "example": "gaal <correct invocation>", "exit_code": N}
 ```
 
 All five fields are always present: `ok` (always `false`), `error`, `hint`, `example`, and `exit_code`.
+
+Argument parser failures, such as unknown flags or missing required clap
+subcommands, may be plain-text clap errors with exit code `2`. Do not assume
+those parser errors are JSON.
 
 ## Script Pattern
 

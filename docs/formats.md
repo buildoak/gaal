@@ -31,7 +31,7 @@ Use `gaal recall ... --format <name>` to control how much handoff material is re
 
 ## JSON Error Format
 
-All errors include these fields:
+After CLI parsing succeeds, command errors include these fields:
 
 ```json
 {"ok": false, "error": "...", "hint": "...", "example": "...", "exit_code": N}
@@ -42,6 +42,8 @@ Human mode (`-H`) routes through `format_human()` which renders:
 - What went wrong: `<specific problem>`
 - Example: `<correct invocation>`
 - Hint: `<what to try next>`
+
+Argument parsing errors are emitted by the CLI parser before Gaal's JSON error formatter runs, so they may be plain text rather than this JSON shape.
 
 ## Exit Code Reference
 
@@ -232,7 +234,7 @@ Each spawned child rollout should carry a `session_meta` record near the head of
 its JSONL:
 
 ```json
-{"type":"session_meta","payload":{"id":"019d261e-6e93-78d0-8f2c-29279b9e8252","forked_from_id":"019d261d-dffa-7d21-b0df-5893b4ca9aaf","source":{"subagent":{"role":"worker","nickname":"Atlas"}},"model":"gpt-5.4","cwd":"/Users/otonashi/thinking/building/gaal"}}
+{"type":"session_meta","payload":{"id":"019d261e-6e93-78d0-8f2c-29279b9e8252","forked_from_id":"019d261d-dffa-7d21-b0df-5893b4ca9aaf","source":{"subagent":{"role":"worker","nickname":"Atlas"}},"model":"gpt-5.4","cwd":"/home/alex/src/gaal"}}
 ```
 
 Interpretation:

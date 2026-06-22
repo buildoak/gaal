@@ -170,7 +170,7 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
         summaries.push(build_summary(&conn, row, now)?);
     }
     if summaries.is_empty() {
-        return Err(GaalError::NoResults);
+        return Err(no_sessions_error(&conn)?);
     }
 
     // Apply noise filter: hide sessions with 0 tool calls and <30s duration.
@@ -194,7 +194,7 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
     };
 
     if summaries.is_empty() {
-        return Err(GaalError::NoResults);
+        return Err(no_sessions_error(&conn)?);
     }
 
     let shown = summaries.len();
@@ -244,6 +244,21 @@ pub fn run(args: LsArgs) -> Result<(), GaalError> {
     }
 
     Ok(())
+}
+
+fn no_sessions_error(conn: &Connection) -> Result<GaalError, GaalError> {
+    let total = count_sessions(
+        conn,
+        &ListFilter {
+            include_subagents: true,
+            ..Default::default()
+        },
+    )?;
+    if total == 0 {
+        Ok(GaalError::NoSessionsIndexed)
+    } else {
+        Ok(GaalError::NoResults)
+    }
 }
 
 fn requires_precise_aggregate(args: &LsArgs) -> bool {

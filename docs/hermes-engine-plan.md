@@ -1,13 +1,11 @@
-# Hermes Engine Plan
+# Hermes Engine Notes
 
-Status: planned
-Owner: Jenkins coordinator
-Target branch: `feature/hermes-engine`
-Primary gate: Hermes becomes Gaal engine #4 without regressing Claude, Codex, or Gemini.
+Status: implemented in 0.3.0; still experimental across unobserved Hermes installations.
+Primary gate: Hermes remains Gaal engine #4 without regressing Claude, Codex, or Gemini.
 
 ## Objective
 
-Add Hermes Agent support to Gaal as a native fourth engine adapter.
+Hermes Agent support is implemented as a native fourth engine adapter. This note records the design constraints, fixture policy, and verification gates that keep the adapter honest.
 
 The implementation should preserve Gaal's current architecture:
 
@@ -24,9 +22,9 @@ Hermes-specific behavior belongs behind the Hermes adapter boundary. The shared 
 
 ## Current Evidence
 
-Hermes is not installed locally in the Gaal development environment. The real Hermes runtime currently lives on dad's Mac mini and is reachable over SSH.
+Hermes support was first validated against one private Hermes Agent installation and sanitized local fixtures. Treat that as useful evidence, not a universal compatibility claim.
 
-Observed remote Hermes surfaces:
+Observed private-install surfaces:
 
 - Canonical state: `~/.hermes/state.db`
 - Main tables: `sessions`, `messages`, `messages_fts`
@@ -47,23 +45,23 @@ Local Gaal surfaces:
 
 Use a SQLite-primary native Hermes adapter.
 
-Do not make Gaal depend on live SSH for normal development or tests. Use dad's Mac as the evidence source, then build sanitized local fixtures.
+Do not make Gaal depend on live remote access for normal development or tests. Use a private installation as the evidence source only when needed, then build sanitized local fixtures.
 
 ```text
-dad Mac ~/.hermes/state.db
+private Hermes ~/.hermes/state.db
   -> read-only schema/sample scout
   -> sanitized fixture generator
   -> local fixture DB/JSON
   -> Hermes adapter implementation
   -> local temp GAAL_HOME tests
-  -> optional live install and verification on dad Mac
+  -> optional live install and verification on a private test host
 ```
 
 Rejected for now:
 
 - Generic Gaal trace format first: cleaner long term, but too much abstraction before value.
 - Exporting Hermes as fake Claude/Codex logs: fastest but leaks false provenance and couples Hermes to the wrong parser.
-- Directly indexing dad's live Hermes DB from local Gaal: too brittle and privacy-sensitive.
+- Directly indexing a live private Hermes DB from a development machine: too brittle and privacy-sensitive.
 
 ## ID Rule
 
@@ -142,16 +140,16 @@ Expected test/fixture changes:
 - integration tests under temp `GAAL_HOME`
 - AX layer entries for invalid `--engine hermes` or not-found Hermes IDs if new error paths appear
 
-## Remote Fixture Protocol
+## Fixture Protocol
 
-Remote commands must be read-only unless the user explicitly authorizes mutation.
+Commands against a private Hermes installation must be read-only unless the operator explicitly authorizes mutation.
 
 First pass:
 
 ```bash
-ssh dad 'sqlite3 ~/.hermes/state.db ".schema sessions"'
-ssh dad 'sqlite3 ~/.hermes/state.db ".schema messages"'
-ssh dad 'sqlite3 ~/.hermes/state.db "SELECT source, COUNT(*) FROM sessions GROUP BY source;"'
+sqlite3 ~/.hermes/state.db ".schema sessions"
+sqlite3 ~/.hermes/state.db ".schema messages"
+sqlite3 ~/.hermes/state.db "SELECT source, COUNT(*) FROM sessions GROUP BY source;"
 ```
 
 Fixture set:
@@ -193,7 +191,7 @@ Gate:
 - `gaal create-handoff <hermes-id> --dry-run`
 - existing Claude/Codex/Gemini tests still pass
 - release binary built with `cargo build --release`
-- optional live dad-Mac install and smoke test passes after explicit authorization
+- optional live private-host install and smoke test passes after explicit authorization
 
 Budget:
 
@@ -211,7 +209,7 @@ Verifier:
 - `cargo test`
 - `cargo build --release`
 - `./tests/run-all.sh` when feasible
-- dad-Mac live smoke test after install
+- private-host live smoke test after install
 
 Selection rule:
 
@@ -220,7 +218,7 @@ Selection rule:
 
 Stop rule:
 
-- stop when all local gates pass and live dad-Mac verification has either passed or is explicitly blocked
+- stop when all local gates pass and live private-host verification has either passed or is explicitly blocked
 
 ## Worker Routing
 
@@ -228,7 +226,7 @@ Use heavy subagents for the parts that are evidence-heavy or independently verif
 
 Recommended branches:
 
-1. Remote Hermes scout
+1. Hermes installation scout
    - read-only SSH
    - output schema, sample keys, fixture candidates, privacy risks
    - no raw message dumps
@@ -256,22 +254,22 @@ Recommended branches:
 
 The coordinator owns synthesis, merge decisions, final verification, and commits.
 
-## Dad-Mac Install Gate
+## External Install Gate
 
-Installing Gaal on dad's Mac is an external machine mutation. It requires explicit authorization in the `/goal` prompt or a later user approval.
+Installing Gaal on another machine is an external mutation. It requires explicit authorization.
 
 Target live gate after local tests pass:
 
 ```bash
-ssh dad 'gaal --version'
-ssh dad 'gaal index backfill --engine hermes'
-ssh dad 'gaal ls --engine hermes -H --limit 5'
-ssh dad 'gaal inspect <known-hermes-id> -H'
-ssh dad 'gaal transcript <known-hermes-id>'
-ssh dad 'gaal create-handoff <known-hermes-id> --dry-run -H'
+gaal --version
+gaal index backfill --engine hermes
+gaal ls --engine hermes -H --limit 5
+gaal inspect <known-hermes-id> -H
+gaal transcript <known-hermes-id>
+gaal create-handoff <known-hermes-id> --dry-run -H
 ```
 
-Installation should preserve dad's existing Hermes runtime:
+Installation should preserve the existing Hermes runtime:
 
 - no service restarts unless explicitly authorized
 - no edits to Hermes config
@@ -288,7 +286,6 @@ Final report should include:
 - files changed
 - fixture provenance and sanitization summary
 - local verification commands and results
-- dad-Mac install commands and results, if authorized
+- private-host install commands and results, if authorized
 - remaining risks
 - exact follow-up if live verification is blocked
-

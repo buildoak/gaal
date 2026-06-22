@@ -3,3 +3,10 @@
 _workbench/
 .gaal/
 tmp/
+.env
+.env.*
+!.env.example
+!.env.sample
+*.local
+*.local.*
+.DS_Store

@@ -1,6 +1,6 @@
 # Verb Reference — gaal
 
-Verified flag reference for the currently installed `gaal` binary.
+Verified flag reference for the current `gaal` binary.
 
 The goal here is accuracy over exhaustiveness. If a flag or output shape is
 not listed below, do not assume it exists just because an older doc mentioned
@@ -18,7 +18,7 @@ Current top-level commands:
 4. `activity` — source-backed historical activity slices
 5. `who` — inverted queries
 6. `search` — full-text search over indexed facts
-7. `recall` — semantic session retrieval
+7. `recall` — handoff retrieval for continuity
 8. `salt` — self-identification token
 9. `find-salt` — JSONL discovery by salt
 10. `create-handoff` — LLM extraction into handoff markdown
@@ -38,7 +38,7 @@ Fleet view across sessions.
 
 | Flag | Meaning |
 |------|---------|
-| `--engine <ENGINE>` | Filter by `claude` or `codex` |
+| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, or `hermes` |
 | `--session-type <TYPE>` | Filter by `coordinator`, `standalone`, or `subagent` |
 | `--subagent-type <TYPE>` | Filter by subagent type (e.g. `gsd-heavy`, `gsd-coordinator`, `Explore`) |
 | `--since <SINCE>` | Lower bound; supports durations/dates such as `1d` or `2026-03-01` |
@@ -264,7 +264,7 @@ Semantic session retrieval. This is the eywa replacement surface.
 
 ```bash
 gaal recall "peekaboo" --format brief --limit 5
-gaal recall --format eywa
+gaal recall --id latest --format eywa
 ```
 
 ---
@@ -279,10 +279,10 @@ LLM-powered handoff generation.
 |------|---------|
 | `[ID]` | Session ID or `today` |
 | `--jsonl <JSONL>` | Explicit JSONL path |
-| `--engine <ENGINE>` | Extraction engine: `claude` or `codex` |
+| `--engine <ENGINE>` | Extraction engine: `claude`, `codex`, `gemini`, or `hermes` |
 | `--model <MODEL>` | Extraction model |
 | `--prompt <PROMPT>` | Custom prompt path |
-| `--provider <PROVIDER>` | `agent-mux` or `openrouter` |
+| `--provider <PROVIDER>` | `agent-mux` or `openrouter`; `agent-mux` is the supported real-execution provider unless dry-run reports another provider as supported |
 | `--format <FORMAT>` | Output format; default is `eywa-compatible` |
 | `--batch` | Batch mode |
 | `--since <SINCE>` | Lower bound for batch candidates |
@@ -390,7 +390,7 @@ Resolve a short session ID to full session paths and metadata.
 
 | Flag | Meaning |
 |------|---------|
-| `--engine <ENGINE>` | Filter by `claude` or `codex` to disambiguate |
+| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, or `hermes` to disambiguate |
 
 ### JSON Output
 

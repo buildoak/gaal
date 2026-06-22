@@ -1,5 +1,6 @@
 # Gaal configuration — agent session observability
-# Copy to ~/.gaal/config.toml or run 'gaal index init'
+# Copy to ~/.gaal/config.toml if you want to override built-in defaults.
+# Core indexing and query commands work without agent-mux.
 
 # Default output directory for session markdown files (used by `gaal index backfill`).
 # When set, backfill writes markdowns here without needing --output-dir.
@@ -17,17 +18,16 @@ timeout_secs = 120
 # Path to extraction prompt (relative to ~/.gaal/)
 prompt = "prompts/handoff.md"
 # Output format identifier
-format = "eywa"
+format = "eywa-compatible"
 
 [agent-mux]
-# Binary name or absolute path to agent-mux
+# Optional binary name or absolute path used by `gaal create-handoff`.
+# Agent-mux is not required for indexing, search, inspect, or transcript commands.
 path = "agent-mux"
-role = "handoff-extractor"
-# variant = ""
+# Optional dispatch profile passed to agent-mux with -P when your install provides one.
 timeout_secs = 120
 # effort = "high"
-# Override cwd for dispatch — agent-mux v2 resolves skills relative to cwd.
-# Set to a directory with .claude/skills/ containing role-referenced skills.
+# Override cwd for dispatch when the default session cwd is not suitable.
 # cwd = "/path/to/project/with/skills"
 
 [stuck]

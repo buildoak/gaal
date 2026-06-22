@@ -9,6 +9,23 @@ homepage = "https://github.com/buildoak/gaal"
 keywords = ["ai", "agents", "observability", "claude", "codex"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
+exclude = [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "BACKLOG.md",
+    "_archive/**",
+    "tests/ax/**",
+    "defaults/migration-notes.md",
+    ".gaal/**",
+    ".tmp/**",
+    "_workbench/**",
+    "tmp/**",
+    ".env",
+    ".env.*",
+    "*.local",
+    "*.local.*",
+    ".DS_Store",
+]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

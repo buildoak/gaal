@@ -509,6 +509,7 @@ fn recall_scoring_produces_expected_ordering() {
 #[test]
 fn exit_code_mapping() {
     assert_eq!(GaalError::NoResults.exit_code(), 1);
+    assert_eq!(GaalError::NoSessionsIndexed.exit_code(), 1);
     assert_eq!(GaalError::AmbiguousId("abc".to_string()).exit_code(), 2);
     assert_eq!(GaalError::NotFound("x".to_string()).exit_code(), 3);
     assert_eq!(GaalError::NoIndex.exit_code(), 10);
@@ -516,6 +517,19 @@ fn exit_code_mapping() {
         GaalError::ParseError("bad input".to_string()).exit_code(),
         11
     );
+}
+
+#[test]
+fn empty_index_error_teaches_first_run_recovery() {
+    let rendered = GaalError::NoSessionsIndexed.format_human("ls");
+
+    assert!(rendered.contains("No sessions are indexed yet."));
+    assert!(rendered.contains("gaal index backfill"));
+    assert!(rendered.contains("gaal ls -H"));
+    assert!(rendered.contains("HOME"));
+    assert!(rendered.contains("GAAL_HOME"));
+    assert!(!rendered.contains("/Users/"));
+    assert!(!rendered.contains("otonashi"));
 }
 
 #[test]

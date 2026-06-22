@@ -6,7 +6,7 @@
 
 | Eywa command | Gaal equivalent |
 |-------------|----------------|
-| `eywa get` | `gaal recall --format eywa` |
+| `eywa get` | `gaal recall --id latest --format eywa` |
 | `eywa get "query"` | `gaal recall "query" --format eywa` |
 | `eywa get "topic" --days-back 30 --max 5` | `gaal recall "topic" --days-back 30 --limit 5 --format eywa` |
 | `eywa extract` | `gaal create-handoff` |
@@ -35,7 +35,7 @@ For new integrations, prefer `--format brief` (default) or `--format summary`.
 
 Key differences between `eywa` and `gaal`:
 
-- `gaal` indexes Claude, Codex, and Gemini sessions (`eywa` was Claude-only)
+- `gaal` indexes Claude, Codex, Gemini, and Hermes sessions (`eywa` was Claude-only)
 - `gaal` uses SQLite + Tantivy instead of `eywa`'s flat-file approach
 - Handoff generation uses `agent-mux` by default (`eywa` used direct LLM calls)
 - `gaal`'s recall is BM25-ranked over handoff content, more accurate than `eywa`'s keyword matching

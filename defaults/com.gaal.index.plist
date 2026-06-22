@@ -8,7 +8,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>/opt/homebrew/bin/gaal index backfill 2>/dev/null; /opt/homebrew/bin/gaal handoff --batch --since 1d --min-turns 3 2>/dev/null</string>
+        <string>/opt/homebrew/bin/gaal index backfill 2>/dev/null</string>
     </array>
     <key>StartInterval</key>
     <integer>14400</integer>

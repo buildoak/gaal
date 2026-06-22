@@ -42,7 +42,7 @@ Human:
 $ gaal inspect latest
 {
   "command_count": 11,
-  "cwd": "/Users/otonashi/thinking/building/gaal",
+  "cwd": "/home/alex/src/gaal",
   "duration_secs": 42,
   "ended_at": "2026-03-29T10:46:56.904Z",
   "engine": "codex",
@@ -101,7 +101,7 @@ Human:
 ```bash
 $ gaal transcript latest
 {
-  "path": "/Users/otonashi/.gaal/data/codex/sessions/2026/03/29/ab3f2e83.md",
+  "path": "/home/alex/.gaal/data/codex/sessions/2026/03/29/ab3f2e83.md",
   "size_bytes": 16034,
   "estimated_tokens": 4008,
   "warning": "~4K tokens. Recommend reading via subagent, not coordinator context."
