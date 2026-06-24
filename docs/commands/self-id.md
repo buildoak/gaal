@@ -27,7 +27,7 @@ GAAL_SALT_d0a6e1d5530bf6c9
 
 # `gaal find-salt`
 
-Purpose: scan Claude and Codex session logs and return the first file containing a salt token. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
+Purpose: scan Claude Code, Codex, and Antigravity brain JSONL session logs and return the first file containing a salt token in tool/action output. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
 
 ## Usage
 
@@ -38,13 +38,16 @@ gaal find-salt [OPTIONS] [SALT]
 ## Flags
 
 - `-H`, `--human`
+- `--engine <claude|codex|agy>` — restrict the salt scan to one JSONL-backed
+  source engine
 
 ## JSON Output
 
 When the session is indexed (has been processed by `gaal index backfill`):
 
-- `session_id` — raw filename-derived session identifier
-- `engine` — `claude` or `codex`
+- `session_id` — native source session identifier; agy uses the 8-character
+  brain UUID prefix
+- `engine` — `claude`, `codex`, or `agy`
 - `jsonl_path` — absolute path to the JSONL file
 - `indexed` — `true`
 - `model` — model name (e.g. `claude-opus-4-6`)
@@ -52,9 +55,9 @@ When the session is indexed (has been processed by `gaal index backfill`):
 - `session_type` — `standalone`, `coordinator`, or `subagent`
 - `last_event_at` — timestamp of most recent event
 - `turns` — total conversation turns
-- `total_tokens` — combined input + output tokens
-- `input_tokens` — input tokens only
-- `output_tokens` — output tokens only
+- `total_tokens` — combined input + output tokens when known
+- `input_tokens` — input tokens when known
+- `output_tokens` — output tokens when known
 - `transcript_path` — expected path to rendered transcript markdown
 - `transcript_exists` — whether the transcript file exists on disk
 - `handoff.exists` — whether a handoff has been generated
@@ -67,8 +70,9 @@ When not indexed:
 
 Notes:
 
-- The returned `session_id` is derived from the JSONL filename stem, so Codex and Claude shapes differ.
-- This command scans `~/.claude/projects/` and `~/.codex/`.
+- The returned `session_id` is derived from the native source identity. Agy uses the first 8 characters of the Antigravity brain UUID.
+- This command scans `~/.claude/projects/`, `~/.codex/`, and Antigravity brain `transcript_full.jsonl` / `transcript.jsonl` files.
+- Agy matching ignores user prompt echoes. The salt must appear in an executed action output record such as command output, file/search output, image-generation output, or an error message.
 - Enrichment is best-effort: if the DB is unavailable or the session is not indexed, the command still succeeds with the base 3 fields plus `"indexed": false`.
 
 ## Real Examples
@@ -119,13 +123,13 @@ gaal resolve [OPTIONS] [ID]
 | Flag | Description |
 | --- | --- |
 | `-H`, `--human` | Human-readable output (otherwise JSON) |
-| `--engine <claude|codex|gemini|hermes>` | Filter by engine to disambiguate |
+| `--engine <claude|codex|gemini|agy|hermes>` | Filter by engine to disambiguate |
 
 ## JSON Output
 
 - `session_id` — full session identifier from the index
 - `short_id` — first 8 characters of `session_id`
-- `engine` — `claude`, `codex`, `gemini`, or `hermes`
+- `engine` — `claude`, `codex`, `gemini`, `agy`, or `hermes`
 - `jsonl_path` — legacy field name for the resolved source artifact path
 - `transcript_path` — expected rendered transcript markdown path
 - `transcript_exists` — whether the transcript file exists on disk
@@ -179,7 +183,7 @@ Handoff:    ~/.gaal/data/claude/handoffs/2026/03/30/dc5e98dc.md [not generated]
 
 1. Run `gaal salt` and capture the emitted token.
 2. Echo that token into the live session so it is flushed into the session JSONL.
-3. Run `gaal find-salt <token>` — this now returns full session context including JSONL path, model, session type, token counts, transcript path, and handoff status.
+3. Run `gaal find-salt <token>` — this returns full indexed session context when available, including JSONL path, model, session type, token counts when known, transcript path, and handoff status.
 4. If a handoff is needed: `gaal create-handoff --jsonl <jsonl_path>`.
 
 These must be separate tool calls because `salt` output has to be written into the session log before `find-salt` scans for it. If `find-salt` runs before the tool result is flushed, discovery can miss the active session.

@@ -38,7 +38,7 @@ Fleet view across sessions.
 
 | Flag | Meaning |
 |------|---------|
-| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, or `hermes` |
+| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, `agy`, or `hermes` |
 | `--session-type <TYPE>` | Filter by `coordinator`, `standalone`, or `subagent` |
 | `--subagent-type <TYPE>` | Filter by subagent type (e.g. `gsd-heavy`, `gsd-coordinator`, `Explore`) |
 | `--since <SINCE>` | Lower bound; supports durations/dates such as `1d` or `2026-03-01` |
@@ -152,7 +152,7 @@ Source-backed historical activity slices across a time window.
 |------|---------|
 | `--since <SINCE>` | Lower bound; default `1d`; supports durations, dates, and RFC3339 |
 | `--before <BEFORE>` | Upper bound; default now; windows are `[since,before)` |
-| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, or `hermes` |
+| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, `agy`, or `hermes` |
 | `--cwd <CWD>` | Restrict by working directory substring |
 | `--session <ID>` | Render one resolved session only |
 | `--skip-subagents` | Hide subagent sessions |
@@ -180,6 +180,11 @@ gaal activity --session 9ad81c91 --since 2026-05-25 --before 2026-05-26
 ## 5. `who`
 
 Inverted query: which session did X to Y?
+
+`who` uses executed facts, not planned tool calls. For agy, planner records are
+not attribution evidence until a corresponding executed action record exists.
+Command success is tri-state; missing agy `exit_code` or `success` metadata is
+unknown, not success.
 
 ### Verbs
 
@@ -279,7 +284,7 @@ LLM-powered handoff generation.
 |------|---------|
 | `[ID]` | Session ID or `today` |
 | `--jsonl <JSONL>` | Explicit JSONL path |
-| `--engine <ENGINE>` | Extraction engine: `claude`, `codex`, `gemini`, or `hermes` |
+| `--engine <ENGINE>` | Extraction engine: `claude`, `codex`, `gemini`, `agy`, or `hermes` |
 | `--model <MODEL>` | Extraction model |
 | `--prompt <PROMPT>` | Custom prompt path |
 | `--provider <PROVIDER>` | `agent-mux` or `openrouter`; `agent-mux` is the supported real-execution provider unless dry-run reports another provider as supported |
@@ -367,12 +372,16 @@ gaal salt
 
 Find the first JSONL file containing the provided salt token.
 
+Scans Claude Code, Codex, and Antigravity brain JSONL logs. Agy matches only
+executed action output records and ignores user prompt echoes.
+
 ### Flags
 
 | Flag | Meaning |
 |------|---------|
 | `[SALT]` | Salt token to search for |
 | `-H, --human` | Human-readable output |
+| `--engine <ENGINE>` | Restrict scan to `claude`, `codex`, or `agy` |
 
 ### Example
 
@@ -390,7 +399,7 @@ Resolve a short session ID to full session paths and metadata.
 
 | Flag | Meaning |
 |------|---------|
-| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, or `hermes` to disambiguate |
+| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, `agy`, or `hermes` to disambiguate |
 
 ### JSON Output
 

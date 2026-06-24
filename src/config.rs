@@ -36,7 +36,7 @@ impl Default for LlmConfig {
     fn default() -> Self {
         Self {
             default_engine: "codex".to_string(),
-            default_model: "spark-high".to_string(),
+            default_model: "gpt-5.4-mini".to_string(),
             timeout_secs: 120,
         }
     }
@@ -84,7 +84,7 @@ impl Default for AgentMuxConfig {
             path: "agent-mux".to_string(),
             profile: None,
             timeout_secs: None,
-            effort: None,
+            effort: Some("xhigh".to_string()),
             cwd: None,
         }
     }
@@ -114,4 +114,22 @@ pub fn gaal_home() -> PathBuf {
     dirs::home_dir()
         .map(|path| path.join(".gaal"))
         .unwrap_or_else(|| PathBuf::from(".gaal"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LlmConfig;
+
+    #[test]
+    fn default_handoff_model_matches_current_agent_mux_codex_roster() {
+        let config = LlmConfig::default();
+        assert_eq!(config.default_engine, "codex");
+        assert_eq!(config.default_model, "gpt-5.4-mini");
+    }
+
+    #[test]
+    fn default_agent_mux_effort_is_xhigh_for_handoffs() {
+        let config = super::AgentMuxConfig::default();
+        assert_eq!(config.effort.as_deref(), Some("xhigh"));
+    }
 }

@@ -6,7 +6,7 @@
 
 Key components:
 
-- Parser: four-engine Claude/Codex/Gemini/Hermes session parsing
+- Parser: five-engine Claude/Codex/Gemini/Agy/Hermes session parsing
 - SQLite: canonical structured store for sessions, facts, handoffs, and tags
 - Tantivy: full-text search over indexed facts
 - Markdown renderer: transcript generation
@@ -39,10 +39,11 @@ src/
     runtime.rs         Shared command runtime (DB handle, config, output mode)
     mod.rs             Module declarations
 
-  parser/              Four-engine session parsing
+  parser/              Five-engine session parsing
     claude.rs          Claude session JSONL parser
     codex.rs           Codex session JSONL parser
     gemini.rs          Gemini CLI session JSON parser
+    agy.rs             Antigravity CLI session JSONL parser
     hermes.rs          Hermes Agent SQLite session parser
     facts.rs           Unified fact extraction (tool counting, error dedup, peak context)
     common.rs          Shared parser types and utilities
@@ -60,6 +61,7 @@ src/
     claude.rs          Claude project tree scanner (~/.claude/projects/)
     codex.rs           Codex session tree scanner (~/.codex/)
     gemini.rs          Gemini session scanner (~/.gemini/tmp/*/chats/)
+    agy.rs             Antigravity session scanner (~/.gemini/antigravity-cli/brain/)
     hermes.rs          Hermes state DB scanner (~/.hermes/state.db)
     discover.rs        Unified discovery orchestrator
     process.rs         Process-related utilities
@@ -98,7 +100,7 @@ engine source artifacts on disk
   -> output/ or render/
 ```
 
-The indexing and query path is: engine source artifacts on disk -> discovery/ -> parser/ -> db/ -> commands/ -> output/ or render/. Today that means Claude and Codex JSONL, Gemini JSON, and Hermes SQLite.
+The indexing and query path is: engine source artifacts on disk -> discovery/ -> parser/ -> db/ -> commands/ -> output/ or render/. Today that means Claude and Codex JSONL, Gemini JSON, Agy JSONL, and Hermes SQLite.
 
 ## Data Model
 
@@ -264,6 +266,50 @@ The Codex implementation therefore uses a two-source pattern specific to Codex:
    prompt and `agent_type`; `close_agent` yields terminal status; `wait_agent` records lifecycle
    progress even though it is not the primary identity source.
 
+## Agy Engine Model
+
+Agy is a native but experimental Gaal engine for Antigravity CLI traces. It
+does not require agent-mux for discovery, indexing, search, transcript
+rendering, or resolve.
+
+Discovery scans:
+
+`~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`
+
+If `transcript_full.jsonl` is absent, discovery falls back to `transcript.jsonl`
+in the same logs directory. The indexed agy session ID is the first 8
+characters of the brain UUID, matching Gemini-style short IDs. The full UUID is
+not stored as the primary session ID; it remains recoverable from the source
+path.
+
+Copied agy transcripts are detected by JSONL record shape, not only by native
+path. When a file is outside the brain directory, Gaal can still classify it as
+agy and fall back to content ID fields for the 8-character session ID when those
+fields exist.
+
+Fact extraction separates planned calls from executed actions. Agy
+`PLANNER_RESPONSE` tool calls help join intent to later results, but they are
+not attribution facts by themselves. `who`, search, activity, and file/command
+counts use executed agy records. Command success is tri-state: explicit
+`success` or `exit_code` values win, and missing agy status is unknown rather
+than success.
+
+Runtime support for agy is advisory. It uses `created_at` timestamps and
+executed action records to summarize recent activity; it is not a live process
+truth source.
+
+Optional agent-mux sidecar enrichment can fill model and missing cwd for agy
+when matching dispatch metadata exists. Gaal does not depend on agent-mux for
+native agy indexing or query workflows.
+
+Current caveats:
+
+- Gaal reads Antigravity transcript JSONL; it does not parse SQLite blobs for
+  agy.
+- Token/cost parity and SQLite/blob sidecars for agy are out of scope.
+- Image generation is indexed and rendered through normalized tool facts and
+  transcript evidence, not through image-file ingestion.
+
 ## Session Lifecycle
 
 The common operator workflow is:
@@ -290,9 +336,10 @@ Token accounting is parser-driven and model-aware:
 - Cache tokens are fully tracked as `cache_read_tokens` and `cache_creation_tokens`.
 - Peak context is the maximum of `input_tokens + cache_read_tokens + cache_creation_tokens` across all counted turns.
 - Model-aware cost estimation uses per-model pricing instead of one flat rate.
-- Tool counting includes Claude, Codex, Gemini, and Hermes tool uses.
+- Tool counting includes Claude, Codex, Gemini, Agy, and Hermes tool uses.
 - Usage deduplication differs by engine: Claude uses `dedup_key`, while Codex uses cumulative `total_tokens`.
 - Error deduplication uses `tool:{tool_use_id}` when available, otherwise `ts:{timestamp}|exit:{code}`.
+- Agy token/cost parity is not implemented.
 
 ## Storage Layout
 
@@ -309,6 +356,9 @@ Token accounting is parser-driven and model-aware:
       sessions/YYYY/MM/DD/<id>.md
       handoffs/YYYY/MM/DD/<id>.md
     gemini/
+      sessions/YYYY/MM/DD/<id>.md
+      handoffs/YYYY/MM/DD/<id>.md
+    agy/
       sessions/YYYY/MM/DD/<id>.md
       handoffs/YYYY/MM/DD/<id>.md
     hermes/

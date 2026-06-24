@@ -56,8 +56,9 @@ pub struct SessionRecord {
 pub struct CommandEntry {
     /// Command string.
     pub cmd: String,
-    /// Command exit code.
-    pub exit_code: i32,
+    /// Command exit code, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
     /// Timestamp of command execution.
     pub ts: String,
 }
@@ -69,8 +70,9 @@ pub struct ErrorEntry {
     pub tool: String,
     /// Command text or tool action summary.
     pub cmd: String,
-    /// Exit code for the failed action.
-    pub exit_code: i32,
+    /// Exit code for the failed action, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
     /// Truncated error snippet.
     pub snippet: String,
     /// Timestamp of error occurrence.

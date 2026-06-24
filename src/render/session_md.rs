@@ -16,7 +16,7 @@ use crate::parser::event::{
     ContentBlock as ParserContentBlock, EventKind, SessionEvent, ToolUseEvent,
 };
 use crate::parser::types::Engine;
-use crate::parser::{claude, codex, detect_engine, gemini, hermes};
+use crate::parser::{agy, claude, codex, detect_engine, gemini, hermes};
 
 // Dubai timezone: UTC+4.
 const DUBAI_OFFSET_SECS: i32 = 4 * 3600;
@@ -223,6 +223,7 @@ pub fn render_session_markdown(path: &Path) -> Result<String> {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
         Engine::Gemini => gemini::parse_events(path)?,
+        Engine::Agy => agy::parse_events(path)?,
         Engine::Hermes => {
             bail!("Hermes sessions require a session id; use render_hermes_session_markdown")
         }
@@ -246,6 +247,7 @@ pub fn render_session_markdown_with_db(
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
         Engine::Gemini => gemini::parse_events(path)?,
+        Engine::Agy => agy::parse_events(path)?,
         Engine::Hermes => {
             let Some(session_id) = override_session_id else {
                 bail!("Hermes sessions require override_session_id")
@@ -302,6 +304,7 @@ pub fn render_session_activity_markdown_with_db(
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
         Engine::Gemini => gemini::parse_events(path)?,
+        Engine::Agy => agy::parse_events(path)?,
         Engine::Hermes => {
             let Some(session_id) = override_session_id else {
                 bail!("Hermes activity rendering requires override_session_id")
@@ -469,6 +472,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Claude => "Claude",
         Engine::Codex => "Codex",
         Engine::Gemini => "Gemini",
+        Engine::Agy => "Agy",
         Engine::Hermes => "Hermes",
     }
 }
@@ -2160,6 +2164,7 @@ fn lookup_delta_for_task<'a>(
 }
 
 /// Flush accumulated tool-only annotations into output lines.
+#[allow(clippy::too_many_arguments)]
 fn flush_pending_tools(
     lines: &mut Vec<String>,
     pending_tools: &mut Vec<ToolAnnotation>,
@@ -2278,7 +2283,7 @@ fn render_conversation(
     // Accumulator for merging tool-only assistant turns.
     let mut pending_tools: Vec<ToolAnnotation> = Vec::new();
     let mut pending_time: Option<String> = None;
-    let include_tool_results = engine == Engine::Hermes;
+    let include_tool_results = matches!(engine, Engine::Hermes | Engine::Agy);
 
     for turn in turns {
         let ts = turn.timestamp_start.as_deref();

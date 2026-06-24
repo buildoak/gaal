@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -115,19 +117,16 @@ fn migrate_sessions_engine_check(conn: &Connection) -> Result<(), GaalError> {
         return Ok(());
     }
 
-    let hermes_probe_inserted = conn
+    let agy_probe_inserted = conn
         .execute(
-            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('__gaal_hermes_probe__', 'hermes', '1970-01-01T00:00:00Z', '__probe__')",
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('__gaal_agy_probe__', 'agy', '1970-01-01T00:00:00Z', '__probe__')",
             [],
         )
         .is_ok();
 
-    if hermes_probe_inserted {
-        conn.execute(
-            "DELETE FROM sessions WHERE id = '__gaal_hermes_probe__'",
-            [],
-        )
-        .ok();
+    if agy_probe_inserted {
+        conn.execute("DELETE FROM sessions WHERE id = '__gaal_agy_probe__'", [])
+            .ok();
         return Ok(());
     }
 
@@ -227,7 +226,7 @@ const SESSION_COLUMNS: &[&str] = &[
 const SESSIONS_TABLE_WITH_ALL_ENGINES: &str = r#"
 CREATE TABLE sessions_new (
     id TEXT PRIMARY KEY,
-    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'hermes')),
+    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes')),
     model TEXT,
     cwd TEXT,
     started_at TEXT NOT NULL,
@@ -256,7 +255,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn migrates_sessions_check_constraint_to_allow_gemini_and_hermes() {
+    fn migrates_sessions_check_constraint_to_allow_gemini_hermes_and_agy() {
         let conn = Connection::open_in_memory().expect("open db");
         conn.execute_batch(
             r#"
@@ -301,6 +300,11 @@ mod tests {
             [],
         )
         .expect("insert hermes session");
+        conn.execute(
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('sess-4', 'agy', '2026-01-04T00:00:00Z', '/tmp/agy.jsonl')",
+            [],
+        )
+        .expect("insert agy session");
 
         let fact_count: i64 = conn
             .query_row(
@@ -310,6 +314,58 @@ mod tests {
             )
             .expect("count facts");
         assert_eq!(fact_count, 1);
+    }
+
+    #[test]
+    fn migrates_sessions_check_constraint_from_hermes_schema_to_allow_agy() {
+        let conn = Connection::open_in_memory().expect("open db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'hermes')),
+                model TEXT,
+                cwd TEXT,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                exit_signal TEXT,
+                last_event_at TEXT,
+                parent_id TEXT REFERENCES sessions(id),
+                session_type TEXT DEFAULT 'standalone',
+                jsonl_path TEXT NOT NULL,
+                total_input_tokens INTEGER DEFAULT 0,
+                total_output_tokens INTEGER DEFAULT 0,
+                cache_read_tokens INTEGER DEFAULT 0,
+                cache_creation_tokens INTEGER DEFAULT 0,
+                reasoning_tokens INTEGER DEFAULT 0,
+                total_tools INTEGER DEFAULT 0,
+                total_turns INTEGER DEFAULT 0,
+                peak_context INTEGER DEFAULT 0,
+                last_indexed_offset INTEGER DEFAULT 0,
+                subagent_type TEXT,
+                gemini_summary TEXT
+            );
+            INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('sess-hermes', 'hermes', '2026-01-03T00:00:00Z', '/tmp/state.db');
+            "#,
+        )
+        .expect("seed hermes schema");
+
+        init_db(&conn).expect("migrate schema");
+
+        conn.execute(
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('sess-agy', 'agy', '2026-01-04T00:00:00Z', '/tmp/agy.jsonl')",
+            [],
+        )
+        .expect("insert agy session");
+
+        let hermes_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = 'sess-hermes' AND engine = 'hermes'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count hermes rows");
+        assert_eq!(hermes_count, 1);
     }
 }
 

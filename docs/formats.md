@@ -45,6 +45,19 @@ Human mode (`-H`) routes through `format_human()` which renders:
 
 Argument parsing errors are emitted by the CLI parser before Gaal's JSON error formatter runs, so they may be plain text rather than this JSON shape.
 
+## Command Status Semantics
+
+Command success is tri-state in structured facts: `true`, `false`, or unknown.
+For agy, missing `exit_code` and missing `success` mean unknown, not success.
+Explicit `success: true`, `success: false`, or `exit_code` fields win over
+exit-like text in command output.
+
+Planned tool calls are not attribution facts. `who`, search, activity, and file
+or command counts are driven by executed records. For agy, a `PLANNER_RESPONSE`
+may describe intended calls, but facts are emitted from executed action records
+such as `RUN_COMMAND`, `VIEW_FILE`, `LIST_DIRECTORY`, `GREP_SEARCH`,
+`SEARCH_WEB`, and `GENERATE_IMAGE`.
+
 ## Exit Code Reference
 
 | Code | Meaning | Agent response |
@@ -212,6 +225,45 @@ Tool names use Gemini's snake_case naming. gaal normalizes them to the canonical
 ### Incremental Indexing
 
 Gemini stores each session as a single JSON object, so offsets are not meaningful. gaal re-parses the full file on each incremental index run.
+
+## Agy Antigravity CLI JSONL Format
+
+Agy sessions are native but experimental Gaal engine sources, independent of
+agent-mux. The supported contract is current Antigravity transcript JSONL plus
+fixture-backed copied JSONL. Discovery reads:
+
+`~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`
+
+If `transcript_full.jsonl` is absent, Gaal falls back to `transcript.jsonl` in
+the same logs directory.
+
+The indexed agy session ID is the first 8 characters of the Antigravity brain
+UUID, matching Gemini-style short IDs. The full UUID remains recoverable from
+the source path.
+
+Engine detection for JSONL is also content-based: copied agy transcripts outside
+the native brain directory still parse as agy when their records match the
+Antigravity schema. Native brain UUIDs take precedence for IDs; copied
+transcripts can fall back to content ID fields when present.
+
+Agy transcript records are JSONL events with step metadata, source/type/status
+fields, optional text content, and optional tool calls. Gaal normalizes file,
+shell, web, and image-generation activity into the same session/fact model used
+by other engines.
+
+Runtime support for agy is best-effort and advisory. It uses `created_at`
+timestamps and executed agy action records; planner-only records do not prove
+live activity or attribution.
+
+Current caveats:
+
+- No SQLite blob parsing for agy; the transcript JSONL is the source of truth.
+- Token and cost parity for agy is out of scope.
+- SQLite/blob sidecars for agy are out of scope.
+- Optional agent-mux sidecar metadata can fill model or missing cwd when a
+  matching agy sidecar exists; Gaal does not require agent-mux.
+- Image generation is indexed and rendered through normalized tool facts and
+  transcript evidence; Gaal does not ingest generated image files.
 
 ## Search Index Rebuild Triggers
 

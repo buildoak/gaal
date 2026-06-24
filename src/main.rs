@@ -244,6 +244,9 @@ enum Commands {
     FindSalt {
         /// Salt token to search for.
         salt: Option<String>,
+        /// Restrict search to one source engine.
+        #[arg(long)]
+        engine: Option<SaltEngine>,
     },
 
     /// Generate/create a session handoff markdown via LLM extraction.
@@ -255,7 +258,7 @@ enum Commands {
         /// Explicit JSONL file path to use.
         #[arg(long)]
         jsonl: Option<PathBuf>,
-        /// LLM engine for extraction.
+        /// Worker engine for handoff extraction, not source-session detection.
         #[arg(long)]
         engine: Option<Engine>,
         /// LLM model for extraction.
@@ -364,7 +367,15 @@ enum Engine {
     Claude,
     Codex,
     Gemini,
+    Agy,
     Hermes,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum SaltEngine {
+    Claude,
+    Codex,
+    Agy,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -615,11 +626,15 @@ fn run(cli: Cli) -> Result<(), GaalError> {
             gaal::commands::resolve::run(args)
         }
         Commands::Salt => gaal::commands::salt::run(),
-        Commands::FindSalt { salt } => {
+        Commands::FindSalt { salt, engine } => {
             let salt = salt.ok_or_else(|| {
                 GaalError::ParseError("find-salt requires a salt token".to_string())
             })?;
-            let args = gaal::commands::find::FindArgs { salt, human };
+            let args = gaal::commands::find::FindArgs {
+                salt,
+                human,
+                engine: engine.map(convert_salt_engine_string),
+            };
             gaal::commands::find::run(args)
         }
         Commands::CreateHandoff {
@@ -707,6 +722,7 @@ fn convert_ls_engine(engine: Engine) -> gaal::commands::ls::LsEngine {
         Engine::Claude => gaal::commands::ls::LsEngine::Claude,
         Engine::Codex => gaal::commands::ls::LsEngine::Codex,
         Engine::Gemini => gaal::commands::ls::LsEngine::Gemini,
+        Engine::Agy => gaal::commands::ls::LsEngine::Agy,
         Engine::Hermes => gaal::commands::ls::LsEngine::Hermes,
     }
 }
@@ -762,7 +778,16 @@ fn convert_engine_string(engine: Engine) -> String {
         Engine::Claude => "claude".to_string(),
         Engine::Codex => "codex".to_string(),
         Engine::Gemini => "gemini".to_string(),
+        Engine::Agy => "agy".to_string(),
         Engine::Hermes => "hermes".to_string(),
+    }
+}
+
+fn convert_salt_engine_string(engine: SaltEngine) -> String {
+    match engine {
+        SaltEngine::Claude => "claude".to_string(),
+        SaltEngine::Codex => "codex".to_string(),
+        SaltEngine::Agy => "agy".to_string(),
     }
 }
 

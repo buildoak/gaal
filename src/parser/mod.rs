@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::discovery::DiscoveredSession;
 
+pub mod agy;
 pub mod claude;
 pub mod codex;
 pub mod common;
@@ -55,6 +56,9 @@ pub fn detect_engine(path: &Path) -> Result<Engine> {
             .and_then(Value::as_str)
             .unwrap_or_default();
 
+        if is_agy_record(&record) {
+            return Ok(Engine::Agy);
+        }
         if is_claude_type(record_type) {
             return Ok(Engine::Claude);
         }
@@ -84,6 +88,7 @@ pub fn parse_session(path: &Path) -> Result<ParsedSession> {
         Engine::Claude => claude::parse_events(path)?,
         Engine::Codex => codex::parse_events(path)?,
         Engine::Gemini => gemini::parse_events(path)?,
+        Engine::Agy => agy::parse_events(path)?,
         Engine::Hermes => {
             bail!("Hermes sessions require a session id; use hermes::parse_session(db_path, id)")
         }
@@ -99,7 +104,21 @@ pub fn parse_session(path: &Path) -> Result<ParsedSession> {
 pub fn parse_discovered_session(discovered: &DiscoveredSession) -> Result<ParsedSession> {
     match discovered.engine {
         Engine::Hermes => hermes::parse_session(&discovered.path, &discovered.id),
-        _ => parse_session(&discovered.path),
+        _ => {
+            let mut parsed = parse_session(&discovered.path)?;
+            if parsed.meta.cwd.is_none() {
+                parsed.meta.cwd = discovered.cwd.clone();
+            }
+            if parsed.meta.model.is_none() {
+                parsed.meta.model = discovered.model.clone();
+            }
+            if parsed.meta.started_at.is_empty() {
+                if let Some(started_at) = &discovered.started_at {
+                    parsed.meta.started_at = started_at.clone();
+                }
+            }
+            Ok(parsed)
+        }
     }
 }
 
@@ -112,6 +131,7 @@ pub fn parse_session_incremental(path: &Path, offset: u64) -> Result<(ParsedSess
         Engine::Claude => claude::parse_events_from_offset(path, offset)?,
         Engine::Codex => codex::parse_events_from_offset(path, offset)?,
         Engine::Gemini => gemini::parse_events_from_offset(path, offset)?,
+        Engine::Agy => agy::parse_events_from_offset(path, offset)?,
         Engine::Hermes => {
             bail!("Hermes sessions are SQLite-backed and do not support byte-offset parsing")
         }
@@ -138,6 +158,90 @@ fn is_codex_type(value: &str) -> bool {
     )
 }
 
+/// True when a JSON object has the stable schema markers emitted by agy.
+///
+/// This intentionally uses record shape rather than Antigravity path names so
+/// copied transcripts keep their engine identity outside the brain directory.
+pub fn is_agy_record(record: &Value) -> bool {
+    let Some(record_type) = record.get("type").and_then(Value::as_str) else {
+        return false;
+    };
+
+    if !is_agy_type(record_type) {
+        return false;
+    }
+
+    record.get("step_index").and_then(Value::as_i64).is_some()
+        && (record.get("created_at").and_then(Value::as_str).is_some()
+            || record.get("source").and_then(Value::as_str).is_some()
+            || record.get("status").and_then(Value::as_str).is_some())
+}
+
+fn is_agy_type(value: &str) -> bool {
+    matches!(
+        value,
+        "USER_INPUT"
+            | "PLANNER_RESPONSE"
+            | "VIEW_FILE"
+            | "LIST_DIRECTORY"
+            | "GREP_SEARCH"
+            | "SEARCH_WEB"
+            | "GENERATE_IMAGE"
+            | "RUN_COMMAND"
+            | "ERROR_MESSAGE"
+    )
+}
+
+/// Extract the agy session id using the same precedence expected by native
+/// Antigravity transcripts: brain UUID first, then content id fields.
+pub fn extract_agy_session_id(path: &Path) -> Option<String> {
+    extract_agy_session_id_from_path(path).or_else(|| extract_agy_session_id_from_content(path))
+}
+
+fn extract_agy_session_id_from_path(path: &Path) -> Option<String> {
+    let mut previous_was_brain = false;
+    for component in path.components() {
+        let value = component.as_os_str().to_string_lossy();
+        if previous_was_brain {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.chars().take(8).collect());
+            }
+        }
+        previous_was_brain = value == "brain";
+    }
+    None
+}
+
+fn extract_agy_session_id_from_content(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines().take(30).flatten() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        let id = value
+            .get("sessionId")
+            .or_else(|| value.get("session_id"))
+            .or_else(|| value.get("conversation_id"))
+            .or_else(|| value.get("brain_id"))
+            .or_else(|| value.get("brainId"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+        if let Some(id) = id {
+            return Some(id.chars().take(8).collect());
+        }
+    }
+
+    None
+}
+
 /// Infer engine from the JSONL file's path when content-based detection fails.
 ///
 /// Files under `~/.claude/projects/` are Claude sessions; files under
@@ -150,6 +254,9 @@ fn detect_engine_from_path(path: &Path) -> Option<Engine> {
     }
     if path_str.contains("/.codex/sessions/") {
         return Some(Engine::Codex);
+    }
+    if path_str.contains("/.gemini/antigravity-cli/") {
+        return Some(Engine::Agy);
     }
     if path_str.contains("/.gemini/tmp/") {
         return Some(Engine::Gemini);

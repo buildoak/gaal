@@ -44,16 +44,19 @@ pub fn discover_sessions_with_cutoff(
     newer_than: Option<SystemTime>,
 ) -> Result<Vec<DiscoveredSession>> {
     let mut sessions = Vec::new();
-    if engine_filter.map_or(true, |e| e == Engine::Claude) {
+    if engine_filter.is_none_or(|e| e == Engine::Claude) {
         sessions.extend(super::claude::discover_claude_sessions(newer_than)?);
     }
-    if engine_filter.map_or(true, |e| e == Engine::Codex) {
+    if engine_filter.is_none_or(|e| e == Engine::Codex) {
         sessions.extend(super::codex::discover_codex_sessions(newer_than)?);
     }
-    if engine_filter.map_or(true, |e| e == Engine::Gemini) {
+    if engine_filter.is_none_or(|e| e == Engine::Gemini) {
         sessions.extend(super::gemini::discover_gemini_sessions(newer_than)?);
     }
-    if engine_filter.map_or(true, |e| e == Engine::Hermes) {
+    if engine_filter.is_none_or(|e| e == Engine::Agy) {
+        sessions.extend(super::agy::discover_agy_sessions(newer_than)?);
+    }
+    if engine_filter.is_none_or(|e| e == Engine::Hermes) {
         sessions.extend(super::hermes::discover_hermes_sessions(newer_than)?);
     }
 

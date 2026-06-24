@@ -137,7 +137,7 @@ pub fn run(args: RecallArgs) -> Result<(), GaalError> {
         return Err(GaalError::NoResults);
     }
 
-    let min_substance = args.substance.max(1);
+    let min_substance = args.substance.clamp(0, 3);
     let known_projects = collect_known_project_tokens(&sessions);
     let query_tokens = tokenize_query(args.query.as_deref(), &known_projects);
     let mut ranked = score_sessions(&sessions, &query_tokens, args.days_back, min_substance);

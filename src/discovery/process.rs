@@ -7,6 +7,7 @@ use std::process::Command;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::discovery::discover::DiscoveredSession;
 use crate::parser::types::Engine;
 
 // ---------------------------------------------------------------------------
@@ -640,6 +641,9 @@ fn classify_engine(pid: u32, binary_path: Option<&str>) -> Option<Engine> {
         if path.contains("codex") && !path.contains(".app/") {
             return Some(Engine::Codex);
         }
+        if path_looks_like_agy(path) {
+            return Some(Engine::Agy);
+        }
     }
 
     // Step 2: For interpreter processes (node/bun), check argv for SDK markers
@@ -649,11 +653,34 @@ fn classify_engine(pid: u32, binary_path: Option<&str>) -> Option<Engine> {
                 if argv.iter().any(|a| a.contains("claude-agent-sdk")) {
                     return Some(Engine::Claude);
                 }
+                if argv_looks_like_agy(&argv) {
+                    return Some(Engine::Agy);
+                }
             }
         }
     }
 
     None
+}
+
+fn path_looks_like_agy(path: &str) -> bool {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    matches!(file_name, "agy" | "antigravity-cli")
+        || path.contains("/.gemini/antigravity-cli/")
+        || path.contains("/antigravity-cli/")
+}
+
+fn argv_looks_like_agy(argv: &[String]) -> bool {
+    argv.iter().any(|arg| {
+        arg == "agy"
+            || arg == "antigravity-cli"
+            || arg.contains("/.gemini/antigravity-cli/")
+            || arg.contains("/antigravity-cli/")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1052,6 +1079,7 @@ fn map_cwd_to_jsonl(engine: &Engine, cwd: &str, pid: u32) -> Option<PathBuf> {
     match engine {
         Engine::Claude => map_claude_cwd_to_jsonl(cwd, pid),
         Engine::Codex => map_codex_cwd_to_jsonl(cwd),
+        Engine::Agy => map_agy_cwd_to_jsonl(cwd),
         Engine::Gemini | Engine::Hermes => None,
     }
 }
@@ -1194,6 +1222,24 @@ fn map_codex_cwd_to_jsonl(cwd: &str) -> Option<PathBuf> {
         .map(|s| s.path)
 }
 
+fn map_agy_cwd_to_jsonl(cwd: &str) -> Option<PathBuf> {
+    let Ok(discovered) = super::agy::discover_agy_sessions(None) else {
+        return None;
+    };
+    select_newest_discovered_path_for_cwd(discovered, cwd)
+}
+
+fn select_newest_discovered_path_for_cwd(
+    discovered: Vec<DiscoveredSession>,
+    cwd: &str,
+) -> Option<PathBuf> {
+    discovered
+        .into_iter()
+        .filter(|s| same_cwd(s.cwd.as_deref(), cwd))
+        .max_by(|a, b| a.started_at.cmp(&b.started_at))
+        .map(|s| s.path)
+}
+
 fn same_cwd(candidate: Option<&str>, target: &str) -> bool {
     let Some(candidate) = candidate else {
         return false;
@@ -1282,10 +1328,37 @@ fn extract_session_id_from_jsonl(path: &Path, engine: &Engine) -> Option<String>
                     return Some(id);
                 }
             }
+            Engine::Agy => {
+                if let Some(id) = record
+                    .get("sessionId")
+                    .or_else(|| record.get("session_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                {
+                    return Some(id);
+                }
+            }
             Engine::Hermes => {}
         }
     }
+    if matches!(engine, Engine::Agy) {
+        return extract_agy_session_id_from_path(path);
+    }
     None
+}
+
+fn extract_agy_session_id_from_path(path: &Path) -> Option<String> {
+    let marker = ".gemini/antigravity-cli/brain/";
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let pos = normalized.find(marker)?;
+    let after = &normalized[pos + marker.len()..];
+    let uuid = after.split('/').next()?;
+    let short: String = uuid.chars().filter(|c| *c != '-').take(8).collect();
+    if short.len() == 8 && short.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(short)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1392,6 +1465,16 @@ fn extract_first_user_prompt(path: &Path) -> Option<String> {
             let truncated = truncate_summary(text, 60);
             if !truncated.is_empty() {
                 return Some(truncated);
+            }
+        }
+
+        // Agy format: type == USER_INPUT with content string.
+        if record.get("type").and_then(serde_json::Value::as_str) == Some("USER_INPUT") {
+            if let Some(text) = record.get("content").and_then(serde_json::Value::as_str) {
+                let truncated = truncate_summary(text, 60);
+                if !truncated.is_empty() {
+                    return Some(truncated);
+                }
             }
         }
     }
@@ -1611,5 +1694,124 @@ fn truncate_codex_id(raw: &str) -> String {
         hex[hex.len() - 8..].to_string()
     } else {
         hex
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_jsonl(name: &str, body: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "gaal-process-{name}-{}-{}.jsonl",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn classifies_agy_binary_paths_without_live_process_dependency() {
+        assert_eq!(
+            classify_engine(0, Some("/Users/test/.gemini/antigravity-cli/bin/agy")),
+            Some(Engine::Agy)
+        );
+        assert_eq!(
+            classify_engine(0, Some("/opt/homebrew/bin/agy")),
+            Some(Engine::Agy)
+        );
+        assert_eq!(
+            classify_engine(0, Some("/opt/homebrew/bin/codex")),
+            Some(Engine::Codex)
+        );
+        assert_eq!(
+            classify_engine(0, Some("/Applications/Antigravity.app/Contents/MacOS/app")),
+            None
+        );
+    }
+
+    #[test]
+    fn detects_agy_interpreter_argv_markers() {
+        let argv = vec![
+            "/opt/homebrew/bin/node".to_string(),
+            "/Users/test/.gemini/antigravity-cli/dist/cli.js".to_string(),
+        ];
+        assert!(argv_looks_like_agy(&argv));
+
+        let unrelated = vec![
+            "/opt/homebrew/bin/node".to_string(),
+            "/Users/test/project/server.js".to_string(),
+        ];
+        assert!(!argv_looks_like_agy(&unrelated));
+    }
+
+    #[test]
+    fn extracts_agy_short_session_id_from_brain_path() {
+        let path = Path::new(
+            "/Users/test/.gemini/antigravity-cli/brain/abcdef12-3456-7890-abcd-ef1234567890/.system_generated/logs/transcript_full.jsonl",
+        );
+
+        assert_eq!(
+            extract_agy_session_id_from_path(path).as_deref(),
+            Some("abcdef12")
+        );
+    }
+
+    #[test]
+    fn maps_agy_cwd_to_newest_discovered_transcript() {
+        let old = DiscoveredSession {
+            id: "old".to_string(),
+            engine: Engine::Agy,
+            path: PathBuf::from("/tmp/old.jsonl"),
+            model: None,
+            cwd: Some("/repo".to_string()),
+            started_at: Some("2026-06-22T18:46:54Z".to_string()),
+            forked_from_id: None,
+            file_size: 1,
+        };
+        let new = DiscoveredSession {
+            id: "new".to_string(),
+            engine: Engine::Agy,
+            path: PathBuf::from("/tmp/new.jsonl"),
+            model: None,
+            cwd: Some("/repo/".to_string()),
+            started_at: Some("2026-06-22T18:46:56Z".to_string()),
+            forked_from_id: None,
+            file_size: 1,
+        };
+        let other = DiscoveredSession {
+            id: "other".to_string(),
+            engine: Engine::Agy,
+            path: PathBuf::from("/tmp/other.jsonl"),
+            model: None,
+            cwd: Some("/elsewhere".to_string()),
+            started_at: Some("2026-06-22T18:47:00Z".to_string()),
+            forked_from_id: None,
+            file_size: 1,
+        };
+
+        assert_eq!(
+            select_newest_discovered_path_for_cwd(vec![old, new, other], "/repo").as_deref(),
+            Some(Path::new("/tmp/new.jsonl"))
+        );
+    }
+
+    #[test]
+    fn extracts_agy_user_prompt_for_process_summary() {
+        let path = temp_jsonl(
+            "agy-summary",
+            r#"{"type":"USER_INPUT","created_at":"2026-06-22T18:46:54Z","content":"Inspect the agy runtime tail"}
+"#,
+        );
+
+        let summary = extract_first_user_prompt(&path);
+        fs::remove_file(path).ok();
+
+        assert_eq!(summary.as_deref(), Some("Inspect the agy runtime tail"));
     }
 }

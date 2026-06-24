@@ -26,7 +26,7 @@ Use this table first. It is the fastest way to choose the correct command.
 
 The primary consumers of `gaal` are agents, not humans. Prefer machine-readable JSON unless a human explicitly asks for a table or card view.
 
-`gaal` supports four engines: Claude Code (JSONL), Codex (JSONL), Gemini (single JSON), and Hermes Agent (SQLite). All four are indexed into the same session, fact, transcript, tag, and handoff model. Hermes support is newer and has been tested against one real installation shape plus sanitized fixtures; treat unusual Hermes installations as compatibility work until fixtures cover them.
+`gaal` supports five engines: Claude Code (JSONL), Codex (JSONL), Gemini (single JSON), Antigravity CLI / `agy` (JSONL), and Hermes Agent (SQLite). All five are indexed into the same session, fact, transcript, tag, and handoff model. Agy support is native, experimental, and does not require agent-mux. Hermes support is newer and has been tested against one real installation shape plus sanitized fixtures; treat unusual Hermes installations as compatibility work until fixtures cover them.
 
 The core mental model:
 
@@ -115,6 +115,9 @@ gaal find-salt GAAL_SALT_<hex>
 transcript path, JSONL path, and handoff status. Inspect that JSON before
 generating anything.
 
+`find-salt` scans Claude Code, Codex, and Agy/Antigravity transcript logs. It
+does not identify Gemini or Hermes sessions.
+
 If a handoff is needed, preview first:
 
 ```bash
@@ -138,6 +141,11 @@ gaal who wrote CLAUDE.md --engine gemini
 # Search within Gemini sessions
 gaal search "parser" --engine gemini
 ```
+
+Agy sessions use `--engine agy`. Their source store is
+`~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`,
+with fallback to `transcript.jsonl`; the indexed ID is the first 8 characters of
+the brain UUID.
 
 ### Finding subagent dispatches
 

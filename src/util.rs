@@ -15,7 +15,7 @@ pub fn sanitize_filename(id: &str) -> String {
 
 /// Return the filename/session-display identifier used for derived artifacts.
 ///
-/// Claude, Codex, and Gemini keep the historic first-8 convention. Hermes IDs
+/// Claude, Codex, Gemini, and agy keep the historic first-8 convention. Hermes IDs
 /// start with date/time components, so first-8 aliases collide across sessions.
 pub fn session_artifact_id(engine: &str, id: &str) -> String {
     let sanitized = sanitize_filename(id);

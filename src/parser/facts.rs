@@ -9,12 +9,16 @@ use std::path::Path;
 
 use crate::model::fact::FactType;
 use crate::model::Fact;
+use serde_json::Value;
 
 use super::common::{
     is_git_command, parse_exit_code, resolve_started_at, tool_call_fact, truncate,
 };
 use super::event::{ContentBlock, EventKind, SessionEvent};
 use super::types::{Engine, ParsedSession, SessionMeta};
+
+const RESULT_EXIT_CODE_KEY: &str = "__gaal_explicit_exit_code";
+const RESULT_SUCCESS_KEY: &str = "__gaal_explicit_success";
 
 /// Intermediate state for a pending tool call awaiting its result.
 #[derive(Debug, Clone)]
@@ -43,6 +47,27 @@ fn is_non_error_tool(tool_name: &str) -> bool {
     ]
     .iter()
     .any(|name| tool_name.eq_ignore_ascii_case(name))
+}
+
+fn explicit_result_status(input: Option<&Value>) -> (Option<i32>, Option<bool>) {
+    let explicit_exit_code = input
+        .and_then(|value| value.get(RESULT_EXIT_CODE_KEY))
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok());
+    let explicit_success = input
+        .and_then(|value| value.get(RESULT_SUCCESS_KEY))
+        .and_then(Value::as_bool);
+    (explicit_exit_code, explicit_success)
+}
+
+fn command_success(
+    exit_code: Option<i32>,
+    explicit_success: Option<bool>,
+    is_error: bool,
+) -> Option<bool> {
+    explicit_success
+        .or_else(|| exit_code.map(|code| code == 0))
+        .or_else(|| is_error.then_some(false))
 }
 
 /// Convert a canonical event stream into a `ParsedSession`.
@@ -207,7 +232,7 @@ pub fn extract_parsed_session(
                                 if let Some(fact_idx) = state.fact_index {
                                     if let Some(fact) = facts.get_mut(fact_idx) {
                                         fact.exit_code = exit_code;
-                                        fact.success = Some(exit_code.unwrap_or(0) == 0);
+                                        fact.success = exit_code.map(|code| code == 0);
                                     }
                                 }
                             }
@@ -371,7 +396,17 @@ pub fn extract_parsed_session(
                 } else {
                     None
                 };
-                let exit_code = parse_exit_code(output_text.as_deref().unwrap_or_default());
+                let parsed_exit_code = parse_exit_code(output_text.as_deref().unwrap_or_default());
+                let (explicit_exit_code, explicit_success) =
+                    explicit_result_status(fallback_tool_input.as_ref());
+                let exit_code = explicit_exit_code.or_else(|| {
+                    if explicit_success.is_some() {
+                        None
+                    } else {
+                        parsed_exit_code
+                    }
+                });
+                let result_success = command_success(exit_code, explicit_success, *is_error);
                 let state = tool_state_by_id.get(tool_use_id).cloned();
                 let fallback_tool_fact = state.as_ref().is_none().then(|| {
                     fallback_tool_name
@@ -391,6 +426,7 @@ pub fn extract_parsed_session(
                 let is_blocked_tool = is_non_error_tool(tool_name);
                 let shell_non_zero_exit =
                     is_shell && exit_code.map(|code| code != 0).unwrap_or(false);
+                let shell_explicit_failure = is_shell && result_success == Some(false);
 
                 // Backfill exit_code on the matching tool-call fact.
                 if let Some(state) = state.as_ref() {
@@ -399,7 +435,7 @@ pub fn extract_parsed_session(
                             // Both Claude (Bash) and Codex (Bash, exec_command).
                             if is_shell {
                                 fact.exit_code = exit_code;
-                                fact.success = Some(exit_code.unwrap_or(0) == 0);
+                                fact.success = result_success;
                             }
                         }
                     }
@@ -407,8 +443,8 @@ pub fn extract_parsed_session(
 
                 // AF4: Error facts come only from explicit `is_error` or shell non-zero exits.
                 // Certain non-shell tools are explicitly excluded from error classification.
-                let should_create_error_fact =
-                    !is_blocked_tool && (*is_error || shell_non_zero_exit);
+                let should_create_error_fact = !is_blocked_tool
+                    && (*is_error || shell_non_zero_exit || shell_explicit_failure);
                 if should_create_error_fact {
                     let error_key = if !tool_use_id.is_empty() {
                         format!("tool:{tool_use_id}")
@@ -839,6 +875,148 @@ mod tests {
             .unwrap();
         assert_eq!(cmd_fact.exit_code, Some(1));
         assert_eq!(cmd_fact.success, Some(false));
+    }
+
+    #[test]
+    fn shell_tool_result_without_status_or_exit_keeps_success_unknown() {
+        let events = vec![
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "Bash",
+                json!({"command": "echo hi"}),
+            ),
+            tool_result_event("2026-03-07T10:01:00Z", "call_1", "hi", false),
+        ];
+        let result = extract_parsed_session(&events, Engine::Claude, Path::new("test.jsonl"));
+        let cmd_fact = result
+            .facts
+            .iter()
+            .find(|f| f.fact_type.as_str() == "command")
+            .unwrap();
+        assert_eq!(cmd_fact.exit_code, None);
+        assert_eq!(cmd_fact.success, None);
+        assert!(result
+            .facts
+            .iter()
+            .all(|fact| fact.fact_type.as_str() != "error"));
+    }
+
+    #[test]
+    fn explicit_success_metadata_wins_without_exit_code() {
+        let events = vec![
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "Bash",
+                json!({"command": "echo failed"}),
+            ),
+            SessionEvent {
+                timestamp: Some("2026-03-07T10:01:00Z".to_string()),
+                kind: EventKind::ToolResult {
+                    tool_use_id: "call_1".to_string(),
+                    content: Some("failed is just output text".to_string()),
+                    is_error: false,
+                    tool_name: Some("Bash".to_string()),
+                    tool_input: Some(json!({
+                        "command": "echo failed",
+                        "__gaal_explicit_success": true
+                    })),
+                },
+            },
+        ];
+        let result = extract_parsed_session(&events, Engine::Agy, Path::new("test.jsonl"));
+        let cmd_fact = result
+            .facts
+            .iter()
+            .find(|f| f.fact_type.as_str() == "command")
+            .unwrap();
+        assert_eq!(cmd_fact.exit_code, None);
+        assert_eq!(cmd_fact.success, Some(true));
+        assert!(result
+            .facts
+            .iter()
+            .all(|fact| fact.fact_type.as_str() != "error"));
+    }
+
+    #[test]
+    fn explicit_success_metadata_ignores_exit_like_output_without_exit_code() {
+        let events = vec![
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "Bash",
+                json!({"command": "printf weird"}),
+            ),
+            SessionEvent {
+                timestamp: Some("2026-03-07T10:01:00Z".to_string()),
+                kind: EventKind::ToolResult {
+                    tool_use_id: "call_1".to_string(),
+                    content: Some("Output:\nProcess exited with code 1\n".to_string()),
+                    is_error: false,
+                    tool_name: Some("Bash".to_string()),
+                    tool_input: Some(json!({
+                        "command": "printf weird",
+                        "__gaal_explicit_success": true
+                    })),
+                },
+            },
+        ];
+        let result = extract_parsed_session(&events, Engine::Agy, Path::new("test.jsonl"));
+        let cmd_fact = result
+            .facts
+            .iter()
+            .find(|f| f.fact_type.as_str() == "command")
+            .unwrap();
+        assert_eq!(cmd_fact.exit_code, None);
+        assert_eq!(cmd_fact.success, Some(true));
+        assert!(result
+            .facts
+            .iter()
+            .all(|fact| fact.fact_type.as_str() != "error"));
+    }
+
+    #[test]
+    fn explicit_failure_metadata_without_exit_code_creates_failed_command_and_error() {
+        let events = vec![
+            tool_use_event(
+                "2026-03-07T10:00:00Z",
+                "call_1",
+                "Bash",
+                json!({"command": "false"}),
+            ),
+            SessionEvent {
+                timestamp: Some("2026-03-07T10:01:00Z".to_string()),
+                kind: EventKind::ToolResult {
+                    tool_use_id: "call_1".to_string(),
+                    content: None,
+                    is_error: false,
+                    tool_name: Some("Bash".to_string()),
+                    tool_input: Some(json!({
+                        "command": "false",
+                        "__gaal_explicit_success": false
+                    })),
+                },
+            },
+        ];
+        let result = extract_parsed_session(&events, Engine::Agy, Path::new("test.jsonl"));
+        let cmd_fact = result
+            .facts
+            .iter()
+            .find(|f| f.fact_type.as_str() == "command")
+            .unwrap();
+        assert_eq!(cmd_fact.exit_code, None);
+        assert_eq!(cmd_fact.success, Some(false));
+
+        let error_facts: Vec<_> = result
+            .facts
+            .iter()
+            .filter(|f| f.fact_type.as_str() == "error")
+            .collect();
+        assert_eq!(error_facts.len(), 1);
+        assert_eq!(error_facts[0].exit_code, None);
+        assert_eq!(error_facts[0].success, Some(false));
+        assert_eq!(error_facts[0].detail, Some("false".to_string()));
     }
 
     #[test]

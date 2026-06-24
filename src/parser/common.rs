@@ -12,7 +12,7 @@ pub(crate) fn tool_call_fact(
     if matches!(name, "Read" | "Glob" | "Grep") {
         return Some(file_read_fact(input, ts, turn_number));
     }
-    if matches!(name, "Write" | "Edit" | "apply_patch") {
+    if matches!(name, "Write" | "Edit" | "apply_patch" | "GenerateImage") {
         return Some(file_write_fact(input, ts, turn_number));
     }
     if matches!(name, "Bash" | "exec_command") {

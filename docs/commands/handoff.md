@@ -13,7 +13,7 @@ gaal create-handoff [OPTIONS] [ID]
 ## Flags
 
 - `--jsonl <path>`: explicit JSONL override
-- `--engine <claude|codex|gemini|hermes>`: extraction engine override
+- `--engine <claude|codex|gemini|agy|hermes>`: worker engine override for handoff extraction. This does not select the source-session engine; source sessions are resolved from the indexed row or `--jsonl` path.
 - `--model <model>`
 - `--prompt <path>`
 - `--provider <agent-mux|openrouter>`: provider selector; default `agent-mux`.

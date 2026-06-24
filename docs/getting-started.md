@@ -1,6 +1,6 @@
 # Getting Started
 
-This page is the shortest path from a fresh clone to your first useful `gaal` query. If you already have local Claude Code, Codex, Gemini, or Hermes session logs, you can usually get from zero to indexed sessions in under five minutes.
+This page is the shortest path from a fresh clone to your first useful `gaal` query. If you already have local Claude Code, Codex, Gemini, agy/Antigravity, or Hermes session logs, you can usually get from zero to indexed sessions in under five minutes.
 
 ## Build
 
@@ -41,7 +41,7 @@ put `/opt/homebrew/bin` before cargo paths.
 
 `gaal` indexes session artifacts that already exist on disk. Before your first run, make sure you have:
 
-- Local access to session logs under `~/.claude/projects/`, `~/.codex/`, `~/.gemini/tmp/`, and/or `~/.hermes/state.db`
+- Local access to session logs under `~/.claude/projects/`, `~/.codex/`, `~/.gemini/tmp/`, `~/.gemini/antigravity-cli/brain/`, and/or `~/.hermes/state.db`
 - A writable gaal home at `~/.gaal/`
 
 If this is a brand-new machine with no agent sessions yet, `gaal index backfill` may create the index and still leave you with zero sessions. That is expected. Run an agent for a bit, then backfill again.
@@ -88,7 +88,7 @@ What each part is for:
 - `data/{engine}/sessions/YYYY/MM/DD/<id>.md`: rendered transcript markdown
 - `data/{engine}/handoffs/YYYY/MM/DD/<id>.md`: generated handoff markdown
 
-`{engine}` is usually `claude`, `codex`, `gemini`, or `hermes`.
+`{engine}` is usually `claude`, `codex`, `gemini`, `agy`, or `hermes`.
 
 ## Four Commands to Learn First
 
@@ -134,11 +134,12 @@ These are the practical defaults in `~/.gaal/config.toml`:
 | Key | Default |
 |-----|---------|
 | `llm.default_engine` | `codex` |
-| `llm.default_model` | `gpt-5.3-codex-spark` |
+| `llm.default_model` | `gpt-5.4-mini` |
 | `llm.timeout_secs` | `120` |
 | `handoff.prompt` | `prompts/handoff.md` |
 | `handoff.format` | `eywa-compatible` |
 | `agent-mux.path` | `agent-mux` |
+| `agent-mux.effort` | `xhigh` |
 
 You do not need to change any of these to build, index, or run the first query. The usual first useful loop is:
 

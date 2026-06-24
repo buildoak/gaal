@@ -167,12 +167,7 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     let invalid_codex_error_sessions = load_codex_invalid_error_sessions(&conn)?;
 
     let run_start = SystemTime::now();
-    let engines = [
-        Engine::Claude,
-        Engine::Codex,
-        Engine::Gemini,
-        Engine::Hermes,
-    ];
+    let engines = backfill_engines();
     let mut any_engine_indexed = false;
 
     for engine in engines {
@@ -239,11 +234,22 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     print_json(&summary).map_err(GaalError::from)
 }
 
+fn backfill_engines() -> Vec<Engine> {
+    vec![
+        Engine::Claude,
+        Engine::Codex,
+        Engine::Gemini,
+        Engine::Agy,
+        Engine::Hermes,
+    ]
+}
+
 fn backfill_cursor_key(engine: Engine) -> &'static str {
     match engine {
         Engine::Claude => "backfill:claude",
         Engine::Codex => "backfill:codex",
         Engine::Gemini => "backfill:gemini",
+        Engine::Agy => "backfill:agy",
         Engine::Hermes => "backfill:hermes",
     }
 }
@@ -523,6 +529,11 @@ pub(crate) fn index_discovered_session(
     invalid_codex_error_sessions: &HashSet<String>,
 ) -> Result<IndexOutcome, GaalError> {
     let existing = get_session(conn, &discovered.id)?;
+    let collision_policy = existing
+        .as_ref()
+        .map(|row| guard_index_collision(discovered, row))
+        .transpose()?
+        .unwrap_or(IndexCollisionPolicy::Safe);
     let file_size_i64 = u64_to_i64(discovered.file_size)?;
     let existing_peak_context_suspicious = existing
         .as_ref()
@@ -532,7 +543,8 @@ pub(crate) fn index_discovered_session(
         .as_ref()
         .map(|row| session_needs_full_reparse(discovered, row, invalid_codex_error_sessions))
         .transpose()?
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || collision_policy == IndexCollisionPolicy::ForceFullReparse;
 
     if let Some(row) = existing.as_ref() {
         if !force
@@ -553,6 +565,7 @@ pub(crate) fn index_discovered_session(
                 && row.last_indexed_offset >= 0
                 && (row.last_indexed_offset as u64) < discovered.file_size
                 && discovered.engine != Engine::Gemini
+                && discovered.engine != Engine::Agy
                 && discovered.engine != Engine::Hermes
         })
         .unwrap_or(false);
@@ -857,6 +870,112 @@ pub(super) fn resolve_subagent_session_id(
     }
 
     Ok(None)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IndexCollisionPolicy {
+    Safe,
+    ForceFullReparse,
+}
+
+fn guard_index_collision(
+    discovered: &DiscoveredSession,
+    existing: &SessionRow,
+) -> Result<IndexCollisionPolicy, GaalError> {
+    resolve_index_collision(
+        &discovered.id,
+        &existing.engine,
+        &existing.jsonl_path,
+        &discovered.engine.to_string(),
+        &discovered.path,
+    )
+}
+
+fn resolve_index_collision(
+    session_id: &str,
+    existing_engine: &str,
+    existing_path: &str,
+    discovered_engine: &str,
+    discovered_path: &Path,
+) -> Result<IndexCollisionPolicy, GaalError> {
+    if existing_engine != discovered_engine {
+        return Err(GaalError::Internal(format!(
+            "index collision for {session_id}: existing engine {existing_engine} at {existing_path} conflicts with discovered engine {discovered_engine} at {}",
+            discovered_path.display()
+        )));
+    }
+
+    if Path::new(existing_path) == discovered_path {
+        return Ok(IndexCollisionPolicy::Safe);
+    }
+
+    if discovered_engine == "agy" {
+        let existing_uuid = extract_agy_full_uuid_from_path(Path::new(existing_path), session_id);
+        let discovered_uuid = extract_agy_full_uuid_from_path(discovered_path, session_id);
+
+        return match (existing_uuid, discovered_uuid) {
+            (Some(existing_uuid), Some(discovered_uuid)) if existing_uuid == discovered_uuid => {
+                Ok(IndexCollisionPolicy::ForceFullReparse)
+            }
+            (Some(existing_uuid), Some(discovered_uuid)) => Err(GaalError::Internal(format!(
+                "index collision for agy session {session_id}: existing brain UUID {existing_uuid} at {existing_path} conflicts with discovered brain UUID {discovered_uuid} at {}",
+                discovered_path.display()
+            ))),
+            _ => Err(GaalError::Internal(format!(
+                "index collision for agy session {session_id}: transcript path changed from {existing_path} to {}, but full brain UUID could not be established",
+                discovered_path.display()
+            ))),
+        };
+    }
+
+    Ok(IndexCollisionPolicy::ForceFullReparse)
+}
+
+fn extract_agy_full_uuid_from_path(path: &Path, short_id: &str) -> Option<String> {
+    let normalized_short_id = short_id
+        .chars()
+        .filter(|ch| ch.is_ascii_hexdigit())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect::<String>();
+    if normalized_short_id.is_empty() {
+        return None;
+    }
+
+    let path_text = path.to_string_lossy();
+    uuid_candidates(&path_text)
+        .into_iter()
+        .find(|candidate| candidate.starts_with(&normalized_short_id))
+}
+
+fn uuid_candidates(text: &str) -> Vec<String> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut out = Vec::new();
+
+    for start in 0..chars.len() {
+        if !chars[start].is_ascii_hexdigit() {
+            continue;
+        }
+
+        let mut candidate = String::new();
+        for ch in chars.iter().skip(start) {
+            if ch.is_ascii_hexdigit() || *ch == '-' {
+                candidate.push(*ch);
+            } else {
+                break;
+            }
+        }
+
+        let normalized = candidate
+            .chars()
+            .filter(|ch| *ch != '-')
+            .map(|ch| ch.to_ascii_lowercase())
+            .collect::<String>();
+        if normalized.len() == 32 && normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            out.push(normalized);
+        }
+    }
+
+    out
 }
 
 fn session_needs_full_reparse(
@@ -1303,6 +1422,7 @@ fn resolve_eywa_content_path(entry: &EywaEntry) -> Option<String> {
     let candidate_roots = [
         gaal_home().join("data").join("eywa").join("handoffs"),
         gaal_home().join("data").join("claude").join("handoffs"),
+        gaal_home().join("data").join("agy").join("handoffs"),
     ];
 
     for root in candidate_roots {
@@ -1357,7 +1477,7 @@ fn normalize_engine_string(value: Option<&str>) -> String {
         .unwrap_or_default()
         .to_ascii_lowercase();
     match candidate.as_str() {
-        "claude" | "codex" | "gemini" | "hermes" => candidate,
+        "claude" | "codex" | "gemini" | "agy" | "hermes" => candidate,
         _ => "claude".to_string(),
     }
 }
@@ -1543,5 +1663,110 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         assert!(!contains_tools);
+    }
+
+    #[test]
+    fn extracts_agy_full_uuid_matching_short_id_from_path() {
+        let path = Path::new(
+            "/Users/test/.agy/brains/abcdef12-3456-7890-abcd-ef1234567890/transcript.jsonl",
+        );
+
+        assert_eq!(
+            extract_agy_full_uuid_from_path(path, "abcdef12").as_deref(),
+            Some("abcdef1234567890abcdef1234567890")
+        );
+    }
+
+    #[test]
+    fn extracts_agy_full_uuid_matching_short_id_from_compact_path() {
+        let path = Path::new("/Users/test/.agy/brains/abcdef1234567890abcdef1234567890.jsonl");
+
+        assert_eq!(
+            extract_agy_full_uuid_from_path(path, "abcdef12").as_deref(),
+            Some("abcdef1234567890abcdef1234567890")
+        );
+    }
+
+    #[test]
+    fn ignores_agy_uuid_candidates_that_do_not_match_short_id() {
+        let path = Path::new(
+            "/Users/test/.agy/brains/99999999-3456-7890-abcd-ef1234567890/transcript.jsonl",
+        );
+
+        assert_eq!(extract_agy_full_uuid_from_path(path, "abcdef12"), None);
+    }
+
+    #[test]
+    fn allows_agy_path_change_for_same_full_uuid_and_forces_reparse() {
+        let existing_path = "/Users/test/.agy/fallback/abcdef12-3456-7890-abcd-ef1234567890.jsonl";
+        let discovered_path =
+            Path::new("/Users/test/.agy/preferred/abcdef1234567890abcdef1234567890.jsonl");
+
+        let decision =
+            resolve_index_collision("abcdef12", "agy", existing_path, "agy", discovered_path)
+                .unwrap();
+
+        assert_eq!(decision, IndexCollisionPolicy::ForceFullReparse);
+    }
+
+    #[test]
+    fn rejects_same_short_id_for_different_engines() {
+        let err = resolve_index_collision(
+            "abcdef12",
+            "codex",
+            "/tmp/codex/abcdef12.jsonl",
+            "agy",
+            Path::new("/tmp/agy/abcdef12-3456-7890-abcd-ef1234567890.jsonl"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("existing engine codex"));
+        assert!(err.contains("discovered engine agy"));
+    }
+
+    #[test]
+    fn allows_same_engine_non_agy_path_change_and_forces_reparse() {
+        let decision = resolve_index_collision(
+            "abcdef12",
+            "gemini",
+            "/tmp/gemini/old/session-abcdef12.json",
+            "gemini",
+            Path::new("/tmp/gemini/new/session-abcdef12.json"),
+        )
+        .unwrap();
+
+        assert_eq!(decision, IndexCollisionPolicy::ForceFullReparse);
+    }
+
+    #[test]
+    fn rejects_agy_path_change_for_different_full_uuid() {
+        let err = resolve_index_collision(
+            "abcdef12",
+            "agy",
+            "/tmp/agy/abcdef12-3456-7890-abcd-ef1234567890.jsonl",
+            "agy",
+            Path::new("/tmp/agy/abcdef12-9999-7890-abcd-ef1234567890.jsonl"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("existing brain UUID abcdef1234567890abcdef1234567890"));
+        assert!(err.contains("discovered brain UUID abcdef1299997890abcdef1234567890"));
+    }
+
+    #[test]
+    fn rejects_agy_path_change_without_full_uuid() {
+        let err = resolve_index_collision(
+            "abcdef12",
+            "agy",
+            "/tmp/agy/fallback/transcript.jsonl",
+            "agy",
+            Path::new("/tmp/agy/preferred/transcript.jsonl"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("full brain UUID could not be established"));
     }
 }

@@ -18,7 +18,7 @@ gaal index backfill [OPTIONS]
 
 Flags:
 
-- `--engine <claude|codex|gemini|hermes>`
+- `--engine <claude|codex|gemini|agy|hermes>`
 - `--since <date|timestamp>`
 - `--force`
 - `--with-markdown`
@@ -32,7 +32,7 @@ Output:
 
 ### Incremental behavior
 
-`index backfill` is incremental. Each engine keeps its own mtime cursor in the `meta` SQLite table, for example `backfill:claude`, `backfill:codex`, `backfill:gemini`, and `backfill:hermes`. On every run, discovery for an engine skips files whose on-disk mtime is older than `cursor - 10s` before any head-read, JSON parse, or SQLite lookup. The 10-second safety margin covers actively-appending session files whose mtime is close to wall-clock.
+`index backfill` is incremental. Each engine keeps its own mtime cursor in the `meta` SQLite table, for example `backfill:claude`, `backfill:codex`, `backfill:gemini`, `backfill:agy`, and `backfill:hermes`. On every run, discovery for an engine skips files whose on-disk mtime is older than `cursor - 10s` before any head-read, JSON parse, or SQLite lookup. The 10-second safety margin covers actively-appending session files whose mtime is close to wall-clock.
 
 Cursor advancement rules:
 
@@ -40,6 +40,18 @@ Cursor advancement rules:
 - If one engine stalls, its cursor stays put and the next run retries the missed window. Other engines still advance independently.
 - First run (no cursor) and DB wipes fall through to a full scan — the cursor is absent, so no mtime gate applies.
 - `--engine`, `--since`, and `--force` are all additive on top of the mtime gate. `--engine claude` only advances the Claude cursor. `--since` narrows further. `--force` re-indexes already-known rows but still honors the mtime gate for discovery.
+
+### Agy discovery behavior
+
+Agy discovery scans Antigravity brain directories, prefers non-empty
+`transcript_full.jsonl`, and falls back to `transcript.jsonl`. Native agy IDs
+are the first 8 characters of the brain UUID. JSONL parsing also detects copied
+agy transcripts by record shape. Outside the native brain path, copied agy files
+preserve engine identity; session identity comes from explicit content IDs when
+present, otherwise Gaal falls back to the copied filename.
+
+Optional agent-mux sidecars can fill model or missing cwd for matching agy
+sessions. Indexing does not require agent-mux.
 
 ### Troubleshooting: stuck cursor
 
@@ -76,8 +88,8 @@ $ gaal index status
   "last_indexed_at": "2026-03-29T10:46:56.904Z",
   "newest_session": "2026-03-29T10:46:13.988Z",
   "oldest_session": "2026-01-08",
-  "sessions_by_engine": { "claude": 4277, "codex": 2925 },
-  "sessions_total": 7202
+  "sessions_by_engine": { "claude": 4277, "codex": 2925, "agy": 12 },
+  "sessions_total": 7214
 }
 ```
 

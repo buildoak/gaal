@@ -58,7 +58,7 @@ pub fn probe_runtime(path: &Path, engine: Engine, max_lines: usize) -> RuntimePr
             continue;
         };
 
-        let ts = record_timestamp(&record);
+        let ts = record_timestamp(&record, engine);
         if ts.is_some() {
             last_event_ts = ts.clone();
         }
@@ -185,20 +185,32 @@ fn extract_session_id(record: &Value, engine: Engine) -> Option<String> {
             .get("sessionId")
             .and_then(Value::as_str)
             .map(str::to_string),
+        Engine::Agy => record
+            .get("sessionId")
+            .or_else(|| record.get("session_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         Engine::Hermes => None,
     }
 }
 
-fn record_timestamp(record: &Value) -> Option<String> {
-    record
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .or_else(|| record.pointer("/payload/timestamp").and_then(Value::as_str))
-        .map(str::to_string)
+fn record_timestamp(record: &Value, engine: Engine) -> Option<String> {
+    let ts = match engine {
+        Engine::Agy => record
+            .get("created_at")
+            .and_then(Value::as_str)
+            .or_else(|| record.get("timestamp").and_then(Value::as_str))
+            .or_else(|| record.pointer("/payload/timestamp").and_then(Value::as_str)),
+        _ => record
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .or_else(|| record.pointer("/payload/timestamp").and_then(Value::as_str)),
+    };
+    ts.map(str::to_string)
 }
 
 fn extract_usage_sample(record: &Value, engine: Engine) -> Option<UsageSample> {
-    let ts = record_timestamp(record)?;
+    let ts = record_timestamp(record, engine)?;
     let (input_tokens, tokens) = match engine {
         Engine::Claude => {
             // I33: Claude API splits tokens into input_tokens (non-cached),
@@ -228,7 +240,7 @@ fn extract_usage_sample(record: &Value, engine: Engine) -> Option<UsageSample> {
                 return None;
             }
         }
-        Engine::Gemini | Engine::Hermes => return None,
+        Engine::Gemini | Engine::Agy | Engine::Hermes => return None,
     };
 
     (tokens > 0).then_some(UsageSample {
@@ -251,6 +263,7 @@ fn extract_actions(record: &Value, engine: Engine, ts: Option<String>) -> Vec<Ac
     match engine {
         Engine::Claude => extract_claude_actions(record, ts),
         Engine::Codex => extract_codex_actions(record, ts),
+        Engine::Agy => extract_agy_actions(record, ts),
         Engine::Gemini | Engine::Hermes => Vec::new(),
     }
 }
@@ -318,6 +331,80 @@ fn extract_codex_actions(record: &Value, ts: Option<String>) -> Vec<ActionEvent>
     let summary = extract_action_summary(&kind, &input, subject.as_deref());
 
     vec![ActionEvent { ts, kind, summary }]
+}
+
+fn extract_agy_actions(record: &Value, ts: Option<String>) -> Vec<ActionEvent> {
+    let Some(kind) = agy_executed_action_kind(record) else {
+        return Vec::new();
+    };
+    let summary = extract_agy_action_summary(record, &kind);
+
+    vec![ActionEvent { ts, kind, summary }]
+}
+
+fn agy_executed_action_kind(record: &Value) -> Option<String> {
+    let record_type = record.get("type").and_then(Value::as_str)?;
+    if record_type == "PLANNER_RESPONSE" {
+        return None;
+    }
+    if !agy_status_is_executed(record) {
+        return None;
+    }
+
+    let kind = match record_type {
+        "RUN_COMMAND" | "VIEW_FILE" | "LIST_DIRECTORY" | "GREP_SEARCH" | "SEARCH_WEB"
+        | "GENERATE_IMAGE" | "LIST_PERMISSIONS" => record_type,
+        "list_permissions" => "LIST_PERMISSIONS",
+        _ => return None,
+    };
+
+    Some(kind.to_string())
+}
+
+fn agy_status_is_executed(record: &Value) -> bool {
+    match record.get("status").and_then(Value::as_str) {
+        None => true,
+        Some(status) => matches!(
+            status.to_ascii_uppercase().as_str(),
+            "DONE" | "COMPLETED" | "SUCCESS" | "SUCCEEDED"
+        ),
+    }
+}
+
+fn extract_agy_action_summary(record: &Value, kind: &str) -> String {
+    let keys = match kind {
+        "RUN_COMMAND" => &["CommandLine", "command", "cmd"][..],
+        "VIEW_FILE" => &["AbsolutePath", "file_path", "path", "file"][..],
+        "LIST_DIRECTORY" => &["DirectoryPath", "directory", "dir", "path"][..],
+        "GREP_SEARCH" => &["Query", "query", "SearchPath", "path"][..],
+        "SEARCH_WEB" => &["Query", "query", "url"][..],
+        "GENERATE_IMAGE" => &["Prompt", "prompt", "file_path", "path"][..],
+        "LIST_PERMISSIONS" => &["permission", "permissions", "path"][..],
+        _ => &[][..],
+    };
+
+    if let Some(subject) = keys
+        .iter()
+        .find_map(|key| record.get(*key).and_then(Value::as_str))
+    {
+        return truncate(subject, 120);
+    }
+
+    if let Some(summary) = record
+        .get("toolSummary")
+        .or_else(|| record.get("summary"))
+        .and_then(Value::as_str)
+    {
+        return truncate(summary, 120);
+    }
+
+    if let Some(content) = record.get("content").and_then(Value::as_str) {
+        if let Some(first_line) = content.lines().find(|line| !line.trim().is_empty()) {
+            return truncate(first_line.trim(), 120);
+        }
+    }
+
+    "executed action".to_string()
 }
 
 fn parse_json_or_null(raw: Option<&str>) -> Value {
@@ -464,4 +551,81 @@ fn truncate(value: &str, max_chars: usize) -> String {
         return value.to_string();
     }
     value.chars().take(max_chars).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_jsonl(name: &str, body: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "gaal-runtime-{name}-{}-{}.jsonl",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn agy_runtime_uses_created_at_timestamp() {
+        let path = temp_jsonl(
+            "agy-created-at",
+            r#"{"type":"USER_INPUT","created_at":"2026-06-22T18:46:54Z","content":"hello"}
+{"type":"RUN_COMMAND","status":"DONE","created_at":"2026-06-22T18:46:56Z","CommandLine":"pwd"}
+"#,
+        );
+
+        let probe = probe_runtime(&path, Engine::Agy, 10);
+        fs::remove_file(path).ok();
+
+        assert_eq!(probe.last_event_ts.as_deref(), Some("2026-06-22T18:46:56Z"));
+        assert_eq!(
+            probe.last_action.as_ref().and_then(|a| a.ts.as_deref()),
+            Some("2026-06-22T18:46:56Z")
+        );
+    }
+
+    #[test]
+    fn agy_runtime_extracts_only_executed_action_records() {
+        let path = temp_jsonl(
+            "agy-actions",
+            r#"{"type":"RUN_COMMAND","status":"DONE","created_at":"2026-06-22T18:46:56Z","CommandLine":"cargo test"}
+{"type":"VIEW_FILE","status":"DONE","created_at":"2026-06-22T18:46:57Z","AbsolutePath":"/tmp/a.txt"}
+{"type":"LIST_DIRECTORY","status":"DONE","created_at":"2026-06-22T18:46:58Z","DirectoryPath":"/tmp"}
+{"type":"GREP_SEARCH","status":"DONE","created_at":"2026-06-22T18:46:59Z","Query":"needle"}
+{"type":"SEARCH_WEB","status":"DONE","created_at":"2026-06-22T18:47:00Z","Query":"rust jsonl"}
+{"type":"GENERATE_IMAGE","status":"DONE","created_at":"2026-06-22T18:47:01Z","Prompt":"blue square"}
+{"type":"LIST_PERMISSIONS","status":"DONE","created_at":"2026-06-22T18:47:02Z","permissions":"read"}
+"#,
+        );
+
+        let probe = probe_runtime(&path, Engine::Agy, 20);
+        fs::remove_file(path).ok();
+
+        let action = probe.last_action.expect("last agy action");
+        assert_eq!(action.kind, "LIST_PERMISSIONS");
+        assert_eq!(action.summary, "read");
+        assert_eq!(action.ts.as_deref(), Some("2026-06-22T18:47:02Z"));
+    }
+
+    #[test]
+    fn agy_runtime_ignores_planner_only_tool_calls() {
+        let path = temp_jsonl(
+            "agy-planner-only",
+            r#"{"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-06-22T18:46:55Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"pwd"}},{"name":"view_file","args":{"AbsolutePath":"/tmp/a.txt"}},{"name":"list_permissions","args":{}}]}
+"#,
+        );
+
+        let probe = probe_runtime(&path, Engine::Agy, 10);
+        fs::remove_file(path).ok();
+
+        assert_eq!(probe.last_event_ts.as_deref(), Some("2026-06-22T18:46:55Z"));
+        assert!(probe.last_action.is_none());
+    }
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -25,7 +27,7 @@ use crate::discovery::DiscoveredSession;
 use crate::error::GaalError;
 use crate::model::{Fact, FactType, HandoffRecord};
 use crate::output::json::print_json;
-use crate::parser::types::Engine;
+use crate::parser::{detect_engine, types::Engine};
 
 /// Built-in fallback extraction prompt used when no prompt file is available.
 const DEFAULT_HANDOFF_PROMPT: &str = r#"You are analyzing an agent session trace. Extract:
@@ -279,18 +281,17 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
     }
 
     let (id_or_today, detected) = if let Some(ref jsonl_path) = args.jsonl {
-        let session_id = jsonl_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| GaalError::ParseError("invalid --jsonl path".into()))?
-            .to_string();
-        let engine_name = if jsonl_path.to_string_lossy().contains(".codex") {
-            "codex"
-        } else {
-            "claude"
-        };
+        let engine_name = infer_source_engine_from_jsonl(jsonl_path);
+        let session_id = extract_session_id_from_jsonl(jsonl_path, &engine_name)
+            .or_else(|| {
+                jsonl_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(str::to_string)
+            })
+            .ok_or_else(|| GaalError::ParseError("invalid --jsonl path".into()))?;
         let detected = DetectedSession {
-            engine: engine_name.to_string(),
+            engine: engine_name,
             session_id: session_id.clone(),
             jsonl_path: jsonl_path.clone(),
             pid: 0,
@@ -417,7 +418,7 @@ fn plan_single_session_dry_run(
     request: DryRunRequest<'_>,
 ) -> Result<Vec<HandoffDryRunResult>, GaalError> {
     if let Some(jsonl_path) = args.jsonl.as_deref() {
-        let session = dry_run_session_from_jsonl(conn, jsonl_path, args.engine.as_deref())?;
+        let session = dry_run_session_from_jsonl(conn, jsonl_path, None)?;
         return Ok(vec![build_dry_run_plan(&session, request)?]);
     }
 
@@ -482,7 +483,7 @@ fn dry_run_session_from_jsonl(
 ) -> Result<DryRunSession, GaalError> {
     let engine = engine_override
         .map(str::to_string)
-        .unwrap_or_else(|| infer_engine_from_jsonl_path(jsonl_path).to_string());
+        .unwrap_or_else(|| infer_source_engine_from_jsonl(jsonl_path));
     let raw_id = extract_session_id_from_jsonl(jsonl_path, &engine)
         .or_else(|| {
             jsonl_path
@@ -855,11 +856,19 @@ fn infer_engine_from_jsonl_path(path: &Path) -> &'static str {
     let path = path.to_string_lossy();
     if path.contains(".codex") {
         "codex"
+    } else if path.contains(".gemini/antigravity-cli") {
+        "agy"
     } else if path.contains(".gemini") {
         "gemini"
     } else {
         "claude"
     }
+}
+
+fn infer_source_engine_from_jsonl(path: &Path) -> String {
+    detect_engine(path)
+        .map(|engine| engine.to_string())
+        .unwrap_or_else(|_| infer_engine_from_jsonl_path(path).to_string())
 }
 
 fn estimate_tokens(chars: u64) -> u64 {
@@ -1288,7 +1297,7 @@ fn invoke_validated_handoff(
             request.model,
             session.cwd.as_deref().unwrap_or("."),
             request.prompt,
-            &context,
+            context,
             timeout_secs,
         )?;
         extracted = extract_metadata(&response);
@@ -1368,11 +1377,7 @@ fn build_chunk_contexts(
             plan.chunks.len()
         );
         return Ok(build_transcript_chunk_contexts(
-            session,
-            &transcript,
-            plan,
-            provider,
-            format,
+            session, transcript, plan, provider, format,
         ));
     }
 
@@ -1536,6 +1541,7 @@ fn build_jsonl_chunk_contexts(
         .collect())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_chunk_context_body(
     session: &SessionRow,
     provider: &str,
@@ -2145,10 +2151,39 @@ fn extract_session_id_from_jsonl(path: &Path, engine: &str) -> Option<String> {
                     return Some(id);
                 }
             }
+            "agy" => {
+                if let Some(id) = value
+                    .get("sessionId")
+                    .or_else(|| value.get("session_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                {
+                    return Some(id);
+                }
+            }
             _ => {}
         }
     }
 
+    if engine == "agy" {
+        return extract_agy_session_id_from_path(path);
+    }
+
+    None
+}
+
+fn extract_agy_session_id_from_path(path: &Path) -> Option<String> {
+    let mut previous_was_brain = false;
+    for component in path.components() {
+        let value = component.as_os_str().to_string_lossy();
+        if previous_was_brain {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        previous_was_brain = value == "brain";
+    }
     None
 }
 
@@ -2201,7 +2236,7 @@ fn index_single_jsonl(
 /// Codex (UUIDv7): last 8 hex characters (dashes stripped).
 fn truncate_session_id(raw: &str, engine: &Engine) -> String {
     match engine {
-        Engine::Claude | Engine::Gemini => raw.chars().take(8).collect(),
+        Engine::Claude | Engine::Gemini | Engine::Agy => raw.chars().take(8).collect(),
         Engine::Hermes => crate::util::sanitize_filename(raw),
         Engine::Codex => {
             let hex: String = raw.chars().filter(|c| *c != '-').collect();
@@ -2886,6 +2921,8 @@ fn build_handoff_frontmatter(
 
     let engine_str = if engine.contains("codex") {
         "codex"
+    } else if engine.contains("agy") {
+        "agy"
     } else if engine.contains("gemini") {
         "gemini"
     } else if engine.contains("hermes") {
@@ -3063,6 +3100,7 @@ fn extract_json_metadata(value: Value) -> Option<ExtractedMetadata> {
     let keywords = extract_string_array(map.get("keywords"));
     let substance = map
         .get("substance")
+        .or_else(|| map.get("substance_score"))
         .and_then(Value::as_i64)
         .map(|v| v.clamp(0, 3) as i32)
         .unwrap_or(0);
@@ -3148,6 +3186,35 @@ fn extract_named_list(text: &str, name: &str) -> Vec<String> {
             out.push(item);
         }
     }
+    if !out.is_empty() {
+        return out;
+    }
+
+    let target = format!("- {name}");
+    let mut in_bullet_section = false;
+    let mut section_indent = 0_usize;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if !in_bullet_section {
+            if lower == target || lower == format!("{target}:") {
+                in_bullet_section = true;
+                section_indent = line.len().saturating_sub(line.trim_start().len());
+            }
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            continue;
+        }
+        let indent = line.len().saturating_sub(line.trim_start().len());
+        if indent <= section_indent {
+            break;
+        }
+        if let Some(item) = trim_bullet(trimmed) {
+            out.push(item);
+        }
+    }
     out
 }
 
@@ -3184,23 +3251,40 @@ fn trim_bullet(line: &str) -> Option<String> {
 }
 
 fn extract_substance(text: &str) -> i32 {
+    let mut next_value_line = false;
     for line in text.lines() {
+        let trimmed = line.trim();
+        if next_value_line && !trimmed.is_empty() {
+            if let Some(value) = first_substance_digit(trimmed) {
+                return value;
+            }
+            next_value_line = false;
+        }
+
         let lower = line.to_ascii_lowercase();
         if !lower.contains("substance") {
             continue;
         }
-        for ch in lower.chars() {
-            if ('0'..='3').contains(&ch) {
-                return (ch as u8 - b'0') as i32;
-            }
+        if let Some(value) = first_substance_digit(&lower) {
+            return value;
         }
+        next_value_line = true;
     }
     0
+}
+
+fn first_substance_digit(value: &str) -> Option<i32> {
+    value
+        .chars()
+        .find(|ch| ('0'..='3').contains(ch))
+        .map(|ch| (ch as u8 - b'0') as i32)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn detects_codex_compaction_type_without_rendering_payload() {
@@ -3209,6 +3293,32 @@ mod tests {
 
         let nested_only = r#"{"timestamp":"2026-05-04T00:57:52.496Z","type":"response_item","payload":{"replacement_history":[{"type":"compacted"}]}}"#;
         assert!(!line_has_top_level_compacted_type(nested_only));
+    }
+
+    #[test]
+    fn extracts_agy_jsonl_session_id_from_brain_path_when_record_lacks_id() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "gaal-agy-handoff-id-{}-{unique}",
+            std::process::id()
+        ));
+        let path = root.join(
+            ".gemini/antigravity-cli/brain/12345678-90ab-cdef-1234-567890abcdef/.system_generated/logs/transcript_full.jsonl",
+        );
+        fs::create_dir_all(path.parent().expect("fixture parent")).expect("create fixture parent");
+        fs::write(
+            &path,
+            "{\"type\":\"USER_INPUT\",\"created_at\":\"2026-06-20T10:00:00Z\",\"content\":\"no id here\"}\n",
+        )
+        .expect("write fixture transcript");
+
+        let id = extract_session_id_from_jsonl(&path, "agy");
+        fs::remove_dir_all(&root).ok();
+
+        assert_eq!(id.as_deref(), Some("12345678-90ab-cdef-1234-567890abcdef"));
     }
 
     #[test]
@@ -3379,6 +3489,82 @@ mod tests {
         let frontmatter = build_handoff_frontmatter(&session, &extracted, "codex", "gpt-5.5");
 
         assert!(frontmatter.contains("date: 2026-05-04"));
+    }
+
+    #[test]
+    fn extract_text_metadata_reads_substance_score_heading_value() {
+        let response = r#"
+## Headline
+Generated and converted a banana image.
+
+## Keywords
+- `generated-banana.png`
+- `GenerateImage`
+
+## Substance Score
+2
+"#;
+
+        let extracted = extract_text_metadata(response);
+
+        assert_eq!(
+            extracted.headline.as_deref(),
+            Some("Generated and converted a banana image.")
+        );
+        assert_eq!(extracted.substance, 2);
+        assert_eq!(
+            extracted.keywords,
+            vec![
+                "`generated-banana.png`".to_string(),
+                "`GenerateImage`".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_json_metadata_accepts_substance_score_alias() {
+        let response = r#"{
+  "headline": "Generated banana image",
+  "projects": ["agent-mux"],
+  "keywords": ["generated-banana.png"],
+  "substance_score": 2
+}"#;
+
+        let extracted = extract_metadata(response);
+
+        assert_eq!(extracted.substance, 2);
+        assert_eq!(extracted.projects, vec!["agent-mux".to_string()]);
+        assert_eq!(extracted.keywords, vec!["generated-banana.png".to_string()]);
+    }
+
+    #[test]
+    fn extract_text_metadata_reads_lowercase_bullet_sections() {
+        let response = r#"
+## Headline
+Identity smoke passed.
+
+- projects
+  - `agent-mux`
+
+- keywords
+  - `AGY_FINAL_OK`
+  - `AGY_FINAL_RESUME_OK`
+
+- substance_score
+  - `1`
+"#;
+
+        let extracted = extract_text_metadata(response);
+
+        assert_eq!(extracted.projects, vec!["`agent-mux`".to_string()]);
+        assert_eq!(
+            extracted.keywords,
+            vec![
+                "`AGY_FINAL_OK`".to_string(),
+                "`AGY_FINAL_RESUME_OK`".to_string()
+            ]
+        );
+        assert_eq!(extracted.substance, 1);
     }
 }
 

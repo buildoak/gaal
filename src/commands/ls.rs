@@ -71,6 +71,7 @@ pub enum LsEngine {
     Claude,
     Codex,
     Gemini,
+    Agy,
     Hermes,
 }
 
@@ -301,6 +302,7 @@ impl LsEngine {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Gemini => "gemini",
+            Self::Agy => "agy",
             Self::Hermes => "hermes",
         }
     }
@@ -489,11 +491,13 @@ fn build_summary(
 
     let duration_secs = compute_duration_secs(&row.started_at, row.ended_at.as_deref(), now);
 
+    let cwd = truncate_cwd(&row.cwd.unwrap_or_default());
+
     Ok(SessionSummary {
         id: row.id,
         engine: row.engine,
         model: row.model.unwrap_or_else(|| "unknown".to_string()),
-        cwd: truncate_cwd(&row.cwd.unwrap_or_default()),
+        cwd,
         started_at: row.started_at,
         ended_at: row.ended_at,
         duration_secs,

@@ -14,7 +14,7 @@ Common flags:
 
 - `--since <duration|date|timestamp>`: lower bound; default `1d`
 - `--before <date|timestamp>`: upper bound; default now
-- `--engine <claude|codex|gemini|hermes>`
+- `--engine <claude|codex|gemini|agy|hermes>`
 - `--cwd <substring>`
 - `--session <id>`: render one resolved session only
 - `--skip-subagents`

@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::db;
 use crate::error::GaalError;
+use crate::parser::{self, Engine};
 
 /// Arguments for `gaal find-salt`.
 #[derive(Debug, Clone)]
@@ -15,6 +16,8 @@ pub struct FindArgs {
     pub salt: String,
     /// Human-readable output mode.
     pub human: bool,
+    /// Optional engine filter.
+    pub engine: Option<String>,
 }
 
 /// Find the first JSONL session file containing the provided salt token (`find-salt` command).
@@ -23,20 +26,34 @@ pub fn run(args: FindArgs) -> Result<(), GaalError> {
         return Err(GaalError::NotFound(args.salt));
     };
 
-    let roots = [home.join(".claude").join("projects"), home.join(".codex")];
+    let roots = [
+        (
+            "claude",
+            home.join(".claude").join("projects"),
+            SaltRootKind::AnyJsonl,
+        ),
+        ("codex", home.join(".codex"), SaltRootKind::AnyJsonl),
+        (
+            "agy",
+            home.join(".gemini").join("antigravity-cli").join("brain"),
+            SaltRootKind::AgyBrainTranscripts,
+        ),
+    ];
 
-    for root in roots {
-        let Some(path) = find_matching_jsonl(&root, &args.salt)? else {
+    for (engine_name, root, root_kind) in roots {
+        if args
+            .engine
+            .as_deref()
+            .is_some_and(|engine| engine != engine_name)
+        {
+            continue;
+        }
+        let Some(path) = find_matching_jsonl(&root, root_kind, &args.salt)? else {
             continue;
         };
 
-        let session_id = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or_else(|| GaalError::ParseError("invalid jsonl filename".to_string()))?
-            .to_string();
-
         let engine = infer_engine(&path);
+        let session_id = infer_session_id(&path, engine)?;
 
         // Try enriching from DB
         let enriched = try_enrich(&session_id, engine, &home);
@@ -50,6 +67,12 @@ pub fn run(args: FindArgs) -> Result<(), GaalError> {
     }
 
     Err(GaalError::NotFound(args.salt))
+}
+
+#[derive(Copy, Clone)]
+enum SaltRootKind {
+    AnyJsonl,
+    AgyBrainTranscripts,
 }
 
 /// Enriched session data from the DB, if available.
@@ -249,7 +272,11 @@ fn format_tokens_k(tokens: i64) -> String {
     }
 }
 
-fn find_matching_jsonl(root: &Path, salt: &str) -> Result<Option<PathBuf>, GaalError> {
+fn find_matching_jsonl(
+    root: &Path,
+    root_kind: SaltRootKind,
+    salt: &str,
+) -> Result<Option<PathBuf>, GaalError> {
     if !root.exists() {
         return Ok(None);
     }
@@ -270,7 +297,7 @@ fn find_matching_jsonl(root: &Path, salt: &str) -> Result<Option<PathBuf>, GaalE
                 stack.push(path);
                 continue;
             }
-            if !file_type.is_file() || !is_jsonl(&path) {
+            if !file_type.is_file() || !root_kind.allows_file(&path) {
                 continue;
             }
             if file_contains_salt(&path, salt)? {
@@ -304,7 +331,9 @@ fn line_contains_salt_output(line: &str, salt: &str) -> bool {
         return false;
     };
 
-    claude_salt_match(&value, salt) || codex_salt_match(&value, salt)
+    claude_salt_match(&value, salt)
+        || codex_salt_match(&value, salt)
+        || agy_salt_match(&value, salt)
 }
 
 fn claude_salt_match(value: &Value, salt: &str) -> bool {
@@ -345,11 +374,86 @@ fn codex_salt_match(value: &Value, salt: &str) -> bool {
             .is_some_and(|output| output.trim() == salt)
 }
 
+fn agy_salt_match(value: &Value, salt: &str) -> bool {
+    if !parser::is_agy_record(value) {
+        return false;
+    }
+
+    let record_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !is_agy_output_type(record_type) {
+        return false;
+    }
+
+    ["content", "text", "stdout", "stderr", "output", "result"]
+        .iter()
+        .any(|key| {
+            value
+                .get(*key)
+                .is_some_and(|field| text_value_contains(field, salt))
+        })
+}
+
+fn is_agy_output_type(record_type: &str) -> bool {
+    matches!(
+        record_type,
+        "RUN_COMMAND"
+            | "VIEW_FILE"
+            | "LIST_DIRECTORY"
+            | "GREP_SEARCH"
+            | "SEARCH_WEB"
+            | "GENERATE_IMAGE"
+            | "ERROR_MESSAGE"
+    ) || record_type.contains("TOOL_RESULT")
+        || record_type.contains("COMMAND_OUTPUT")
+}
+
+fn text_value_contains(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(text) => text.contains(needle),
+        Value::Array(items) => items.iter().any(|item| text_value_contains(item, needle)),
+        Value::Object(map) => map.values().any(|item| text_value_contains(item, needle)),
+        _ => false,
+    }
+}
+
 fn is_jsonl(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("jsonl"))
         .unwrap_or(false)
+}
+
+impl SaltRootKind {
+    fn allows_file(self, path: &Path) -> bool {
+        match self {
+            Self::AnyJsonl => is_jsonl(path),
+            Self::AgyBrainTranscripts => is_agy_brain_transcript(path),
+        }
+    }
+}
+
+fn is_agy_brain_transcript(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|name| name.to_str());
+    if !matches!(
+        file_name,
+        Some("transcript_full.jsonl" | "transcript.jsonl")
+    ) {
+        return false;
+    }
+
+    path.parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        == Some("logs")
+        && path
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some(".system_generated")
 }
 
 /// Infer the engine from a JSONL file path.
@@ -358,12 +462,36 @@ fn is_jsonl(path: &Path) -> bool {
 /// - `~/.codex/` → "codex"
 /// - Otherwise → "unknown"
 fn infer_engine(path: &Path) -> &'static str {
-    let path_str = path.to_string_lossy();
-    if path_str.contains("/.claude/projects/") {
-        "claude"
-    } else if path_str.contains("/.codex/") {
-        "codex"
-    } else {
-        "unknown"
+    match parser::detect_engine(path) {
+        Ok(Engine::Claude) => "claude",
+        Ok(Engine::Codex) => "codex",
+        Ok(Engine::Gemini) => "gemini",
+        Ok(Engine::Agy) => "agy",
+        Ok(Engine::Hermes) => "hermes",
+        Err(_) => {
+            let path_str = path.to_string_lossy();
+            if path_str.contains("/.claude/projects/") {
+                "claude"
+            } else if path_str.contains("/.codex/") {
+                "codex"
+            } else if path_str.contains("/.gemini/antigravity-cli/") {
+                "agy"
+            } else {
+                "unknown"
+            }
+        }
     }
+}
+
+fn infer_session_id(path: &Path, engine: &str) -> Result<String, GaalError> {
+    if engine == "agy" {
+        if let Some(session_id) = parser::extract_agy_session_id(path) {
+            return Ok(session_id);
+        }
+    }
+
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| GaalError::ParseError("invalid jsonl filename".to_string()))
+        .map(str::to_string)
 }

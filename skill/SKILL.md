@@ -11,7 +11,8 @@ description: |
 # gaal
 
 Gaal turns AI coding-agent session traces into queryable artifacts. It indexes
-local Claude Code, Codex, Gemini CLI, and experimental Hermes session stores,
+local Claude Code, Codex, Gemini CLI, native Antigravity CLI (`agy`), and
+experimental Hermes session stores,
 then exposes one CLI for fleet views, inspection, attribution, full-text search,
 recall, transcript rendering, self-identification, and optional handoff creation.
 
@@ -186,10 +187,12 @@ gaal find-salt GAAL_SALT_<hex>
 Pass the literal token printed by `gaal salt`. Do not rely on shell variables
 persisting across agent tool calls.
 
-`find-salt` scans Claude Code and Codex JSONL session logs. It does not identify
-Gemini JSON or Hermes SQLite sessions. When the session is indexed, output is
-enriched with model, cwd, session type, token counts, transcript status, and
-handoff status; otherwise it still returns the source path and `"indexed": false`.
+`find-salt` scans Claude Code, Codex, and Antigravity brain JSONL session logs.
+It does not identify Gemini JSON or Hermes SQLite sessions. For agy, it matches
+salt output in executed action records and ignores user prompt echoes. When the
+session is indexed, output is enriched with model, cwd, session type, token
+counts when known, transcript status, and handoff status; otherwise it still
+returns the source path and `"indexed": false`.
 
 To create a handoff from the identified source path, first inspect the returned
 JSON and confirm generation is appropriate:
@@ -239,9 +242,11 @@ gaal create-handoff --batch --since 1d --min-turns 3 --dry-run
 
 Session ID notes:
 
-- Claude Code, Codex, and Gemini usually resolve by short unique prefixes.
+- Claude Code, Codex, Gemini, and Agy usually resolve by short unique prefixes.
 - Codex IDs are stored as the last 8 hex characters of the UUID with dashes
   removed.
+- Agy IDs are the first 8 characters of the Antigravity brain UUID; the full
+  UUID remains recoverable from the source path.
 - Hermes IDs are full logical session IDs; short date-like prefixes can collide.
 
 ## Engine Support
@@ -251,7 +256,21 @@ Main indexed engines:
 - `claude`: Claude Code JSONL traces.
 - `codex`: Codex JSONL traces.
 - `gemini`: Gemini CLI JSON session files.
+- `agy`: experimental native Antigravity CLI JSONL traces from
+  `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`,
+  with fallback to `transcript.jsonl`.
 - `hermes`: experimental Hermes Agent SQLite support.
+
+Agy caveats: token/cost parity and SQLite/blob sidecars are out of scope; image
+generation is indexed and rendered through normalized tool facts and transcript
+evidence.
+
+Agy attribution caveats: copied agy JSONL is detected by record shape, planned
+tool calls are not attribution facts, command status is tri-state
+(`true`/`false`/unknown), missing agy exit/success is unknown, and runtime
+support is best-effort using `created_at` plus executed action records.
+Optional agent-mux sidecars can enrich agy model or missing cwd, but core Gaal
+does not require agent-mux.
 
 Hermes is useful but should be treated as experimental. It reads a SQLite state
 database, not JSONL. `find-salt` does not support Hermes, and Hermes session IDs
@@ -259,7 +278,7 @@ often need the full ID to avoid collisions. Environment overrides are
 `HERMES_STATE_DB` for a specific state database and `HERMES_HOME` for a home
 directory containing `state.db`.
 
-For indexed-session filtering, `--engine claude|codex|gemini|hermes` is
+For indexed-session filtering, `--engine claude|codex|gemini|agy|hermes` is
 supported on:
 
 ```text

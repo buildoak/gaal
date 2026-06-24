@@ -8,8 +8,9 @@ Gaal makes local AI coding-agent traces searchable, attributable, and handoff-re
 ![Platforms](https://img.shields.io/badge/platforms-macOS-lightgrey)
 
 I built Gaal because my agents were doing real work and leaving behind almost
-no usable memory. Claude Code, Codex, Gemini CLI, and Hermes Agent all write
-session traces, but each one writes a different shape of log. After enough
+no usable memory. Claude Code, Codex, Gemini CLI, Antigravity CLI (`agy`), and
+Hermes Agent all write session traces, but each one writes a different shape of
+log. After enough
 sessions, "I know we solved this last week" becomes an archaeological problem.
 
 Gaal is the small tool I wanted in that moment: index the local traces, normalize
@@ -57,8 +58,8 @@ gaal ls -H --limit 5
 ```
 
 `GAAL_HOME` does not move the source traces written by Claude Code, Codex,
-Gemini CLI, or Hermes Agent. It only changes where Gaal stores its own derived
-state.
+Gemini CLI, Antigravity CLI, or Hermes Agent. It only changes where Gaal stores
+its own derived state.
 
 ## Privacy
 
@@ -111,8 +112,8 @@ Replace sample session IDs with IDs from your own `gaal ls` output.
 - What did a long session look like as a readable transcript?
 - Which past generated handoffs are relevant to this topic?
 - Where is the raw source trace for this short session ID?
-- Can a Claude Code or Codex agent identify its own session and leave continuity
-  behind?
+- Can a Claude Code, Codex, or agy agent identify its own session and leave
+  continuity behind?
 
 The core idea is boring in the best way: agent sessions should be queryable
 artifacts, not mystery blobs.
@@ -151,6 +152,10 @@ written into the session log:
 ```bash
 gaal find-salt GAAL_SALT_716a02ca9642c721 -H
 ```
+
+`find-salt` scans Claude Code and Codex JSONL plus Antigravity brain
+transcripts. For agy, it matches salt output in executed action records and
+ignores user prompt echoes.
 
 If that returns a JSONL path and you want a continuity artifact:
 
@@ -243,7 +248,24 @@ Gaal currently indexes:
 - Claude Code JSONL traces
 - Codex JSONL traces
 - Gemini CLI JSON session files
+- Antigravity CLI (`agy`) JSONL traces, experimentally
 - Hermes Agent SQLite session stores, experimentally
+
+Agy support is native, independent, and currently experimental. It discovers sessions under
+`~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`,
+falling back to `transcript.jsonl` when the full transcript is absent. Gaal
+stores the 8-character agy ID prefix to match Gemini-style short IDs; the full
+brain UUID remains recoverable from the source path.
+
+Copied agy JSONL can still be detected by content shape even outside the native
+brain directory. Optional agent-mux sidecar metadata can enrich agy rows with a
+model or missing cwd when a matching sidecar exists; core Gaal does not require
+agent-mux for agy indexing, search, activity, attribution, transcript rendering,
+or resolve.
+
+The experimental label means the supported contract is current Antigravity brain
+transcript JSONL plus fixture-backed copied JSONL. Token/cost parity and
+SQLite/blob sidecars are not claimed yet.
 
 Hermes support is useful but cautious. It has been tested against one real
 installation/version plus sanitized fixtures; broader Hermes layouts should be
@@ -273,6 +295,8 @@ that link.
 - It does not tail sessions in real time; use normal shell tools for that.
 - It does not make every session worth preserving. Handoffs are for sessions
   that matter.
+- It does not provide agy token/cost parity or parse Antigravity SQLite/blob
+  sidecars.
 - It does not promise broad Hermes compatibility yet.
 
 If a monitoring feature looks conspicuously absent, there is a decent chance it
@@ -300,7 +324,7 @@ Run `gaal --help` and `gaal <command> --help` for the full current contract.
 | Command | Purpose |
 | --- | --- |
 | `gaal salt` | Emit a unique token for self-identification. |
-| `gaal find-salt <token>` | Find the Claude Code or Codex JSONL file containing that token and return enriched session metadata when indexed. |
+| `gaal find-salt <token>` | Find the Claude Code, Codex, or agy JSONL file containing that token in tool/action output and return enriched session metadata when indexed. |
 | `gaal create-handoff <id>` | Generate a handoff markdown artifact through the configured backend. Use `--dry-run` first. Agent-mux is the default supported backend for real execution. |
 | `gaal create-handoff --jsonl <path>` | Generate from an explicit JSONL file path. Useful after `find-salt`. |
 | `gaal create-handoff --batch --since 1d --min-turns 3 --dry-run` | Preview batch handoff candidates before generating anything. |

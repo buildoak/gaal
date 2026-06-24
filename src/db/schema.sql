@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
-    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'hermes')),
+    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes')),
     model TEXT,
     cwd TEXT,
     started_at TEXT NOT NULL,
