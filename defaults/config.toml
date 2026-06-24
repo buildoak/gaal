@@ -9,8 +9,8 @@
 [llm]
 # Default engine for LLM operations (codex, claude)
 default_engine = "codex"
-# Default model identifier (codex spark via agent-mux: --engine codex --model gpt-5.3-codex-spark)
-default_model = "gpt-5.3-codex-spark"
+# Default model identifier (via agent-mux: --engine codex --model gpt-5.4-mini)
+default_model = "gpt-5.4-mini"
 # Timeout in seconds for LLM invocations
 timeout_secs = 120
 
@@ -26,7 +26,7 @@ format = "eywa-compatible"
 path = "agent-mux"
 # Optional dispatch profile passed to agent-mux with -P when your install provides one.
 timeout_secs = 120
-# effort = "high"
+# effort = "xhigh"
 # Override cwd for dispatch when the default session cwd is not suitable.
 # cwd = "/path/to/project/with/skills"
 

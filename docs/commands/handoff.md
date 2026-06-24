@@ -25,7 +25,7 @@ gaal create-handoff [OPTIONS] [ID]
 - `--since <duration|date>`: default `7d`
 - `--parallel <n>`: default `1`
 - `--min-turns <n>`: default `3`
-- `--this`: prefer the current detected session rather than a parent
+- `--this`: compatibility no-op while parent-session preference is disabled
 - `--dry-run`: preview candidates/planned execution only. Single-session dry-run is read-only: it does not invoke providers, spend tokens, write handoff markdown, upsert handoff rows, or index unindexed JSONL files.
 - `--effort <low|medium|high|xhigh>`: effort level for the default `agent-mux` dispatch path. Overrides config `[agent-mux] effort`. Controls how long the LLM worker runs and auto-aligns gaal's wrapper timeout.
 - `-H`, `--human`

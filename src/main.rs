@@ -285,7 +285,7 @@ enum Commands {
         /// Minimum turns required for batch candidates.
         #[arg(long, default_value_t = 3)]
         min_turns: usize,
-        /// Extract the current (nearest) detected session instead of preferring a parent session.
+        /// Compatibility no-op while parent-session preference is disabled.
         #[arg(long)]
         this: bool,
         /// Preview candidates without processing.

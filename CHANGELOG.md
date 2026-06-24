@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026-06-24 — 0.4.0
 
 ### Added
 - **Antigravity CLI (`agy`) native engine support.** Gaal now discovers, parses, indexes, searches, renders transcripts for, dry-run plans handoffs for, and self-identifies agy sessions from native Antigravity brain transcripts. `transcript_full.jsonl` is preferred, `transcript.jsonl` is the fallback, and indexed agy IDs are the first 8 characters of the native brain UUID.
@@ -13,6 +13,10 @@
 - **Transcript-aware `create-handoff` planning.** Handoff chunk planning now sizes the actual rendered transcript used for extraction instead of raw Codex JSONL bytes. This prevents short rendered sessions with large JSONL tool payloads from exploding into unnecessary map/reduce calls, and makes long rendered transcripts chunk predictably before dispatch.
 - **Live `create-handoff` defaults and metadata extraction.** The default Codex extraction worker now uses `gpt-5.4-mini` with xhigh effort to match the current agent-mux roster, and handoff metadata parsing accepts common worker output variants such as `substance_score`, next-line "Substance Score" values, and lowercase bullet sections for projects/keywords.
 - **Low-substance recall filtering.** `gaal recall --substance 0` now honors the explicit threshold instead of silently raising it back to 1, so deliberate smoke-test handoffs remain queryable when requested.
+- **Hermes handoff artifact paths.** Real `create-handoff` writes now use the same full Hermes session artifact ID as `resolve`, dry-run planning, and frontmatter instead of truncating Hermes filenames to 8 characters.
+- **Agy `created_at` dry-run planning.** Unindexed `create-handoff --jsonl --dry-run` now uses agy `created_at` when `timestamp` is absent, so planned handoff paths keep the transcript date.
+- **Shipped default config.** `defaults/config.toml` now matches compiled handoff defaults: `gpt-5.4-mini` with xhigh effort.
+- **`--this` handoff documentation.** CLI help, command docs, and skill references now describe `--this` as a compatibility no-op while parent-session preference is disabled.
 
 ### Changed
 - **Agy support marked experimental.** README, docs, and the agent skill now state that agy support targets current Antigravity transcript JSONL plus fixture-backed copied JSONL; token/cost parity and SQLite/blob sidecars are not claimed yet.

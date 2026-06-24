@@ -727,7 +727,8 @@ fn scan_jsonl_for_plan(path: &Path) -> Result<JsonlPlanStats, GaalError> {
         let line = line.map_err(GaalError::from)?;
         lines += 1;
         if first_timestamp.is_none() {
-            first_timestamp = extract_json_string_field(&line, "timestamp");
+            first_timestamp = extract_json_string_field(&line, "timestamp")
+                .or_else(|| extract_json_string_field(&line, "created_at"));
         }
         if line_has_top_level_compacted_type(&line) {
             compaction_lines.push(lines);
@@ -846,10 +847,14 @@ fn planned_handoff_path(session_id: &str, engine: &str, started_at: &str) -> Pat
         .join(year)
         .join(month)
         .join(day)
-        .join(format!(
-            "{}.md",
-            crate::util::session_artifact_id(engine, session_id)
-        ))
+        .join(handoff_filename(engine, session_id))
+}
+
+fn handoff_filename(engine: &str, session_id: &str) -> String {
+    format!(
+        "{}.md",
+        crate::util::session_artifact_id(engine, session_id)
+    )
 }
 
 fn infer_engine_from_jsonl_path(path: &Path) -> &'static str {
@@ -3006,13 +3011,7 @@ fn write_handoff_markdown(session: &SessionRow, content: &str) -> Result<PathBuf
         .join(year)
         .join(month)
         .join(day)
-        .join(format!(
-            "{}.md",
-            crate::util::sanitize_filename(&session.id)
-                .chars()
-                .take(8)
-                .collect::<String>()
-        ));
+        .join(handoff_filename(&session.engine, &session.id));
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(GaalError::from)?;
@@ -3319,6 +3318,43 @@ mod tests {
         fs::remove_dir_all(&root).ok();
 
         assert_eq!(id.as_deref(), Some("12345678-90ab-cdef-1234-567890abcdef"));
+    }
+
+    #[test]
+    fn scan_jsonl_for_plan_uses_agy_created_at_when_timestamp_absent() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "gaal-agy-created-at-plan-{}-{unique}.jsonl",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            "{\"type\":\"USER_INPUT\",\"created_at\":\"2026-06-20T10:00:00Z\",\"content\":\"hello\"}\n",
+        )
+        .expect("write fixture transcript");
+
+        let stats = scan_jsonl_for_plan(&path).expect("scan jsonl");
+        fs::remove_file(&path).ok();
+
+        assert_eq!(
+            stats.first_timestamp.as_deref(),
+            Some("2026-06-20T10:00:00Z")
+        );
+    }
+
+    #[test]
+    fn handoff_filename_preserves_full_hermes_session_id() {
+        assert_eq!(
+            handoff_filename("hermes", "2026-05-05T10-00-00Z-abcdef123456"),
+            "2026-05-05T10-00-00Z-abcdef123456.md"
+        );
+        assert_eq!(
+            handoff_filename("codex", "rollout-2026-05-05T10-00-00Z-abcdef123456"),
+            "rollout-.md"
+        );
     }
 
     #[test]

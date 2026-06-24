@@ -293,7 +293,7 @@ LLM-powered handoff generation.
 | `--since <SINCE>` | Lower bound for batch candidates |
 | `--parallel <PARALLEL>` | Max concurrent batch workers |
 | `--min-turns <MIN_TURNS>` | Minimum turns required for batch candidates |
-| `--this` | Prefer nearest detected session over parent session |
+| `--this` | Compatibility no-op while parent-session preference is disabled |
 | `--effort <EFFORT>` | Effort level: `low`, `medium`, `high`, `xhigh`. Overrides config |
 | `--dry-run` | Preview candidates without processing |
 | `-H, --human` | Human-readable output |
