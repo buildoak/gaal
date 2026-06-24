@@ -1,11 +1,15 @@
 use std::collections::{HashMap, HashSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{named_params, Connection, OptionalExtension, Row};
+use rusqlite::{named_params, Connection, ErrorCode, OptionalExtension, Row};
 use serde::Serialize;
 use serde_json::{Map as JsonMap, Number, Value};
 
 use crate::error::GaalError;
 use crate::model::{Fact, HandoffRecord};
+
+const HERMES_ALIAS_SCHEME: &str = "hermes-fnv64-base32-8-v1";
+const MAX_ALIAS_COLLISION_RETRIES: u32 = 1024;
 
 /// Database-level session row, flattened to only SQLite-backed fields.
 #[derive(Debug, Clone)]
@@ -214,7 +218,193 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
         },
     )
     .map_err(db_err)?;
+    if session.engine == "hermes" {
+        register_hermes_alias(conn, &session.id)?;
+    }
     Ok(())
+}
+
+/// Ensure every existing Hermes session has a durable alias row.
+///
+/// This is invoked during DB initialization so databases created before the
+/// alias registry can resolve existing Hermes sessions by alias without a
+/// forced reindex.
+pub fn backfill_hermes_aliases(conn: &Connection) -> Result<(), GaalError> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id
+            FROM sessions
+            WHERE engine = 'hermes'
+            ORDER BY started_at ASC, id ASC
+            "#,
+        )
+        .map_err(db_err)?;
+    let mut rows = stmt.query([]).map_err(db_err)?;
+    let mut ids = Vec::new();
+    while let Some(row) = rows.next().map_err(db_err)? {
+        ids.push(row.get::<_, String>(0).map_err(db_err)?);
+    }
+    drop(rows);
+    drop(stmt);
+
+    for id in ids {
+        register_hermes_alias(conn, &id)?;
+    }
+    Ok(())
+}
+
+/// Register or fetch the deterministic 8-character alias for a Hermes session.
+///
+/// The first candidate hashes `hermes:` plus the full native session id. If the
+/// alias is already assigned to a different session, subsequent candidates add a
+/// deterministic counter salt until a free alias is found.
+pub fn register_hermes_alias(conn: &Connection, session_id: &str) -> Result<String, GaalError> {
+    if let Some(alias) = get_session_alias(conn, "hermes", session_id)? {
+        return Ok(alias);
+    }
+
+    for counter in 0..=MAX_ALIAS_COLLISION_RETRIES {
+        let alias = crate::util::hermes_alias_candidate(session_id, counter);
+        if canonical_session_id_exists(conn, &alias)? {
+            continue;
+        }
+        let existing = session_id_for_alias(conn, &alias, Some("hermes"))?;
+        match existing.as_deref() {
+            Some(existing_id) if existing_id == session_id => return Ok(alias),
+            Some(_) => continue,
+            None => {
+                let inserted = insert_alias_row(conn, &alias, session_id, "hermes", counter);
+                match inserted {
+                    Ok(()) => return Ok(alias),
+                    Err(err) if is_constraint_violation(&err) => {
+                        if let Some(alias) = get_session_alias(conn, "hermes", session_id)? {
+                            return Ok(alias);
+                        }
+                        continue;
+                    }
+                    Err(err) => return Err(db_err(err)),
+                }
+            }
+        }
+    }
+
+    Err(GaalError::Internal(format!(
+        "failed to allocate Hermes alias for {session_id} after {MAX_ALIAS_COLLISION_RETRIES} retries"
+    )))
+}
+
+pub fn get_session_alias(
+    conn: &Connection,
+    engine: &str,
+    session_id: &str,
+) -> Result<Option<String>, GaalError> {
+    conn.query_row(
+        r#"
+        SELECT alias
+        FROM session_aliases
+        WHERE session_id = :session_id
+          AND engine = :engine
+          AND scheme = :scheme
+        LIMIT 1
+        "#,
+        named_params! {
+            ":session_id": session_id,
+            ":engine": engine,
+            ":scheme": HERMES_ALIAS_SCHEME,
+        },
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(db_err)
+}
+
+pub fn artifact_id_for_session(
+    conn: &Connection,
+    session: &SessionRow,
+) -> Result<String, GaalError> {
+    if session.engine == "hermes" {
+        return Ok(get_session_alias(conn, &session.engine, &session.id)?
+            .unwrap_or_else(|| crate::util::session_artifact_id(&session.engine, &session.id)));
+    }
+
+    Ok(crate::util::session_artifact_id(
+        &session.engine,
+        &session.id,
+    ))
+}
+
+pub fn display_id_for_session(
+    conn: &Connection,
+    engine: &str,
+    session_id: &str,
+) -> Result<String, GaalError> {
+    if engine == "hermes" {
+        return Ok(get_session_alias(conn, engine, session_id)?
+            .unwrap_or_else(|| crate::util::session_artifact_id(engine, session_id)));
+    }
+
+    Ok(crate::util::session_artifact_id(engine, session_id))
+}
+
+pub fn resolve_session_ids(
+    conn: &Connection,
+    reference: &str,
+    engine: Option<&str>,
+) -> Result<Vec<String>, GaalError> {
+    let mut ids = Vec::new();
+
+    let exact_ids = exact_session_ids(conn, reference, engine)?;
+    let has_exact = !exact_ids.is_empty();
+    for id in exact_ids {
+        push_unique(&mut ids, id);
+    }
+
+    let alias_reference = reference.to_ascii_lowercase();
+    if !has_exact && crate::util::is_hermes_alias(&alias_reference) {
+        if let Some(id) = session_id_for_alias(conn, &alias_reference, engine)? {
+            push_unique(&mut ids, id);
+        }
+    }
+
+    if !has_exact {
+        for id in prefix_session_ids(conn, reference, engine)? {
+            push_unique(&mut ids, id);
+        }
+    }
+
+    Ok(ids)
+}
+
+/// Return true when the alias registry is absent or missing rows for Hermes sessions.
+pub fn hermes_alias_registry_needs_migration(conn: &Connection) -> Result<bool, GaalError> {
+    if !table_exists(conn, "sessions")? {
+        return Ok(true);
+    }
+    if !table_exists(conn, "session_aliases")? {
+        return Ok(true);
+    }
+
+    conn.query_row(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM sessions s
+            WHERE s.engine = 'hermes'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM session_aliases a
+                  WHERE a.session_id = s.id
+                    AND a.engine = 'hermes'
+                    AND a.scheme = :scheme
+              )
+            LIMIT 1
+        )
+        "#,
+        named_params! { ":scheme": HERMES_ALIAS_SCHEME },
+        |row| row.get::<_, bool>(0),
+    )
+    .map_err(db_err)
 }
 
 /// Insert one fact and return the inserted row id.
@@ -355,6 +545,11 @@ pub fn remove_tag(conn: &Connection, session_id: &str, tag: &str) -> Result<(), 
 /// Delete a session and its associated facts by id.
 pub fn delete_session(conn: &Connection, id: &str) -> Result<(), GaalError> {
     conn.execute(
+        "DELETE FROM session_aliases WHERE session_id = :id",
+        named_params! { ":id": id },
+    )
+    .map_err(db_err)?;
+    conn.execute(
         "DELETE FROM facts WHERE session_id = :id",
         named_params! { ":id": id },
     )
@@ -393,53 +588,12 @@ pub fn resolve_by_prefix(
     prefix: &str,
     engine: Option<&str>,
 ) -> Result<Vec<SessionRow>, GaalError> {
-    let like_pattern = format!("{prefix}%");
-    let sql_with_engine = r#"
-        SELECT
-            id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
-            cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type,
-            gemini_summary
-        FROM sessions
-        WHERE id LIKE :prefix AND engine = :engine
-        ORDER BY started_at DESC
-        "#;
-    let sql_without_engine = r#"
-        SELECT
-            id, engine, model, cwd, started_at, ended_at, exit_signal, last_event_at,
-            parent_id, session_type, jsonl_path, total_input_tokens, total_output_tokens,
-            cache_read_tokens, cache_creation_tokens, reasoning_tokens,
-            total_tools, total_turns, peak_context, last_indexed_offset, subagent_type,
-            gemini_summary
-        FROM sessions
-        WHERE id LIKE :prefix
-        ORDER BY started_at DESC
-        "#;
-
-    let mut stmt = conn
-        .prepare(if engine.is_some() {
-            sql_with_engine
-        } else {
-            sql_without_engine
-        })
-        .map_err(db_err)?;
-    let mut rows = if let Some(engine) = engine {
-        stmt.query(named_params! {
-            ":prefix": &like_pattern,
-            ":engine": engine,
-        })
-        .map_err(db_err)?
-    } else {
-        stmt.query(named_params! {
-            ":prefix": &like_pattern,
-        })
-        .map_err(db_err)?
-    };
-
+    let ids = resolve_session_ids(conn, prefix, engine)?;
     let mut out = Vec::new();
-    while let Some(row) = rows.next().map_err(db_err)? {
-        out.push(row_to_session(row).map_err(db_err)?);
+    for id in ids {
+        if let Some(session) = get_session(conn, &id)? {
+            out.push(session);
+        }
     }
     Ok(out)
 }
@@ -1178,6 +1332,151 @@ fn parse_embedded_json(value: Option<String>) -> Value {
     }
 }
 
+fn insert_alias_row(
+    conn: &Connection,
+    alias: &str,
+    session_id: &str,
+    engine: &str,
+    counter: u32,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        r#"
+        INSERT INTO session_aliases (alias, session_id, engine, scheme, counter, created_at)
+        VALUES (:alias, :session_id, :engine, :scheme, :counter, :created_at)
+        "#,
+        named_params! {
+            ":alias": alias,
+            ":session_id": session_id,
+            ":engine": engine,
+            ":scheme": HERMES_ALIAS_SCHEME,
+            ":counter": i64::from(counter),
+            ":created_at": unix_now(),
+        },
+    )?;
+    Ok(())
+}
+
+fn session_id_for_alias(
+    conn: &Connection,
+    alias: &str,
+    engine: Option<&str>,
+) -> Result<Option<String>, GaalError> {
+    conn.query_row(
+        r#"
+        SELECT session_id
+        FROM session_aliases
+        WHERE alias = :alias
+          AND (:engine IS NULL OR engine = :engine)
+          AND scheme = :scheme
+        "#,
+        named_params! {
+            ":alias": alias,
+            ":engine": engine,
+            ":scheme": HERMES_ALIAS_SCHEME,
+        },
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(db_err)
+}
+
+fn canonical_session_id_exists(conn: &Connection, id: &str) -> Result<bool, GaalError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sessions WHERE id = :id LIMIT 1)",
+        named_params! { ":id": id },
+        |row| row.get::<_, bool>(0),
+    )
+    .map_err(db_err)
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, GaalError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        [table_name],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .map_err(db_err)
+}
+
+fn exact_session_ids(
+    conn: &Connection,
+    reference: &str,
+    engine: Option<&str>,
+) -> Result<Vec<String>, GaalError> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id
+            FROM sessions
+            WHERE id = :id
+              AND (:engine IS NULL OR engine = :engine)
+            ORDER BY started_at DESC
+            "#,
+        )
+        .map_err(db_err)?;
+    let mut rows = stmt
+        .query(named_params! {
+            ":id": reference,
+            ":engine": engine,
+        })
+        .map_err(db_err)?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(db_err)? {
+        out.push(row.get::<_, String>(0).map_err(db_err)?);
+    }
+    Ok(out)
+}
+
+fn prefix_session_ids(
+    conn: &Connection,
+    reference: &str,
+    engine: Option<&str>,
+) -> Result<Vec<String>, GaalError> {
+    let like = format!("{reference}%");
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id
+            FROM sessions
+            WHERE id LIKE :prefix
+              AND (:engine IS NULL OR engine = :engine)
+            ORDER BY started_at DESC
+            "#,
+        )
+        .map_err(db_err)?;
+    let mut rows = stmt
+        .query(named_params! {
+            ":prefix": like,
+            ":engine": engine,
+        })
+        .map_err(db_err)?;
+
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().map_err(db_err)? {
+        out.push(row.get::<_, String>(0).map_err(db_err)?);
+    }
+    Ok(out)
+}
+
+fn push_unique(ids: &mut Vec<String>, id: String) {
+    if !ids.iter().any(|existing| existing == &id) {
+        ids.push(id);
+    }
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn is_constraint_violation(err: &rusqlite::Error) -> bool {
+    err.sqlite_error_code() == Some(ErrorCode::ConstraintViolation)
+}
+
 fn db_err(err: rusqlite::Error) -> GaalError {
     GaalError::Db(err)
 }
@@ -1245,6 +1544,163 @@ mod meta_tests {
     }
 
     #[test]
+    fn hermes_upsert_registers_alias_and_resolves_it() {
+        let conn = fresh_conn();
+        let session = hermes_session("20260504_141414_childbb", "2026-05-04T14:14:14Z");
+
+        upsert_session(&conn, &session).unwrap();
+
+        let alias = get_session_alias(&conn, "hermes", &session.id)
+            .unwrap()
+            .expect("alias should exist");
+        assert_eq!(alias.len(), 8);
+        assert!(crate::util::is_hermes_alias(&alias));
+        assert_eq!(
+            resolve_session_ids(&conn, &alias, None).unwrap(),
+            vec![session.id.clone()]
+        );
+        assert_eq!(
+            resolve_session_ids(&conn, &session.id, None).unwrap(),
+            vec![session.id.clone()]
+        );
+    }
+
+    #[test]
+    fn hermes_alias_collision_uses_next_deterministic_counter() {
+        let conn = fresh_conn();
+        let existing = hermes_session("20260504_111111_existing", "2026-05-04T11:11:11Z");
+        let collided = hermes_session("20260504_121212_collided", "2026-05-04T12:12:12Z");
+        upsert_session(&conn, &existing).unwrap();
+        upsert_session(&conn, &collided).unwrap();
+
+        let candidate = crate::util::hermes_alias_candidate(&collided.id, 0);
+        conn.execute(
+            "DELETE FROM session_aliases WHERE session_id = :session_id",
+            named_params! { ":session_id": &collided.id },
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM session_aliases WHERE session_id = :session_id",
+            named_params! { ":session_id": &existing.id },
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM session_aliases WHERE alias = :alias",
+            named_params! { ":alias": &candidate },
+        )
+        .unwrap();
+        insert_alias_row(&conn, &candidate, &existing.id, "hermes", 0).unwrap();
+
+        let alias = register_hermes_alias(&conn, &collided.id).unwrap();
+
+        assert_ne!(alias, candidate);
+        assert_eq!(alias, crate::util::hermes_alias_candidate(&collided.id, 1));
+        assert_eq!(
+            resolve_session_ids(&conn, &alias, Some("hermes")).unwrap(),
+            vec![collided.id.clone()]
+        );
+    }
+
+    #[test]
+    fn hermes_alias_collision_with_canonical_session_id_uses_next_counter() {
+        let conn = fresh_conn();
+        let hermes = hermes_session("20260504_121212_collided", "2026-05-04T12:12:12Z");
+        let candidate = crate::util::hermes_alias_candidate(&hermes.id, 0);
+        upsert_session(
+            &conn,
+            &SessionRow {
+                id: candidate.clone(),
+                engine: "codex".to_string(),
+                model: None,
+                cwd: None,
+                started_at: "2026-05-04T12:00:00Z".to_string(),
+                ended_at: None,
+                exit_signal: None,
+                last_event_at: None,
+                parent_id: None,
+                session_type: "standalone".to_string(),
+                jsonl_path: "/tmp/codex.jsonl".to_string(),
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                reasoning_tokens: 0,
+                total_tools: 0,
+                total_turns: 1,
+                peak_context: 0,
+                last_indexed_offset: 0,
+                subagent_type: None,
+                gemini_summary: None,
+            },
+        )
+        .unwrap();
+        upsert_session(&conn, &hermes).unwrap();
+
+        let alias = get_session_alias(&conn, "hermes", &hermes.id)
+            .unwrap()
+            .expect("alias should exist");
+        assert_ne!(alias, candidate);
+        assert_eq!(alias, crate::util::hermes_alias_candidate(&hermes.id, 1));
+        assert_eq!(
+            resolve_session_ids(&conn, &candidate, None).unwrap(),
+            vec![candidate]
+        );
+        assert_eq!(
+            resolve_session_ids(&conn, &alias, Some("hermes")).unwrap(),
+            vec![hermes.id.clone()]
+        );
+    }
+
+    #[test]
+    fn hermes_alias_registry_reports_pre_alias_schema_needs_migration() {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                engine TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                jsonl_path TEXT NOT NULL
+            );
+            INSERT INTO sessions (id, engine, started_at, jsonl_path)
+            VALUES ('20260504_121212_oldschema', 'hermes', '2026-05-04T12:12:12Z', '/tmp/hermes.db');
+            "#,
+        )
+        .expect("seed old schema");
+
+        assert!(hermes_alias_registry_needs_migration(&conn).unwrap());
+    }
+
+    #[test]
+    fn hermes_alias_registry_reports_missing_alias_rows_need_migration() {
+        let conn = fresh_conn();
+        let session = hermes_session("20260504_131313_missingalias", "2026-05-04T13:13:13Z");
+        upsert_session(&conn, &session).unwrap();
+
+        assert!(!hermes_alias_registry_needs_migration(&conn).unwrap());
+
+        conn.execute(
+            "DELETE FROM session_aliases WHERE session_id = :session_id",
+            named_params! { ":session_id": &session.id },
+        )
+        .unwrap();
+
+        assert!(hermes_alias_registry_needs_migration(&conn).unwrap());
+    }
+
+    #[test]
+    fn artifact_id_for_hermes_prefers_registered_alias() {
+        let conn = fresh_conn();
+        let session = hermes_session("20260504_131313_aliaspath", "2026-05-04T13:13:13Z");
+        upsert_session(&conn, &session).unwrap();
+
+        let alias = get_session_alias(&conn, "hermes", &session.id)
+            .unwrap()
+            .expect("alias should exist");
+        assert_eq!(artifact_id_for_session(&conn, &session).unwrap(), alias);
+    }
+
+    #[test]
     fn activity_overlap_query_does_not_let_stale_open_sessions_starve_limit() {
         let conn = fresh_conn();
         upsert_session(
@@ -1277,6 +1733,13 @@ mod meta_tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "realmay25");
+    }
+
+    fn hermes_session(id: &str, started_at: &str) -> SessionRow {
+        let mut session = test_session(id, started_at, None, Some(started_at));
+        session.engine = "hermes".to_string();
+        session.jsonl_path = "/tmp/hermes-state.db".to_string();
+        session
     }
 
     fn test_session(

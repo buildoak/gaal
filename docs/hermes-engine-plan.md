@@ -79,11 +79,16 @@ Do not use first-8 prefixes. They collide by date.
 Preferred resolver/display strategy:
 
 - canonical DB `sessions.id`: full Hermes session ID
-- optional short alias: first 8 hex chars of `sha256(full_hermes_id)`
-- enforce uniqueness during indexing
-- if an alias collision appears, extend only the colliding aliases
+- durable short alias: 8 lowercase base32 characters from a stable hash of
+  `hermes:` plus the full session ID
+- enforce uniqueness in SQLite during indexing
+- if an alias collision appears, deterministically rehash the colliding session
+  with a counter salt until a free alias is found
 
-MVI can defer alias persistence if full IDs resolve cleanly. The first implementation may require full Hermes IDs while the resolver story is finished.
+Implemented behavior: full Hermes IDs remain canonical, and registered aliases
+are accepted by resolver-style commands and used for transcript/handoff
+filenames. Artifact metadata/frontmatter should continue to preserve the full
+native ID.
 
 ## Event Mapping
 

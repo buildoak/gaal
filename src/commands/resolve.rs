@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::db;
@@ -34,6 +35,7 @@ struct ResolveOutput {
 
 #[derive(Debug, Clone)]
 struct ResolvedPaths {
+    artifact_id: String,
     jsonl_path: String,
     transcript_path: Option<String>,
     transcript_exists: bool,
@@ -50,7 +52,7 @@ pub fn run(args: ResolveArgs) -> Result<(), GaalError> {
         0 => Err(GaalError::NotFound(args.id)),
         1 => {
             let session = &matches[0];
-            let paths = compute_paths(session);
+            let paths = compute_paths(&conn, session)?;
             if args.human {
                 print_human(session, &paths);
             } else {
@@ -69,7 +71,7 @@ pub fn run(args: ResolveArgs) -> Result<(), GaalError> {
 fn to_output(session: &SessionRow, paths: &ResolvedPaths) -> ResolveOutput {
     ResolveOutput {
         session_id: session.id.clone(),
-        short_id: artifact_id(session),
+        short_id: paths.artifact_id.clone(),
         engine: session.engine.clone(),
         jsonl_path: paths.jsonl_path.clone(),
         transcript_path: paths.transcript_path.clone(),
@@ -81,18 +83,22 @@ fn to_output(session: &SessionRow, paths: &ResolvedPaths) -> ResolveOutput {
     }
 }
 
-fn compute_paths(session: &SessionRow) -> ResolvedPaths {
+fn compute_paths(conn: &Connection, session: &SessionRow) -> Result<ResolvedPaths, GaalError> {
     let home = dirs::home_dir().unwrap_or_default();
     let gaal_home = std::env::var("GAAL_HOME")
         .ok()
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join(".gaal"));
-    compute_paths_from_home(session, &gaal_home)
+    compute_paths_from_home(conn, session, &gaal_home)
 }
 
-fn compute_paths_from_home(session: &SessionRow, gaal_home: &Path) -> ResolvedPaths {
+fn compute_paths_from_home(
+    conn: &Connection,
+    session: &SessionRow,
+    gaal_home: &Path,
+) -> Result<ResolvedPaths, GaalError> {
     let date_parts = parse_date_parts(&session.started_at);
-    let artifact_id = artifact_id(session);
+    let artifact_id = artifact_id(conn, session)?;
 
     let transcript_path = date_parts.as_ref().map(|(year, month, day)| {
         gaal_home
@@ -116,7 +122,8 @@ fn compute_paths_from_home(session: &SessionRow, gaal_home: &Path) -> ResolvedPa
             .join(format!("{artifact_id}.md"))
     });
 
-    ResolvedPaths {
+    Ok(ResolvedPaths {
+        artifact_id,
         jsonl_path: session.jsonl_path.clone(),
         transcript_path: transcript_path
             .as_ref()
@@ -126,7 +133,7 @@ fn compute_paths_from_home(session: &SessionRow, gaal_home: &Path) -> ResolvedPa
             .as_ref()
             .map(|path| path.to_string_lossy().to_string()),
         handoff_exists: handoff_path.as_ref().is_some_and(|path| path.exists()),
-    }
+    })
 }
 
 fn parse_date_parts(started_at: &str) -> Option<(String, String, String)> {
@@ -149,7 +156,7 @@ fn print_human(session: &SessionRow, paths: &ResolvedPaths) {
     let model = session.model.as_deref().unwrap_or("unknown");
     println!(
         "Session:    {} ({model}, {})",
-        artifact_id(session),
+        paths.artifact_id.as_str(),
         session.session_type
     );
     println!("JSONL:      {}", compact_home(&paths.jsonl_path));
@@ -214,8 +221,8 @@ fn compact_home(path: &str) -> String {
     }
 }
 
-fn artifact_id(session: &SessionRow) -> String {
-    crate::util::session_artifact_id(&session.engine, &session.id)
+fn artifact_id(conn: &Connection, session: &SessionRow) -> Result<String, GaalError> {
+    db::queries::artifact_id_for_session(conn, session)
 }
 
 #[cfg(test)]
@@ -241,6 +248,8 @@ mod tests {
     #[test]
     fn compute_paths_uses_engine_date_and_short_id() {
         let base = unique_test_dir();
+        let conn = rusqlite::Connection::open_in_memory().expect("open db");
+        db::init_db(&conn).expect("init schema");
         let session = SessionRow {
             id: "dc5e98dc12345678".to_string(),
             engine: "claude".to_string(),
@@ -265,6 +274,7 @@ mod tests {
             subagent_type: None,
             gemini_summary: None,
         };
+        db::queries::upsert_session(&conn, &session).expect("insert session");
 
         let transcript = base
             .join("data")
@@ -288,9 +298,10 @@ mod tests {
         fs::write(&transcript, "rendered").expect("write transcript");
         fs::write(&handoff, "handoff").expect("write handoff");
 
-        let paths = compute_paths_from_home(&session, &base);
+        let paths = compute_paths_from_home(&conn, &session, &base).expect("compute paths");
 
         assert_eq!(paths.jsonl_path, "/tmp/session.jsonl");
+        assert_eq!(paths.artifact_id, "dc5e98dc");
         assert_eq!(
             paths.transcript_path,
             Some(transcript.to_string_lossy().to_string())
@@ -306,8 +317,10 @@ mod tests {
     }
 
     #[test]
-    fn compute_paths_uses_full_hermes_id() {
+    fn compute_paths_uses_registered_hermes_alias() {
         let base = unique_test_dir();
+        let conn = rusqlite::Connection::open_in_memory().expect("open db");
+        db::init_db(&conn).expect("init schema");
         let session = SessionRow {
             id: "20260504_101010_a1b2c3".to_string(),
             engine: "hermes".to_string(),
@@ -332,13 +345,18 @@ mod tests {
             subagent_type: None,
             gemini_summary: None,
         };
+        db::queries::upsert_session(&conn, &session).expect("insert hermes session");
+        let alias = db::queries::get_session_alias(&conn, "hermes", &session.id)
+            .expect("query alias")
+            .expect("alias exists");
 
-        let paths = compute_paths_from_home(&session, &base);
+        let paths = compute_paths_from_home(&conn, &session, &base).expect("compute paths");
+        assert_eq!(paths.artifact_id, alias);
         assert!(paths.transcript_path.as_deref().is_some_and(
-            |path| path.ends_with("/data/hermes/sessions/2026/05/04/20260504_101010_a1b2c3.md")
+            |path| path.ends_with(&format!("/data/hermes/sessions/2026/05/04/{alias}.md"))
         ));
         assert!(paths.handoff_path.as_deref().is_some_and(
-            |path| path.ends_with("/data/hermes/handoffs/2026/05/04/20260504_101010_a1b2c3.md")
+            |path| path.ends_with(&format!("/data/hermes/handoffs/2026/05/04/{alias}.md"))
         ));
 
         fs::remove_dir_all(&base).expect("cleanup");

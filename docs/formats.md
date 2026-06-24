@@ -241,6 +241,11 @@ The indexed agy session ID is the first 8 characters of the Antigravity brain
 UUID, matching Gemini-style short IDs. The full UUID remains recoverable from
 the source path.
 
+Hermes is different: `sessions.id` stores the full native Hermes session ID,
+and `session_aliases` stores the deterministic 8-character alias used for
+lookup and registered transcript/handoff filenames. Do not infer a Hermes short
+ID from the first 8 characters of the native ID.
+
 Engine detection for JSONL is also content-based: copied agy transcripts outside
 the native brain directory still parse as agy when their records match the
 Antigravity schema. Native brain UUIDs take precedence for IDs; copied

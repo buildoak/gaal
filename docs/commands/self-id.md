@@ -110,7 +110,7 @@ Status:  not indexed (run 'gaal index backfill' to index)
 
 # `gaal resolve`
 
-Purpose: resolve a short session ID to session metadata and derived artifact paths.
+Purpose: resolve a session ID, unique prefix, or registered Hermes alias to session metadata and derived artifact paths.
 
 ## Usage
 
@@ -127,8 +127,8 @@ gaal resolve [OPTIONS] [ID]
 
 ## JSON Output
 
-- `session_id` — full session identifier from the index
-- `short_id` — first 8 characters of `session_id`
+- `session_id` — canonical session identifier from the index. Hermes keeps the full native session ID here.
+- `short_id` — artifact/display identifier. For Hermes this is the persisted 8-character alias.
 - `engine` — `claude`, `codex`, `gemini`, `agy`, or `hermes`
 - `jsonl_path` — legacy field name for the resolved source artifact path
 - `transcript_path` — expected rendered transcript markdown path

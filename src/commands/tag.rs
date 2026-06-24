@@ -1,9 +1,8 @@
-use rusqlite::named_params;
 use serde::Serialize;
 
 use crate::commands::inspect::find_latest_session_id;
 use crate::db::open_db;
-use crate::db::queries::{add_tag, get_session, remove_tag};
+use crate::db::queries::{add_tag, remove_tag, resolve_session_ids};
 use crate::error::GaalError;
 use crate::output::json::print_json;
 
@@ -85,29 +84,7 @@ fn resolve_session_id(
         return find_latest_session_id(conn);
     }
 
-    if let Some(session) = get_session(conn, id_or_prefix)? {
-        return Ok(session.id);
-    }
-
-    let mut stmt = conn
-        .prepare(
-            r#"
-            SELECT id
-            FROM sessions
-            WHERE id LIKE :prefix
-            ORDER BY started_at DESC
-            "#,
-        )
-        .map_err(GaalError::from)?;
-    let pattern = format!("{id_or_prefix}%");
-    let mut rows = stmt
-        .query(named_params! { ":prefix": pattern })
-        .map_err(GaalError::from)?;
-
-    let mut ids = Vec::new();
-    while let Some(row) = rows.next().map_err(GaalError::from)? {
-        ids.push(row.get::<_, String>(0).map_err(GaalError::from)?);
-    }
+    let mut ids = resolve_session_ids(conn, id_or_prefix, None)?;
 
     if ids.is_empty() {
         return Err(GaalError::NotFound(id_or_prefix.to_string()));

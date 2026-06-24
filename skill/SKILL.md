@@ -247,7 +247,10 @@ Session ID notes:
   removed.
 - Agy IDs are the first 8 characters of the Antigravity brain UUID; the full
   UUID remains recoverable from the source path.
-- Hermes IDs are full logical session IDs; short date-like prefixes can collide.
+- Hermes IDs stay full and canonical in `sessions.id`, but indexed Hermes
+  sessions also get deterministic collision-checked 8-character lowercase
+  aliases. Use either the full Hermes ID or the alias; never use the first 8
+  date-like characters as a Hermes short ID.
 
 ## Engine Support
 
@@ -274,9 +277,10 @@ does not require agent-mux.
 
 Hermes is useful but should be treated as experimental. It reads a SQLite state
 database, not JSONL. `find-salt` does not support Hermes, and Hermes session IDs
-often need the full ID to avoid collisions. Environment overrides are
-`HERMES_STATE_DB` for a specific state database and `HERMES_HOME` for a home
-directory containing `state.db`.
+stay full in the DB while Gaal persists a separate 8-character alias registry
+for lookup and artifact filenames. Environment overrides are `HERMES_STATE_DB`
+for a specific state database and `HERMES_HOME` for a home directory containing
+`state.db`.
 
 For indexed-session filtering, `--engine claude|codex|gemini|agy|hermes` is
 supported on:

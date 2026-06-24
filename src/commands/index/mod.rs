@@ -348,15 +348,20 @@ fn run_engine_pass(
                 } else if with_markdown {
                     // No output-dir: generate markdown to default gaal data dir
                     // if the file doesn't already exist.
-                    let md_path = default_session_markdown_path(&session);
-                    if !md_path.exists() {
-                        match generate_session_markdown(conn, &session) {
-                            Ok(md_path) => {
-                                eprintln!("  -> markdown: {}", md_path.display());
+                    match default_session_markdown_path(conn, &session) {
+                        Ok(md_path) if !md_path.exists() => {
+                            match generate_session_markdown(conn, &session) {
+                                Ok(md_path) => {
+                                    eprintln!("  -> markdown: {}", md_path.display());
+                                }
+                                Err(err) => {
+                                    eprintln!("  -> markdown error: {err}");
+                                }
                             }
-                            Err(err) => {
-                                eprintln!("  -> markdown error: {err}");
-                            }
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            eprintln!("  -> markdown error: {err}");
                         }
                     }
                 }
@@ -1178,25 +1183,26 @@ fn promote_codex_coordinators(conn: &mut Connection) -> Result<(), GaalError> {
 /// Compute the default markdown path for a session without writing anything.
 ///
 /// Returns `~/.gaal/data/{engine}/sessions/YYYY/MM/DD/{id}.md`.
-fn default_session_markdown_path(discovered: &DiscoveredSession) -> PathBuf {
+fn default_session_markdown_path(
+    conn: &Connection,
+    discovered: &DiscoveredSession,
+) -> Result<PathBuf, GaalError> {
     let engine = discovered.engine.to_string();
     let started_at = discovered
         .started_at
         .as_deref()
         .unwrap_or("1970-01-01T00:00:00Z");
     let (year, month, day) = extract_date_parts(started_at);
+    let artifact_id = crate::db::queries::display_id_for_session(conn, &engine, &discovered.id)?;
 
-    gaal_home()
+    Ok(gaal_home()
         .join("data")
         .join(engine)
         .join("sessions")
         .join(year)
         .join(month)
         .join(day)
-        .join(format!(
-            "{}.md",
-            crate::util::session_artifact_id(&discovered.engine.to_string(), &discovered.id)
-        ))
+        .join(format!("{artifact_id}.md")))
 }
 
 /// Generate a session markdown file from raw JSONL during backfill.
@@ -1219,6 +1225,7 @@ fn generate_session_markdown(
 
     let engine = discovered.engine.to_string();
     let (year, month, day) = extract_date_parts(started_at);
+    let artifact_id = crate::db::queries::display_id_for_session(conn, &engine, &discovered.id)?;
 
     let md_path = gaal_home()
         .join("data")
@@ -1227,10 +1234,7 @@ fn generate_session_markdown(
         .join(year)
         .join(month)
         .join(day)
-        .join(format!(
-            "{}.md",
-            crate::util::session_artifact_id(&discovered.engine.to_string(), &discovered.id)
-        ));
+        .join(format!("{artifact_id}.md"));
 
     if let Some(parent) = md_path.parent() {
         fs::create_dir_all(parent).map_err(GaalError::from)?;
@@ -1264,8 +1268,8 @@ fn write_session_markdown_to_dir(
         return Ok(WriteOutcome::Skipped);
     }
     let (year, month, day) = extract_date_parts(started_at);
-    let artifact_id =
-        crate::util::session_artifact_id(&discovered.engine.to_string(), &discovered.id);
+    let engine = discovered.engine.to_string();
+    let artifact_id = crate::db::queries::display_id_for_session(conn, &engine, &discovered.id)?;
 
     let md_path = output_dir
         .join(&year)

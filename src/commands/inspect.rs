@@ -8,7 +8,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::db::open_db_readonly;
-use crate::db::queries::{get_facts, get_handoff, get_session, get_tags, SessionRow};
+use crate::db::queries::{
+    get_facts, get_handoff, get_session, get_tags, resolve_session_ids, SessionRow,
+};
 use crate::error::GaalError;
 use crate::model::{
     CommandEntry, ErrorEntry, Fact, FactType, FileOps, GitOp, SessionRecord, TokenUsage,
@@ -230,19 +232,7 @@ pub(crate) fn find_session_ids_by_prefix(
     conn: &Connection,
     prefix: &str,
 ) -> Result<Vec<String>, GaalError> {
-    let like = format!("{prefix}%");
-    let mut stmt = conn
-        .prepare("SELECT id FROM sessions WHERE id LIKE :prefix ORDER BY started_at DESC")
-        .map_err(GaalError::from)?;
-    let mut rows = stmt
-        .query(named_params! {":prefix": like})
-        .map_err(GaalError::from)?;
-
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().map_err(GaalError::from)? {
-        out.push(row.get::<_, String>(0).map_err(GaalError::from)?);
-    }
-    Ok(out)
+    resolve_session_ids(conn, prefix, None)
 }
 
 fn find_session_ids_by_tag(conn: &Connection, tag: &str) -> Result<Vec<String>, GaalError> {

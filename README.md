@@ -271,6 +271,14 @@ Hermes support is useful but cautious. It has been tested against one real
 installation/version plus sanitized fixtures; broader Hermes layouts should be
 treated as compatibility work until there are fixtures for them.
 
+Hermes native session IDs stay canonical and full in the SQLite `sessions.id`
+column. During indexing, Gaal also registers a deterministic, collision-checked
+8-character lowercase alias for each Hermes session. Use that alias anywhere a
+session ID is accepted, including `resolve`, `inspect`, `transcript`,
+`activity --session`, `tag`, `recall --id`, and `create-handoff`. Registered
+Hermes transcript and handoff filenames use the alias; artifact frontmatter and
+DB rows keep the full native ID.
+
 The database stores structured session metadata and extracted facts. Tantivy
 handles BM25 full-text search. Rendered transcripts and generated handoffs live
 as markdown files under `~/.gaal/data/{engine}/...`.

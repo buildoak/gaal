@@ -109,6 +109,7 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
     }
 
     conn.execute_batch(DB_SCHEMA).map_err(map_db_err)?;
+    crate::db::queries::backfill_hermes_aliases(conn)?;
     Ok(())
 }
 
@@ -366,6 +367,15 @@ mod tests {
             )
             .expect("count hermes rows");
         assert_eq!(hermes_count, 1);
+
+        let alias_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_aliases WHERE session_id = 'sess-hermes' AND engine = 'hermes'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count hermes aliases");
+        assert_eq!(alias_count, 1);
     }
 }
 
@@ -399,9 +409,11 @@ pub fn open_db() -> Result<Connection, GaalError> {
     Ok(conn)
 }
 
-/// Open the default SQLite database in **read-only** mode.
+/// Open the default SQLite database in **read-mostly** mode.
 ///
-/// No DDL is executed (no CREATE TABLE, ALTER TABLE, CREATE INDEX).
+/// No DDL is executed on the fast path. If the existing database predates a
+/// required schema surface for read commands, this falls back to `open_db()` so
+/// the one-time migration/backfill runs before returning a usable connection.
 /// Uses a 5-second busy timeout which is sufficient for read queries
 /// even under concurrent write load with WAL mode.
 pub fn open_db_readonly() -> Result<Connection, GaalError> {
@@ -431,6 +443,11 @@ pub fn open_db_readonly() -> Result<Connection, GaalError> {
 
     conn.busy_timeout(Duration::from_millis(5_000))
         .map_err(map_db_err)?;
+
+    if crate::db::queries::hermes_alias_registry_needs_migration(&conn)? {
+        drop(conn);
+        return open_db();
+    }
 
     Ok(conn)
 }

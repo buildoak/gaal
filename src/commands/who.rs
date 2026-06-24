@@ -5,7 +5,7 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::db::open_db_readonly;
-use crate::db::queries::{query_who, FactType, WhoFilter, WhoResult};
+use crate::db::queries::{get_session, query_who, FactType, WhoFilter, WhoResult};
 use crate::error::GaalError;
 use crate::output::human::{format_timestamp, print_table_with_kinds, ColumnKind};
 use crate::output::json::print_json;
@@ -189,11 +189,12 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     if full {
         // --full: per-fact output with full detail (old behavior)
         if args.human {
+            let display_ids = build_display_id_map(&conn, &matches);
             eprintln!("{search_window_hint}");
             if !note.is_empty() {
                 eprintln!("({note})");
             }
-            print_human_full(&matches);
+            print_human_full(&matches, &display_ids);
             if was_truncated {
                 eprintln!(
                     "Showing {} of {} results \u{2014} use --limit N for more",
@@ -216,11 +217,12 @@ pub fn run(args: WhoArgs) -> Result<(), GaalError> {
     // Default: brief output grouped by session
     let summaries = group_by_session(&matches);
     if args.human {
+        let display_ids = build_display_id_map(&conn, &matches);
         eprintln!("{search_window_hint}");
         if !note.is_empty() {
             eprintln!("({note})");
         }
-        print_human_brief(&summaries);
+        print_human_brief(&summaries, &display_ids);
         if was_truncated {
             eprintln!(
                 "Showing {} of {} results \u{2014} use --limit N for more",
@@ -630,7 +632,30 @@ fn truncate_to_filename(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
-fn print_human_full(rows: &[WhoRow]) {
+fn build_display_id_map(conn: &rusqlite::Connection, rows: &[WhoRow]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for row in rows {
+        out.entry(row.session_id.clone()).or_insert_with(|| {
+            crate::db::queries::display_id_for_session(conn, &row.engine, &row.session_id)
+                .unwrap_or_else(|_| row.session_id.chars().take(8).collect())
+        });
+        if let Some(parent_id) = row.parent_id.as_deref() {
+            out.entry(parent_id.to_string()).or_insert_with(|| {
+                get_session(conn, parent_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|parent| {
+                        crate::db::queries::display_id_for_session(conn, &parent.engine, &parent.id)
+                            .ok()
+                    })
+                    .unwrap_or_else(|| parent_id.chars().take(8).collect())
+            });
+        }
+    }
+    out
+}
+
+fn print_human_full(rows: &[WhoRow], display_ids: &HashMap<String, String>) {
     if rows.is_empty() {
         println!("No matches.");
         return;
@@ -656,12 +681,23 @@ fn print_human_full(rows: &[WhoRow]) {
                 let parent_short = row
                     .parent_id
                     .as_deref()
-                    .map(|id| id.chars().take(8).collect::<String>())
+                    .map(|id| {
+                        display_ids
+                            .get(id)
+                            .cloned()
+                            .unwrap_or_else(|| id.chars().take(8).collect())
+                    })
                     .unwrap_or_else(|| "?".to_string());
-                let sub_short: String = row.session_id.chars().take(8).collect();
+                let sub_short = display_ids
+                    .get(&row.session_id)
+                    .cloned()
+                    .unwrap_or_else(|| row.session_id.chars().take(8).collect());
                 format!("{parent_short} \u{2192} {sub_short}")
             } else {
-                row.session_id.chars().take(8).collect()
+                display_ids
+                    .get(&row.session_id)
+                    .cloned()
+                    .unwrap_or_else(|| row.session_id.chars().take(8).collect())
             };
             vec![
                 session_display,
@@ -680,7 +716,7 @@ fn print_human_full(rows: &[WhoRow]) {
     print_table_with_kinds(&headers, &table_rows, &col_kinds);
 }
 
-fn print_human_brief(rows: &[WhoSummaryRow]) {
+fn print_human_brief(rows: &[WhoSummaryRow], display_ids: &HashMap<String, String>) {
     if rows.is_empty() {
         println!("No matches.");
         return;
@@ -708,12 +744,23 @@ fn print_human_brief(rows: &[WhoSummaryRow]) {
                 let parent_short = row
                     .parent_id
                     .as_deref()
-                    .map(|id| id.chars().take(8).collect::<String>())
+                    .map(|id| {
+                        display_ids
+                            .get(id)
+                            .cloned()
+                            .unwrap_or_else(|| id.chars().take(8).collect())
+                    })
                     .unwrap_or_else(|| "?".to_string());
-                let sub_short: String = row.session_id.chars().take(8).collect();
+                let sub_short = display_ids
+                    .get(&row.session_id)
+                    .cloned()
+                    .unwrap_or_else(|| row.session_id.chars().take(8).collect());
                 format!("{parent_short} \u{2192} {sub_short}")
             } else {
-                row.session_id.chars().take(8).collect()
+                display_ids
+                    .get(&row.session_id)
+                    .cloned()
+                    .unwrap_or_else(|| row.session_id.chars().take(8).collect())
             };
             vec![
                 session_display,

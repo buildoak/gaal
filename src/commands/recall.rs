@@ -58,6 +58,7 @@ pub enum RecallFormat {
 #[derive(Debug, Clone)]
 struct RecallSession {
     handoff: HandoffRecord,
+    display_id: String,
     started_at: String,
     session_date: NaiveDate,
     project_tokens: HashSet<String>,
@@ -74,6 +75,7 @@ struct ScoredSession {
 #[derive(Debug, Serialize)]
 struct RecallSummary {
     session_id: String,
+    short_id: String,
     date: String,
     headline: Option<String>,
     handoff_path: Option<String>,
@@ -184,17 +186,20 @@ fn run_by_id(raw_id: &str, args: &RecallArgs) -> Result<(), GaalError> {
     };
 
     // Build a started_at from the sessions table for date display
-    let started_at: String = conn
+    let (started_at, engine): (String, String) = conn
         .query_row(
-            "SELECT started_at FROM sessions WHERE id = ?1",
+            "SELECT started_at, engine FROM sessions WHERE id = ?1",
             [&session_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .unwrap_or_else(|_| String::new());
+        .unwrap_or_else(|_| (String::new(), String::new()));
     let session_date = parse_session_date(&started_at).unwrap_or_else(|| Utc::now().date_naive());
+    let display_id = crate::db::queries::display_id_for_session(&conn, &engine, &session_id)
+        .unwrap_or_else(|_| session_id.chars().take(8).collect());
 
     let recall_session = RecallSession {
         handoff,
+        display_id,
         started_at,
         session_date,
         project_tokens: HashSet::new(),
@@ -229,6 +234,7 @@ fn load_all_handoffs(conn: &Connection) -> Result<Vec<RecallSession>, GaalError>
             h.generated_at,
             h.generated_by,
             h.content_path,
+            s.engine,
             s.started_at
         FROM handoffs h
         INNER JOIN sessions s ON s.id = h.session_id
@@ -247,6 +253,7 @@ fn load_all_handoffs(conn: &Connection) -> Result<Vec<RecallSession>, GaalError>
         let generated_at: Option<String> = row.get("generated_at")?;
         let generated_by: Option<String> = row.get("generated_by")?;
         let content_path: Option<String> = row.get("content_path")?;
+        let engine: String = row.get("engine")?;
         let started_at: String = row.get("started_at")?;
 
         let projects = parse_string_vec(projects_raw);
@@ -267,7 +274,7 @@ fn load_all_handoffs(conn: &Connection) -> Result<Vec<RecallSession>, GaalError>
 
         out.push(RecallSession {
             handoff: HandoffRecord {
-                session_id,
+                session_id: session_id.clone(),
                 headline,
                 projects,
                 keywords,
@@ -277,6 +284,8 @@ fn load_all_handoffs(conn: &Connection) -> Result<Vec<RecallSession>, GaalError>
                 generated_by,
                 content_path,
             },
+            display_id: crate::db::queries::display_id_for_session(conn, &engine, &session_id)
+                .unwrap_or_else(|_| session_id.chars().take(8).collect()),
             started_at,
             session_date,
             project_tokens,
@@ -564,10 +573,9 @@ fn strip_yaml_frontmatter(content: &str) -> &str {
 
 /// Print a structured session header for human-readable output.
 fn print_human_session_header(summary: &RecallSummary) {
-    let short_id = summary.session_id.chars().take(8).collect::<String>();
     println!(
         "\u{2501}\u{2501}\u{2501} Session {} ({}) \u{2501}\u{2501}\u{2501}",
-        short_id, summary.date
+        summary.short_id, summary.date
     );
     println!(
         "Headline: {}",
@@ -580,6 +588,7 @@ fn print_human_session_header(summary: &RecallSummary) {
 fn to_summary(row: &ScoredSession) -> RecallSummary {
     RecallSummary {
         session_id: row.session.handoff.session_id.clone(),
+        short_id: row.session.display_id.clone(),
         date: row.session.session_date.to_string(),
         headline: row.session.handoff.headline.clone(),
         handoff_path: row.session.handoff.content_path.clone(),

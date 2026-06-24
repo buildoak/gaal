@@ -65,12 +65,15 @@ This means agents should branch on both process exit status and JSON payload sha
 Commands that take a session identifier accept several forms:
 
 - Full UUID: accepted even though `gaal` truncates internally
-- Short ID: the 8-character session prefix, used directly
+- Short ID: the 8-character session identifier used directly. For Hermes this
+  is the persisted alias, not the first 8 characters of the full native ID.
 - Prefix: any unique prefix resolves; non-unique prefixes return ambiguous-ID error with exit code `2`
 - `latest`: resolves to the most recent session
 - `today`: accepted by `gaal create-handoff` for the current day's sessions
 
-Smallest defensible rule: use short IDs when you have them, and use `latest` when you do not care which exact recent session is selected.
+Smallest defensible rule: use short IDs when you have them, use the registered
+Hermes alias for Hermes sessions, and use `latest` when you do not care which
+exact recent session is selected.
 
 ## Common Patterns
 

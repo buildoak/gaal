@@ -151,7 +151,7 @@ pub fn run(args: SearchArgs) -> Result<(), GaalError> {
     enrich_session_metadata(&conn, &mut results);
 
     if args.human {
-        print_search_human(&results);
+        print_search_human(&conn, &results);
         return Ok(());
     }
 
@@ -336,7 +336,7 @@ fn combine_query_with_fact_filter(
     ]))
 }
 
-fn print_search_human(results: &[SearchResult]) {
+fn print_search_human(conn: &Connection, results: &[SearchResult]) {
     if results.is_empty() {
         println!("No results.");
         return;
@@ -350,7 +350,8 @@ fn print_search_human(results: &[SearchResult]) {
         .map(|row| {
             vec![
                 format!("{:.2}", row.score),
-                row.session_id.chars().take(8).collect::<String>(),
+                crate::db::queries::display_id_for_session(conn, &row.engine, &row.session_id)
+                    .unwrap_or_else(|_| row.session_id.chars().take(8).collect::<String>()),
                 row.engine.clone(),
                 row.turn.to_string(),
                 row.fact_type.clone(),

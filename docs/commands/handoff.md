@@ -35,6 +35,7 @@ gaal create-handoff [OPTIONS] [ID]
 `ID` may be:
 
 - a session ID
+- a registered Hermes alias
 - `today`
 - `latest`
 

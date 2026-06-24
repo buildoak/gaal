@@ -90,6 +90,7 @@ pub enum LsSort {
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionSummary {
     pub id: String,
+    pub short_id: String,
     pub engine: String,
     pub model: String,
     pub cwd: String,
@@ -492,9 +493,11 @@ fn build_summary(
     let duration_secs = compute_duration_secs(&row.started_at, row.ended_at.as_deref(), now);
 
     let cwd = truncate_cwd(&row.cwd.unwrap_or_default());
+    let short_id = queries::display_id_for_session(conn, &row.engine, &row.id)?;
 
     Ok(SessionSummary {
         id: row.id,
+        short_id,
         engine: row.engine,
         model: row.model.unwrap_or_else(|| "unknown".to_string()),
         cwd,
@@ -726,7 +729,7 @@ impl HumanReadable for Vec<SessionSummary> {
             let rows: Vec<Vec<String>> = self
                 .iter()
                 .map(|session| {
-                    let id = session.id.chars().take(8).collect::<String>();
+                    let id = session.short_id.clone();
                     let type_badge = match session.session_type.as_str() {
                         "subagent" => {
                             if let Some(ref st) = session.subagent_type {
@@ -784,7 +787,7 @@ impl HumanReadable for Vec<SessionSummary> {
             let rows: Vec<Vec<String>> = self
                 .iter()
                 .map(|session| {
-                    let id = session.id.chars().take(8).collect::<String>();
+                    let id = session.short_id.clone();
                     let tokens = format!(
                         "{} / {}",
                         format_tokens(u64_to_i64_saturating(session.tokens.input)),

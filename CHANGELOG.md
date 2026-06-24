@@ -6,6 +6,7 @@
 - **Antigravity CLI (`agy`) native engine support.** Gaal now discovers, parses, indexes, searches, renders transcripts for, dry-run plans handoffs for, and self-identifies agy sessions from native Antigravity brain transcripts. `transcript_full.jsonl` is preferred, `transcript.jsonl` is the fallback, and indexed agy IDs are the first 8 characters of the native brain UUID.
 - **Agy copied-JSONL and self-ID support.** Copied agy JSONL files are detected from content markers instead of only canonical paths, and `find-salt` now scans Antigravity brain transcript JSONL while ignoring user prompt echoes.
 - **Agy runtime and optional metadata enrichment.** Runtime probes use agy `created_at` timestamps and executed action records. When matching agent-mux sidecars exist, native agy discovery can fill missing cwd/model metadata without requiring agent-mux.
+- **Deterministic Hermes aliases.** Hermes sessions keep their full native IDs in `sessions.id`, while Gaal now persists collision-checked 8-character lowercase base32 aliases in SQLite for lookup and registered transcript/handoff artifact filenames.
 - **Source-backed activity slices.** New `gaal activity` command renders transcript-shaped markdown for sessions with source-proven events in a half-open time window. Activity output lives under `~/.gaal/data/activity/` and includes carried-in/continues-after metadata for long-running sessions.
 
 ### Fixed
@@ -13,7 +14,7 @@
 - **Transcript-aware `create-handoff` planning.** Handoff chunk planning now sizes the actual rendered transcript used for extraction instead of raw Codex JSONL bytes. This prevents short rendered sessions with large JSONL tool payloads from exploding into unnecessary map/reduce calls, and makes long rendered transcripts chunk predictably before dispatch.
 - **Live `create-handoff` defaults and metadata extraction.** The default Codex extraction worker now uses `gpt-5.4-mini` with xhigh effort to match the current agent-mux roster, and handoff metadata parsing accepts common worker output variants such as `substance_score`, next-line "Substance Score" values, and lowercase bullet sections for projects/keywords.
 - **Low-substance recall filtering.** `gaal recall --substance 0` now honors the explicit threshold instead of silently raising it back to 1, so deliberate smoke-test handoffs remain queryable when requested.
-- **Hermes handoff artifact paths.** Real `create-handoff` writes now use the same full Hermes session artifact ID as `resolve`, dry-run planning, and frontmatter instead of truncating Hermes filenames to 8 characters.
+- **Hermes short-ID collisions.** `resolve`, `inspect`, `transcript`, `activity --session`, `tag`, `recall --id`, and `create-handoff` can now resolve a registered Hermes alias without falling back to the colliding first-8 date prefix.
 - **Agy `created_at` dry-run planning.** Unindexed `create-handoff --jsonl --dry-run` now uses agy `created_at` when `timestamp` is absent, so planned handoff paths keep the transcript date.
 - **Shipped default config.** `defaults/config.toml` now matches compiled handoff defaults: `gpt-5.4-mini` with xhigh effort.
 - **`--this` handoff documentation.** CLI help, command docs, and skill references now describe `--this` as a compatibility no-op while parent-session preference is disabled.

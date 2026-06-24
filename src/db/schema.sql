@@ -56,6 +56,16 @@ CREATE TABLE IF NOT EXISTS session_tags (
     PRIMARY KEY (session_id, tag)
 );
 
+CREATE TABLE IF NOT EXISTS session_aliases (
+    alias TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes')),
+    scheme TEXT NOT NULL,
+    counter INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    UNIQUE(session_id, engine, scheme)
+);
+
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL,
@@ -73,3 +83,5 @@ CREATE INDEX IF NOT EXISTS idx_sessions_type ON sessions(session_type);
 CREATE INDEX IF NOT EXISTS idx_sessions_subagent_type ON sessions(subagent_type);
 CREATE INDEX IF NOT EXISTS idx_handoffs_substance ON handoffs(substance);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON session_tags(tag);
+CREATE INDEX IF NOT EXISTS idx_session_aliases_session ON session_aliases(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_aliases_engine ON session_aliases(engine);

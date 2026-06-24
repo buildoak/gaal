@@ -419,18 +419,18 @@ fn plan_single_session_dry_run(
 ) -> Result<Vec<HandoffDryRunResult>, GaalError> {
     if let Some(jsonl_path) = args.jsonl.as_deref() {
         let session = dry_run_session_from_jsonl(conn, jsonl_path, None)?;
-        return Ok(vec![build_dry_run_plan(&session, request)?]);
+        return Ok(vec![build_dry_run_plan(conn, &session, request)?]);
     }
 
     match resolve_sessions(conn, id_or_today) {
         Ok(sessions) => sessions
             .iter()
-            .map(|session| build_dry_run_plan(&DryRunSession::from(session), request))
+            .map(|session| build_dry_run_plan(conn, &DryRunSession::from(session), request))
             .collect(),
         Err(GaalError::NotFound(_)) if detected.is_some() => {
             let detected = detected.expect("checked is_some");
             let session = dry_run_session_from_detected(conn, detected)?;
-            Ok(vec![build_dry_run_plan(&session, request)?])
+            Ok(vec![build_dry_run_plan(conn, &session, request)?])
         }
         Err(err) => Err(err),
     }
@@ -547,6 +547,7 @@ fn find_indexed_session_for_jsonl(
 }
 
 fn build_dry_run_plan(
+    conn: &Connection,
     session: &DryRunSession,
     request: DryRunRequest<'_>,
 ) -> Result<HandoffDryRunResult, GaalError> {
@@ -573,7 +574,8 @@ fn build_dry_run_plan(
             "session is not indexed; dry-run did not index JSONL or write DB rows".to_string(),
         );
     }
-    let handoff_path = planned_handoff_path(&session.id, &session.engine, &session.started_at);
+    let handoff_path =
+        planned_handoff_path(conn, &session.id, &session.engine, &session.started_at)?;
     if handoff_path.exists() {
         warnings.push(
             "handoff file already exists; real execution would overwrite/update it".to_string(),
@@ -838,23 +840,22 @@ fn extract_json_string_field(line: &str, field: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-fn planned_handoff_path(session_id: &str, engine: &str, started_at: &str) -> PathBuf {
+fn planned_handoff_path(
+    conn: &Connection,
+    session_id: &str,
+    engine: &str,
+    started_at: &str,
+) -> Result<PathBuf, GaalError> {
     let (year, month, day) = date_parts(started_at);
-    gaal_home()
+    let artifact_id = crate::db::queries::display_id_for_session(conn, engine, session_id)?;
+    Ok(gaal_home()
         .join("data")
         .join(engine)
         .join("handoffs")
         .join(year)
         .join(month)
         .join(day)
-        .join(handoff_filename(engine, session_id))
-}
-
-fn handoff_filename(engine: &str, session_id: &str) -> String {
-    format!(
-        "{}.md",
-        crate::util::session_artifact_id(engine, session_id)
-    )
+        .join(format!("{artifact_id}.md")))
 }
 
 fn infer_engine_from_jsonl_path(path: &Path) -> &'static str {
@@ -1153,7 +1154,7 @@ fn process_session_handoff(
         )));
     }
 
-    let transcript = resolve_session_transcript(session, config);
+    let transcript = resolve_session_transcript(conn, session, config);
     let mut plan_warnings = Vec::new();
     let execution_plan = scan_indexed_session_for_handoff_plan(session, transcript.as_deref())
         .map(|stats| plan_execution_chunks(&stats, &mut plan_warnings))
@@ -1207,6 +1208,7 @@ fn process_chunked_session_handoff(
     );
 
     let chunk_contexts = build_chunk_contexts(
+        conn,
         session,
         config,
         &plan,
@@ -1345,7 +1347,7 @@ fn finish_handoff(
     let session_model = session.model.as_deref().unwrap_or("unknown");
     let frontmatter = build_handoff_frontmatter(session, &extracted, session_engine, session_model);
     let full_content = format!("{}{}", frontmatter, response);
-    let handoff_path = write_handoff_markdown(session, &full_content)?;
+    let handoff_path = write_handoff_markdown(conn, session, &full_content)?;
     let generated_by = build_generated_by_label(&config.agent_mux, request.engine, request.model);
 
     let record = HandoffRecord {
@@ -1368,6 +1370,7 @@ fn finish_handoff(
 }
 
 fn build_chunk_contexts(
+    conn: &Connection,
     session: &SessionRow,
     config: &GaalConfig,
     plan: &ExecutionPlan,
@@ -1386,7 +1389,7 @@ fn build_chunk_contexts(
         ));
     }
 
-    if let Some(transcript) = resolve_session_transcript(session, config) {
+    if let Some(transcript) = resolve_session_transcript(conn, session, config) {
         eprintln!(
             "Using session transcript ({} chars) split into {} chunk contexts",
             transcript.len(),
@@ -1836,29 +1839,7 @@ fn resolve_sessions(conn: &Connection, id_or_today: &str) -> Result<Vec<SessionR
         return resolve_today_sessions(conn);
     }
 
-    if let Some(exact) = get_session(conn, id_or_today)? {
-        return Ok(vec![exact]);
-    }
-
-    let mut stmt = conn
-        .prepare(
-            r#"
-            SELECT id
-            FROM sessions
-            WHERE id LIKE :prefix
-            ORDER BY started_at DESC
-            "#,
-        )
-        .map_err(GaalError::from)?;
-    let pattern = format!("{id_or_today}%");
-    let mut rows = stmt
-        .query(named_params! { ":prefix": pattern })
-        .map_err(GaalError::from)?;
-
-    let mut ids = Vec::new();
-    while let Some(row) = rows.next().map_err(GaalError::from)? {
-        ids.push(row.get::<_, String>(0).map_err(GaalError::from)?);
-    }
+    let ids = crate::db::queries::resolve_session_ids(conn, id_or_today, None)?;
 
     if ids.is_empty() {
         return Err(GaalError::NotFound(id_or_today.to_string()));
@@ -2273,8 +2254,13 @@ fn load_prompt(path: &Path) -> Result<String, GaalError> {
 /// 3. External output directory configured for rendered session markdown
 ///
 /// Returns `None` if all sources fail.
-fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Option<String> {
-    let artifact_id = crate::util::session_artifact_id(&session.engine, &session.id);
+fn resolve_session_transcript(
+    conn: &Connection,
+    session: &SessionRow,
+    config: &GaalConfig,
+) -> Option<String> {
+    let artifact_id = crate::db::queries::artifact_id_for_session(conn, session)
+        .unwrap_or_else(|_| crate::util::session_artifact_id(&session.engine, &session.id));
     let (year, month, day) = date_parts(&session.started_at);
 
     // 1. Fresh render from JSONL. Handoff generation should not depend on
@@ -2343,7 +2329,16 @@ fn resolve_session_transcript(session: &SessionRow, config: &GaalConfig) -> Opti
 }
 
 fn resolve_dry_run_session_transcript(session: &DryRunSession) -> Option<String> {
-    let artifact_id = crate::util::session_artifact_id(&session.engine, &session.id);
+    let artifact_id = if session.engine == "hermes" {
+        open_db_readonly()
+            .ok()
+            .and_then(|conn| {
+                crate::db::queries::display_id_for_session(&conn, &session.engine, &session.id).ok()
+            })
+            .unwrap_or_else(|| crate::util::session_artifact_id(&session.engine, &session.id))
+    } else {
+        crate::util::session_artifact_id(&session.engine, &session.id)
+    };
     let (year, month, day) = date_parts(&session.started_at);
 
     let source_path = &session.jsonl_path;
@@ -3002,8 +2997,13 @@ fn simplify_model_name(model: &str) -> String {
     }
 }
 
-fn write_handoff_markdown(session: &SessionRow, content: &str) -> Result<PathBuf, GaalError> {
+fn write_handoff_markdown(
+    conn: &Connection,
+    session: &SessionRow,
+    content: &str,
+) -> Result<PathBuf, GaalError> {
     let (year, month, day) = date_parts(&session.started_at);
+    let artifact_id = crate::db::queries::artifact_id_for_session(conn, session)?;
     let path = gaal_home()
         .join("data")
         .join(&session.engine)
@@ -3011,7 +3011,7 @@ fn write_handoff_markdown(session: &SessionRow, content: &str) -> Result<PathBuf
         .join(year)
         .join(month)
         .join(day)
-        .join(handoff_filename(&session.engine, &session.id));
+        .join(format!("{artifact_id}.md"));
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(GaalError::from)?;
@@ -3346,15 +3346,43 @@ mod tests {
     }
 
     #[test]
-    fn handoff_filename_preserves_full_hermes_session_id() {
-        assert_eq!(
-            handoff_filename("hermes", "2026-05-05T10-00-00Z-abcdef123456"),
-            "2026-05-05T10-00-00Z-abcdef123456.md"
-        );
-        assert_eq!(
-            handoff_filename("codex", "rollout-2026-05-05T10-00-00Z-abcdef123456"),
-            "rollout-.md"
-        );
+    fn planned_handoff_path_uses_registered_hermes_alias() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open db");
+        crate::db::init_db(&conn).expect("init schema");
+        let session = SessionRow {
+            id: "20260505_100000_abcdef123456".to_string(),
+            engine: "hermes".to_string(),
+            model: Some("hermes-test-model".to_string()),
+            cwd: None,
+            started_at: "2026-05-05T10:00:00Z".to_string(),
+            ended_at: None,
+            exit_signal: None,
+            last_event_at: Some("2026-05-05T10:00:00Z".to_string()),
+            parent_id: None,
+            session_type: "standalone".to_string(),
+            jsonl_path: "/tmp/hermes-state.db".to_string(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+            total_tools: 0,
+            total_turns: 1,
+            peak_context: 0,
+            last_indexed_offset: 0,
+            subagent_type: None,
+            gemini_summary: None,
+        };
+        crate::db::queries::upsert_session(&conn, &session).expect("insert session");
+        let alias = crate::db::queries::get_session_alias(&conn, "hermes", &session.id)
+            .expect("query alias")
+            .expect("alias exists");
+
+        let path = planned_handoff_path(&conn, &session.id, &session.engine, &session.started_at)
+            .expect("planned path");
+
+        let suffix = format!("data/hermes/handoffs/2026/05/05/{alias}.md");
+        assert!(path.to_string_lossy().ends_with(&suffix));
     }
 
     #[test]

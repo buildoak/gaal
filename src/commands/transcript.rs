@@ -49,7 +49,7 @@ pub fn run(args: TranscriptArgs) -> Result<(), GaalError> {
     let conn = open_db_readonly()?;
     let session = resolve_one(&conn, &raw_id).map_err(map_session_resolution_error)?;
     let config = load_config();
-    let paths = transcript_paths(&session, config.markdown_output_dir.as_deref());
+    let paths = transcript_paths(&conn, &session, config.markdown_output_dir.as_deref())?;
     let md_path = resolve_markdown_path(&conn, &session, &paths, args.force)?;
 
     if args.stdout {
@@ -215,8 +215,12 @@ fn read_markdown_file(path: &Path) -> Result<String, GaalError> {
     })
 }
 
-fn transcript_paths(session: &SessionRow, output_dir: Option<&Path>) -> TranscriptPaths {
-    let artifact_id = crate::util::session_artifact_id(&session.engine, &session.id);
+fn transcript_paths(
+    conn: &Connection,
+    session: &SessionRow,
+    output_dir: Option<&Path>,
+) -> Result<TranscriptPaths, GaalError> {
+    let artifact_id = crate::db::queries::artifact_id_for_session(conn, session)?;
     let (year, month, day) = date_parts(&session.started_at);
 
     let gaal_path = gaal_home()
@@ -235,10 +239,10 @@ fn transcript_paths(session: &SessionRow, output_dir: Option<&Path>) -> Transcri
             .join(format!("{artifact_id}.md"))
     });
 
-    TranscriptPaths {
+    Ok(TranscriptPaths {
         gaal_path,
         external_path,
-    }
+    })
 }
 
 fn file_size_bytes(path: &Path) -> Result<u64, GaalError> {

@@ -160,6 +160,14 @@ The `handoffs` table stores generated continuity artifacts. Core fields:
 
 Session tags live in `session_tags` and are managed through the `tag` command.
 
+### Session Aliases
+
+`session_aliases` stores durable short aliases that are not canonical session
+IDs. Hermes uses this table for deterministic 8-character lowercase aliases
+because first-8 prefixes collide on date-like native IDs. `sessions.id` remains
+the full Hermes session ID; alias rows exist for lookup and registered artifact
+filenames.
+
 ### FTS Index
 
 Tantivy indexes facts with these main fields:

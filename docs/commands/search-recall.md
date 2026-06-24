@@ -70,7 +70,7 @@ gaal recall [OPTIONS] [QUERY]
 
 ## Flags
 
-- `--id <session-id>`: direct handoff lookup by session ID (bypasses query scoring). Supports prefix and `latest`. Mutually exclusive with positional QUERY.
+- `--id <session-id>`: direct handoff lookup by session ID (bypasses query scoring). Supports prefix, registered Hermes alias, and `latest`. Mutually exclusive with positional QUERY.
 - `--days-back <n>`: default `14`
 - `--limit <n>`: default `3`
 - `--format <summary|handoff|brief|full|eywa>`: default `brief`
@@ -111,7 +111,7 @@ Keywords: agent-mux, gaal, AX testing, LaunchAgent, Telegram bot
 Substance: 3 | Duration: 532m | Score: 0.0
 ```
 
-Direct lookup bypasses query scoring entirely — it queries the handoffs table by session ID. No scoring, no recency weighting, no query tokenization. Supports prefix matching and `latest`.
+Direct lookup bypasses query scoring entirely. It resolves the supplied session reference first, then queries the handoffs table by canonical session ID. No scoring, no recency weighting, no query tokenization. Supports prefix matching, registered Hermes aliases, and `latest`.
 
 ## Related Commands
 
