@@ -8,9 +8,10 @@
 Gaal is `strace` for AI coding agents: a local CLI for traceability,
 observability, and continuity across agent sessions.
 
-It indexes local traces from Claude Code, Codex, Gemini CLI, Antigravity CLI
-(`agy`), and Hermes Agent, then gives agents one precise way to list, search,
-inspect, attribute, resolve, render, recall, and optionally hand off sessions.
+It indexes local traces from Codex, Claude Code, Antigravity CLI (`agy`),
+Hermes Agent, and <span style="color:#6a737d">Gemini CLI</span>, then gives
+agents one precise way to list, search, inspect, attribute, resolve, render,
+recall, and optionally hand off sessions.
 
 Not a cloud platform. Not a daemon. Raw traces stay the evidence; Gaal builds
 the smaller token-efficient markdown views and navigation tools around them.
@@ -80,14 +81,16 @@ default; add `--stdout` when you want markdown printed to stdout.
 All supported engines are normalized into the same session, fact, transcript,
 tag, and handoff model. "Supported" means covered by the current parser and
 discovery surface, not a promise that upstream log formats will never change.
+The version column records the last harness version or state schema I have
+validated locally; it is not a declared minimum.
 
-| Engine | Source | Status |
-| --- | --- | --- |
-| Claude Code | `~/.claude/projects/.../*.jsonl` | Supported |
-| Codex | `~/.codex/sessions/.../rollout-*.jsonl` | Supported |
-| Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` | Supported |
-| Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | Experimental, native |
-| Hermes Agent | `~/.hermes/state.db` or `HERMES_STATE_DB` / `HERMES_HOME` overrides | Experimental |
+| Engine | Source | Last known working harness | Status |
+| --- | --- | --- | --- |
+| Codex | `~/.codex/sessions/.../rollout-*.jsonl` | `codex-cli 0.141.0` | Supported |
+| Claude Code | `~/.claude/projects/.../*.jsonl` | `2.1.126 (Claude Code)` | Supported |
+| Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | `agy 1.0.11` | Experimental, native |
+| Hermes Agent | `~/.hermes/state.db` or `HERMES_STATE_DB` / `HERMES_HOME` overrides | `state.db` schema `6`; binary version not exposed | Experimental |
+| <span style="color:#6a737d">Gemini CLI</span> | `~/.gemini/tmp/*/chats/session-*.json` | `0.36.0` | Supported, legacy-ish |
 
 Agy support does not require agent-mux for discovery, indexing, search,
 activity, attribution, transcript rendering, or resolve. Hermes support is
