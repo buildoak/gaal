@@ -73,13 +73,13 @@ All supported engines are normalized into the same session, fact, transcript,
 tag, and handoff model. "Supported" means covered by the current parser and
 discovery surface, not a promise that upstream log formats will never change.
 
-| Engine | Source | Status | ID behavior |
-| --- | --- | --- | --- |
-| Claude Code | `~/.claude/projects/.../*.jsonl` | Supported | First 8 characters of the native session ID. |
-| Codex | `~/.codex/sessions/.../rollout-*.jsonl` | Supported | Last 8 hex characters of the dash-stripped native UUID. |
-| Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` | Supported | First 8 characters of `sessionId`, falling back to the file stem. |
-| Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | Experimental, native | First 8 characters of the Antigravity brain UUID. Copied agy JSONL can also be detected by record shape. |
-| Hermes Agent | `~/.hermes/state.db` or `HERMES_STATE_DB` / `HERMES_HOME` overrides | Experimental | Full native `sessions.id` remains canonical; Gaal registers a deterministic collision-checked 8-character lowercase alias for lookup and artifacts. |
+| Engine | Source | Status |
+| --- | --- | --- |
+| Claude Code | `~/.claude/projects/.../*.jsonl` | Supported |
+| Codex | `~/.codex/sessions/.../rollout-*.jsonl` | Supported |
+| Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` | Supported |
+| Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | Experimental, native |
+| Hermes Agent | `~/.hermes/state.db` or `HERMES_STATE_DB` / `HERMES_HOME` overrides | Experimental |
 
 Agy support does not require agent-mux for discovery, indexing, search,
 activity, attribution, transcript rendering, or resolve. Hermes support is
