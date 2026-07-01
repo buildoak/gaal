@@ -196,9 +196,10 @@ own history without pretending memory is magic.
    models useful.
 
    ```bash
-   gaal ls --since 7d
-   gaal who ran cargo --failed --limit 20
-   gaal activity --since 1d
+   gaal ls --since 1d --session-type subagent --sort duration -H
+   gaal who ran cargo --failed --since 1d --limit 20 -H
+   gaal inspect <failed_id> --errors -H
+   gaal transcript <failed_id> --stdout
    ```
 
 4. Build source-backed checkouts
@@ -250,35 +251,18 @@ Agy support is native: Gaal discovers and parses local Antigravity transcript
 files directly. Hermes support is useful but newer; it has been tested against
 one real installation shape plus sanitized fixtures.
 
-## Session IDs
-
-Short IDs are lookup handles, not one universal truncation rule.
-
-- Claude Code and Gemini indexed IDs use the first 8 characters of the native
-  ID.
-- Codex indexed IDs use the last 8 hex characters after removing UUID dashes.
-  Codex UUIDv7 values share timestamp-heavy prefixes, so the useful short ID is
-  at the end.
-- Agy indexed IDs use the first 8 characters of the Antigravity brain UUID.
-- Hermes keeps the full native session ID in the database and adds a registered
-  8-character alias. Do not use the first 8 date-like characters of a Hermes
-  native ID as its short ID.
-
-Commands that resolve sessions generally accept the indexed session ID, a
-unique prefix of that ID, or a registered Hermes alias. Some commands also
-accept `latest`; `create-handoff` also accepts `today`. When there is any
-ambiguity, use:
-
-```bash
-gaal resolve <id> -H
-```
-
-`resolve` tells you which session you matched, which engine owns it, where the
-source trace lives, and where the transcript and handoff artifacts should be.
-
 ## Quick Start
 
-Requires a local Rust toolchain.
+Gaal is skill-first. The intended first user is an agent, not a human memorizing
+flags. Give your coding agent the repo link and ask it to install Gaal end to
+end using the bundled skill:
+
+```text
+https://github.com/buildoak/gaal
+skill/SKILL.md
+```
+
+For a manual install, use a local Rust toolchain:
 
 ```bash
 git clone https://github.com/buildoak/gaal.git
@@ -293,7 +277,7 @@ gaal index backfill
 gaal index status
 ```
 
-Then ask the first useful question:
+Verify that Gaal can see local sessions:
 
 ```bash
 gaal ls -H --limit 5
@@ -315,34 +299,6 @@ gaal ls -H --limit 5
 
 `GAAL_HOME` does not move the source traces written by the agent tools. It only
 changes where Gaal stores its own derived state.
-
-## First Useful Loop
-
-Most work starts with discovery, then drills down only when there is a reason.
-
-```bash
-gaal ls --since 7d -H
-gaal who wrote README.md --since 30d -H
-gaal inspect <id> --files write -H
-gaal transcript <id>
-gaal resolve <id> -H
-```
-
-If you remember the topic but not the file:
-
-```bash
-gaal search "migration error" --field all --limit 10 -H
-```
-
-If you are resuming work and handoffs exist:
-
-```bash
-gaal recall "release prep" --format brief --limit 3 -H
-```
-
-`recall` searches generated handoffs, not raw traces. An empty recall result can
-mean no handoff has been generated yet; use `search`, `who`, `ls`, `inspect`,
-or `transcript` for raw indexed evidence.
 
 ## Privacy And Locality
 
@@ -552,6 +508,13 @@ Run `gaal --help` and `gaal <command> --help` for the full current contract.
 | `gaal tag <id> <tag>` | Add a local tag to a session. |
 | `gaal tag <id> --remove <tag>` | Remove a local tag from a session. |
 | `gaal tag ls` | List known tags. |
+
+## Session IDs
+
+Session IDs are lookup handles, and short IDs are engine-specific. Codex uses
+the last 8 UUID hex characters; Claude Code, Gemini, and Agy usually use the
+first 8 native ID characters; Hermes keeps the full native ID and adds a
+registered alias. When unsure, run `gaal resolve <id> -H`.
 
 ## Docs
 
