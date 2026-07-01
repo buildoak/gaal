@@ -5,25 +5,32 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS-lightgrey)
 
-Gaal is a local session observability CLI for AI coding agents. It indexes
-session traces from Claude Code, Codex, Gemini CLI, Antigravity CLI (`agy`),
-and Hermes Agent, then gives you one way to list, search, inspect, attribute,
-resolve, render, and optionally hand off sessions.
+Gaal is `strace` for AI coding agents: a local CLI for traceability,
+observability, and continuity across agent sessions.
 
-Not a cloud platform. Not a daemon. A local traceability and continuity layer
-for agent work.
+It indexes local traces from Claude Code, Codex, Gemini CLI, Antigravity CLI
+(`agy`), and Hermes Agent, then gives agents one precise way to list, search,
+inspect, attribute, resolve, render, recall, and optionally hand off sessions.
+
+Not a cloud platform. Not a daemon. Raw traces stay the evidence; Gaal builds
+the smaller token-efficient markdown views and navigation tools around them.
 
 ## Why This Exists
 
-I built Gaal because agent work had started to compound, but the evidence did
-not. The logs existed, somewhere, in several different formats; raw logs were
-technically available and practically the wrong interface. The itch was simple:
-find the right session first, then spend context on the part that matters.
+It started with a naive dream: interactions with AI should compound. Not just
+produce output, not just create another pile of logs somewhere, but actually
+leave behind usable evidence.
 
-The problem was not memory in the usual assistant-product sense. It was
-traceability, debuggability, and continuity: can I find the session, understand
-the decision, and hand off useful state without keeping the whole machine in my
-head?
+Building yet another "memory" felt like faux pas. The logs already existed. The
+problem was that they were scattered across engines, enormous in raw form, and
+practically hostile to the next agent trying to understand what happened.
+
+Gaal keeps the territory intact and builds maps over it: indexed facts for
+finding the right session, token-efficient markdown views for reading it, and
+optional handoffs for the cases where a compact continuity note is actually
+useful.
+
+Find first. Read faithfully. Compress only on purpose.
 
 ## The Shape
 
