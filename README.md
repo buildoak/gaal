@@ -37,33 +37,126 @@ useful.
 
 ## Layered Views Over Raw Traces
 
-Raw logs - JSONL, SQLite, and the other harness artifacts - already exist.
-Codex, Claude Code, Antigravity CLI, Hermes, and Gemini CLI each leave their own
-local traces behind. Gaal does not replace those files or pretend a summary is
-the source of truth.
-
-Gaal reads those traces, indexes the useful facts, and builds smaller views that
-stay close to the evidence: almost lossless transcripts for reading a session,
-activity slices for understanding a window of work, and customizable handoffs
-when a future agent needs a compact brief.
+The general idea is not "summarize the logs." That is where too much evidence
+dies. The shape is more boring, and more useful:
 
 ```text
-local agent logs
-  -> indexed facts: sessions, prompts, files, commands, errors, tags, artifacts
-  -> readable views: transcripts and activity slices
-  -> on-demand handoffs for continuity
+raw evidence
+  JSONL, SQLite, and harness-owned artifacts left in place
 
-search broadly -> inspect the session -> read the view -> open raw traces if needed
+searchable atoms
+  sessions, prompts, files, commands, errors, tags, artifacts, models, cwd
+
+deterministic markdown views
+  almost lossless transcripts and source-backed activity slices
+
+optional compression
+  customizable handoffs for future agents
 ```
 
-Agents can start with `ls`, `who`, `search`, or `recall`, resolve the exact
-session with `resolve` or `inspect`, then open only the view they need with
-`transcript` or `activity`. If the job needs continuity instead of
-investigation, `create-handoff` makes a generated handoff from the
-source-backed session.
+The index is deliberately boring: it stores these atoms so an agent can ask
+precise questions before opening a whole transcript.
 
-The database is the map. The markdown views are the working surface. The raw
-logs remain the evidence.
+"Deterministic markdown view" is doing real work here. A transcript is rendered
+from the source trace and indexed facts. No LLM decides what mattered. Same
+session, same renderer version, same shape: frontmatter, session title,
+executive summary, conversation, and optional open threads or subagent activity.
+
+<details>
+<summary>Example: transcript shape</summary>
+
+```markdown
+---
+session_id: 3c18caec
+date: 2026-06-22
+start: 10:15
+end: 10:42
+duration: 27m
+model: gpt-5.5
+turns: 12
+total_input_tokens: 42184
+total_output_tokens: 6132
+cache_read_tokens: 90211
+cache_creation_tokens: 0
+render_version: 2
+---
+
+# Session: Fix transcript renderer
+
+## Executive Summary
+
+### Files Touched (Main Session)
+
+**Read (2):**
+- `src/render/session_md.rs`
+- `README.md`
+
+**Written (1):**
+- `README.md` (edit)
+
+### Commands Executed
+
+- `cargo test render::session_md`
+- `gaal transcript latest --stdout`
+
+---
+
+## Conversation
+
+### [10:15] User
+Please make the transcript view easier to understand.
+
+### [10:17] Codex
+I checked the renderer and will keep the example source-backed.
+```
+
+</details>
+
+Handoffs are the deliberate compression layer. They are generated markdown
+artifacts with searchable metadata: headline, projects, keywords, and substance
+score. Useful when the next agent needs the thread quickly. Not replacement
+evidence.
+
+<details>
+<summary>Example: handoff shape</summary>
+
+```markdown
+---
+session_id: 3c18caec
+date: 2026-06-22
+duration: 27
+model: gpt-5.5
+engine: codex
+headline: Fix transcript renderer
+projects: [gaal]
+keywords: [transcript, markdown, renderer]
+substance: 2
+---
+
+## Headline
+Fix transcript renderer
+
+## What Happened
+- Checked the session markdown renderer.
+- Reworked the README explanation around raw evidence, facts, and views.
+
+## Key Decisions
+- Keep raw traces as evidence.
+- Show deterministic transcript shape before talking about handoffs.
+
+## Open Threads
+- Decide whether the README also needs a visual diagram.
+
+## Key Files
+- `README.md` - public explanation of the Gaal model
+- `src/render/session_md.rs` - transcript renderer
+```
+
+</details>
+
+So the normal path is: search the facts, resolve the exact session, read the
+smallest faithful markdown view, and fall back to raw traces only when the task
+needs the original evidence.
 
 ## What Agents Can Do With Gaal
 
