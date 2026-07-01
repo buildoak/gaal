@@ -37,11 +37,15 @@ useful.
 
 ## General Intuition
 
-Gaal is built around one context-serving pattern: keep the raw evidence intact,
-then make smaller faithful views over it.
+The idea is simple: render token-efficient markdown views from raw logs, then
+build an index that lets agents find the right view precisely.
 
-The mistake is to turn logs into one clever summary and call it memory. Too much
-dies there. The better shape is layered:
+The markdown is the substance an agent reads on demand. The index is how it gets
+there without loading the universe. Want to know which session produced a file?
+Easy. Want to recover the brilliant prompt where you described the whole GTM
+concept three weeks ago? Two or three tool calls, not archaeology.
+
+The shape is layered:
 
 ```text
 raw evidence / raw data
