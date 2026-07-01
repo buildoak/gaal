@@ -16,6 +16,9 @@ recall, and optionally hand off sessions.
 Not a cloud platform. Not a daemon. Raw traces stay the evidence; Gaal builds
 the smaller token-efficient markdown views and navigation tools around them.
 
+Agent-first is literal here: JSON by default, source-backed, and built for the
+next run that has to inherit the mess.
+
 ## Why This Exists
 
 It started with a naive dream: interactions with AI should compound. Not just
@@ -34,41 +37,103 @@ useful.
 
 Find first. Read faithfully. Compress only on purpose.
 
-## The Shape
+## Layered Views Over Raw Traces
 
-Gaal keeps the source traces local and intact, then builds smaller faithful
-views over them:
+Raw logs are almost never the right interface for agents. Gaal is built around
+a simpler pattern: keep the source traces intact, then build smaller faithful
+views that let an agent navigate before spending context.
 
 ```text
 raw local traces
-  -> precise discovery facts
-  -> readable session views
+  -> indexed facts for discovery
+  -> deterministic markdown transcripts and activity slices
   -> optional compressed handoffs
+
+broad query -> exact session -> readable view -> raw evidence when needed
 ```
 
-The database is mostly the discovery and routing layer: sessions, prompts, file
-reads and writes, commands, errors, tags, and handoff metadata. Markdown
-transcripts are where the substance lives when you need to understand what
-happened and why. Handoffs are optional compressed continuity artifacts on top,
-useful when a future agent needs the thread without loading the whole session.
+**Raw evidence:** Gaal reads local traces from supported harnesses and leaves
+them in place. Codex, Claude Code, Antigravity CLI, Hermes, and Gemini CLI keep
+their own source artifacts. Gaal points back to them when precision matters.
 
-Navigate first. Spend tokens later.
+**Readable atoms:** Gaal normalizes the parts agents need for navigation:
+sessions, prompts, file reads and writes, commands, errors, tags, and artifact
+metadata. Those indexed facts are the map. Markdown transcripts and activity
+slices are the readable views when the agent needs to understand what happened.
 
-## What Gaal Helps You Do
+**Optional compression:** Handoffs and `recall` are an opt-in continuity layer.
+They are useful when a future agent needs the thread without loading the whole
+session, but they are generated notes. Helpful maps, not replacement evidence.
 
-| Need | Command |
-| --- | --- |
-| See recent sessions across engines | `gaal ls -H` |
-| Drill into one session | `gaal inspect <id> -H` |
-| Locate or render a readable transcript | `gaal transcript <id>` |
-| Create a source-backed activity bundle | `gaal activity --since 1d -H` |
-| Find who wrote, read, ran, changed, or deleted something | `gaal who <verb> <target>` |
-| Search indexed facts | `gaal search <query>` |
-| Retrieve generated continuity notes | `gaal recall <query>` |
-| Resolve an indexed ID or alias to source and artifacts | `gaal resolve <id> -H` |
-| Let an agent identify its own current session | `gaal salt` then `gaal find-salt <token>` |
-| Preview or generate a handoff | `gaal create-handoff <id> --dry-run` |
-| Maintain the derived index | `gaal index status`, `gaal index backfill` |
+**Discovery tools:** `ls`, `who`, `search`, `resolve`, `inspect`,
+`transcript`, and `activity` are the drill-down surface. Start broad, land on
+the right session, open the smallest faithful view, and only then fall back to
+raw traces if the task demands it.
+
+Find first. Read faithfully. Compress only on purpose.
+
+## What Agents Can Do With Gaal
+
+Gaal is not a nicer log browser. It is a way for agents to operate over their
+own history without pretending memory is magic.
+
+1. Re-enter old work with evidence
+
+   A future agent can find the relevant prior session, inspect what happened,
+   and load the exact transcript only when needed.
+
+   ```bash
+   gaal recall "auth migration"
+   gaal search "auth migration"
+   gaal inspect <id>
+   gaal transcript <id>
+   ```
+
+2. Attribute changes across agents
+
+   When a file changed and nobody remembers which model touched it, an agent
+   can ask the traces instead of guessing.
+
+   ```bash
+   gaal who wrote README.md --since 30d
+   gaal who ran cargo --failed --limit 20
+   gaal inspect <id> --files write
+   ```
+
+3. Audit tool and subagent behavior
+
+   Parent sessions, worker sessions, Codex inside Claude, Claude inside Codex,
+   Gemini in the same pile: Gaal gives agents a shared surface for tracing what
+   ran, what failed, and where the evidence lives.
+
+   ```bash
+   gaal ls --since 7d
+   gaal activity --since 1d
+   gaal resolve <id>
+   ```
+
+4. Build source-backed checkouts
+
+   Agents can turn a day, project, or investigation window into a compact
+   activity bundle backed by real trace facts. Useful for day checkouts,
+   retros, and "what actually happened here?" moments.
+
+   ```bash
+   gaal activity --since 1d
+   gaal activity --since 2026-06-01
+   ```
+
+5. Identify themselves and leave continuity
+
+   A running agent can discover its own session ID, then optionally create a
+   handoff for the next agent. No mystical self-awareness. Just a salt token in
+   the trace.
+
+   ```bash
+   gaal salt
+   gaal find-salt <token>
+   gaal create-handoff <id> --dry-run
+   ```
 
 Default output is JSON for normal query commands. Add `-H` or `--human` when
 you want a table or card. `gaal salt` intentionally prints a raw token string,
