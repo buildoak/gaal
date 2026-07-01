@@ -37,13 +37,14 @@ useful.
 
 ## General Intuition
 
-The idea is simple: render token-efficient markdown views from raw logs, then
-build an index that lets agents find the right view precisely.
+**The idea is simple: render token-efficient markdown views from raw logs, not
+one giant slop file; then build an index that lets agents find the right view
+precisely.**
 
-The markdown is the substance an agent reads on demand. The index is how it gets
-there without loading the universe. Want to know which session produced a file?
-Easy. Want to recover the brilliant prompt where you described the whole GTM
-concept three weeks ago? Two or three tool calls, not archaeology.
+**The markdown is the substance an agent reads on demand. The index is how it
+gets there without loading the universe. Want to know which session produced a
+file? Easy. Want to recover the brilliant prompt where you described the whole
+GTM concept three weeks ago? Two or three tool calls, not archaeology.**
 
 The shape is layered:
 
@@ -173,6 +174,11 @@ own history without pretending memory is magic.
    A future agent can find the relevant prior session, inspect what happened,
    and load the exact transcript only when needed.
 
+   Useful when you have done some properly strange pipeline once and want to
+   tell the next agent: "remember that thing where we moved data from here to
+   there and somehow got it done? Use Gaal, recall how it worked, then do it
+   again."
+
    ```bash
    gaal recall "auth migration"  # search generated continuity handoffs
    gaal search "auth migration"  # search indexed facts from raw traces
@@ -262,8 +268,7 @@ flags. Give your coding agent the repo link and ask it to install Gaal end to
 end using the bundled skill:
 
 ```text
-https://github.com/buildoak/gaal
-skill/SKILL.md
+https://github.com/buildoak/gaal/skill/SKILL.md
 ```
 
 For a manual install, use a local Rust toolchain:
