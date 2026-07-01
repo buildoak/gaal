@@ -35,42 +35,35 @@ finding the right session, token-efficient markdown views for reading it, and
 optional handoffs for the cases where a compact continuity note is actually
 useful.
 
-Find first. Read faithfully. Compress only on purpose.
-
 ## Layered Views Over Raw Traces
 
-Raw logs are almost never the right interface for agents. Gaal is built around
-a simpler pattern: keep the source traces intact, then build smaller faithful
-views that let an agent navigate before spending context.
+Raw logs - JSONL, SQLite, and the other harness artifacts - already exist.
+Codex, Claude Code, Antigravity CLI, Hermes, and Gemini CLI each leave their own
+local traces behind. Gaal does not replace those files or pretend a summary is
+the source of truth.
+
+Gaal reads those traces, indexes the useful facts, and builds smaller views that
+stay close to the evidence: transcripts for reading a session, activity slices
+for understanding a window of work, and handoffs when a future agent needs a
+compact brief.
 
 ```text
-raw local traces
-  -> indexed facts for discovery
-  -> deterministic markdown transcripts and activity slices
-  -> optional compressed handoffs
+local agent logs
+  -> indexed facts: sessions, prompts, files, commands, errors, tags, artifacts
+  -> readable views: transcripts and activity slices
+  -> on-demand handoffs for continuity
 
-broad query -> exact session -> readable view -> raw evidence when needed
+search broadly -> inspect the session -> read the view -> open raw traces if needed
 ```
 
-**Raw evidence:** Gaal reads local traces from supported harnesses and leaves
-them in place. Codex, Claude Code, Antigravity CLI, Hermes, and Gemini CLI keep
-their own source artifacts. Gaal points back to them when precision matters.
+Agents can start with `ls`, `who`, `search`, or `recall`, resolve the exact
+session with `resolve` or `inspect`, then open only the view they need with
+`transcript` or `activity`. If the job needs continuity instead of
+investigation, `create-handoff` makes a generated handoff from the
+source-backed session.
 
-**Readable atoms:** Gaal normalizes the parts agents need for navigation:
-sessions, prompts, file reads and writes, commands, errors, tags, and artifact
-metadata. Those indexed facts are the map. Markdown transcripts and activity
-slices are the readable views when the agent needs to understand what happened.
-
-**Optional compression:** Handoffs and `recall` are an opt-in continuity layer.
-They are useful when a future agent needs the thread without loading the whole
-session, but they are generated notes. Helpful maps, not replacement evidence.
-
-**Discovery tools:** `ls`, `who`, `search`, `resolve`, `inspect`,
-`transcript`, and `activity` are the drill-down surface. Start broad, land on
-the right session, open the smallest faithful view, and only then fall back to
-raw traces if the task demands it.
-
-Find first. Read faithfully. Compress only on purpose.
+The database is the map. The markdown views are the working surface. The raw
+logs remain the evidence.
 
 ## What Agents Can Do With Gaal
 
@@ -153,14 +146,14 @@ validated locally; it is not a declared minimum.
 | --- | --- | --- | --- |
 | Codex | `~/.codex/sessions/.../rollout-*.jsonl` | `codex-cli 0.141.0` | Supported |
 | Claude Code | `~/.claude/projects/.../*.jsonl` | `2.1.126 (Claude Code)` | Supported |
-| Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | `agy 1.0.11` | Experimental, native |
+| Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | `agy 1.0.11` | Supported |
 | Hermes Agent | `~/.hermes/state.db` or `HERMES_STATE_DB` / `HERMES_HOME` overrides | `state.db` schema `6`; binary version not exposed | Experimental |
 | <span style="color:#6a737d">Gemini CLI</span> | `~/.gemini/tmp/*/chats/session-*.json` | `0.36.0` | Supported, legacy-ish |
 
-Agy support does not require agent-mux for discovery, indexing, search,
-activity, attribution, transcript rendering, or resolve. Hermes support is
-useful but newer; it has been tested against one real installation shape plus
-sanitized fixtures.
+Agy support does not require [agent-mux](https://github.com/buildoak/agent-mux)
+for discovery, indexing, search, activity, attribution, transcript rendering,
+or resolve. Hermes support is useful but newer; it has been tested against one
+real installation shape plus sanitized fixtures.
 
 ## Session IDs
 
@@ -268,11 +261,12 @@ Treat `~/.claude/`, `~/.codex/`, `~/.gemini/`, `~/.hermes/`, and `~/.gaal/` as
 private working data unless you have audited them.
 
 `gaal create-handoff` is different from the read path. It uses the configured
-LLM/agent backend, defaults to `agent-mux` for real execution, and may transmit
-transcript content or consume subscription quota, API credits, metered usage,
-or local compute. Once a handoff exists, `gaal recall` searches that local
-handoff index; the generation step is the part that may leave the machine. Run
-`--dry-run` first, especially for batch work.
+LLM/agent backend, defaults to
+[agent-mux](https://github.com/buildoak/agent-mux) for real execution, and may
+transmit transcript content or consume subscription quota, API credits, metered
+usage, or local compute. Once a handoff exists, `gaal recall` searches that
+local handoff index; the generation step is the part that may leave the
+machine. Run `--dry-run` first, especially for batch work.
 
 ## Handoffs
 
@@ -285,7 +279,8 @@ to pick up the thread. Once generated, handoffs are indexed and retrieved by
 
 You do not need handoffs for the core workflow. `ls`, `inspect`, `transcript`,
 `activity`, `who`, `search`, `resolve`, `salt`, `find-salt`, `index`, and `tag`
-work without installing agent-mux or calling any LLM backend.
+work without installing [agent-mux](https://github.com/buildoak/agent-mux) or
+calling any LLM backend.
 
 For one known session:
 
@@ -317,9 +312,10 @@ gaal create-handoff --jsonl /path/to/session.jsonl
 identify Gemini JSON sessions or Hermes SQLite sessions.
 
 Provider caveat: real handoff execution is currently supported through
-`agent-mux`. The CLI may expose other provider selectors for planning or
-dry-run compatibility; trust `provider_supported` in `--dry-run` output before
-running any non-dry-run generation.
+[agent-mux](https://github.com/buildoak/agent-mux). The CLI may expose other
+provider selectors for planning or dry-run compatibility; trust
+`provider_supported` in `--dry-run` output before running any non-dry-run
+generation.
 
 ## Examples
 
@@ -444,7 +440,7 @@ Run `gaal --help` and `gaal <command> --help` for the full current contract.
 | --- | --- |
 | `gaal salt` | Emit a unique token for self-identification. |
 | `gaal find-salt <token>` | Find the Claude Code, Codex, or agy JSONL file containing that token in tool/action output, with indexed session context when available. |
-| `gaal create-handoff <id>` | Generate a handoff markdown artifact through the configured backend. Use `--dry-run` first; `agent-mux` is the supported real-execution provider today. |
+| `gaal create-handoff <id>` | Generate a handoff markdown artifact through the configured backend. Use `--dry-run` first; [agent-mux](https://github.com/buildoak/agent-mux) is the supported real-execution provider today. |
 | `gaal create-handoff --jsonl <path>` | Generate from an explicit JSONL path, usually after `find-salt`. |
 | `gaal create-handoff --batch --since 1d --min-turns 3 --dry-run` | Preview batch handoff candidates before generating anything. |
 
