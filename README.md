@@ -43,9 +43,9 @@ local traces behind. Gaal does not replace those files or pretend a summary is
 the source of truth.
 
 Gaal reads those traces, indexes the useful facts, and builds smaller views that
-stay close to the evidence: transcripts for reading a session, activity slices
-for understanding a window of work, and handoffs when a future agent needs a
-compact brief.
+stay close to the evidence: almost lossless transcripts for reading a session,
+activity slices for understanding a window of work, and customizable handoffs
+when a future agent needs a compact brief.
 
 ```text
 local agent logs
