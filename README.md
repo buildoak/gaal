@@ -35,32 +35,45 @@ finding the right session, token-efficient markdown views for reading it, and
 optional handoffs for the cases where a compact continuity note is actually
 useful.
 
-## Layered Views Over Raw Traces
+## General Intuition
 
-The general idea is not "summarize the logs." That is where too much evidence
-dies. The shape is more boring, and more useful:
+Gaal is built around one context-serving pattern: keep the raw evidence intact,
+then make smaller faithful views over it.
+
+The mistake is to turn logs into one clever summary and call it memory. Too much
+dies there. The better shape is layered:
 
 ```text
-raw evidence
-  JSONL, SQLite, and harness-owned artifacts left in place
+raw evidence / raw data
+  JSONL, SQLite, and harness-owned artifacts left intact
 
 searchable atoms
-  sessions, prompts, files, commands, errors, tags, artifacts, models, cwd
+  normalized facts: sessions, prompts, files, commands, errors, tags,
+  artifacts, model, cwd
 
 deterministic markdown views
   almost lossless transcripts and source-backed activity slices
 
 optional compression
-  customizable handoffs for future agents
+  customizable handoffs, generated only when continuity needs it
+
+discovery / drill-down
+  start with precise search, then open the smallest useful view
 ```
 
-The index is deliberately boring: it stores these atoms so an agent can ask
-precise questions before opening a whole transcript.
+The index is the discovery layer. It stores boring, useful facts so an agent can
+ask narrow questions before spending tokens on a full session: which sessions
+touched this file, which commands failed, which model ran, which project was
+active, which artifacts were produced.
 
-"Deterministic markdown view" is doing real work here. A transcript is rendered
-from the source trace and indexed facts. No LLM decides what mattered. Same
-session, same renderer version, same shape: frontmatter, session title,
-executive summary, conversation, and optional open threads or subagent activity.
+The markdown views are the reading layer. A deterministic markdown view is
+rendered from source traces plus DB facts. No LLM decides what mattered. Same
+source data, same renderer version, same view structure.
+
+For transcripts, that means frontmatter, `# Session:`, `## Executive Summary`,
+`## Conversation`, and optional open threads or subagent activity. The point is
+not to compress the session into vibes. The point is to make the session
+readable without breaking its link to the underlying trace.
 
 <details>
 <summary>Example: transcript shape</summary>
@@ -69,15 +82,9 @@ executive summary, conversation, and optional open threads or subagent activity.
 ---
 session_id: 3c18caec
 date: 2026-06-22
-start: 10:15
-end: 10:42
 duration: 27m
 model: gpt-5.5
 turns: 12
-total_input_tokens: 42184
-total_output_tokens: 6132
-cache_read_tokens: 90211
-cache_creation_tokens: 0
 render_version: 2
 ---
 
@@ -91,15 +98,9 @@ render_version: 2
 - `src/render/session_md.rs`
 - `README.md`
 
-**Written (1):**
-- `README.md` (edit)
-
 ### Commands Executed
 
 - `cargo test render::session_md`
-- `gaal transcript latest --stdout`
-
----
 
 ## Conversation
 
@@ -112,10 +113,10 @@ I checked the renderer and will keep the example source-backed.
 
 </details>
 
-Handoffs are the deliberate compression layer. They are generated markdown
-artifacts with searchable metadata: headline, projects, keywords, and substance
-score. Useful when the next agent needs the thread quickly. Not replacement
-evidence.
+Handoffs are different. They are the optional compression layer: generated
+markdown artifacts with searchable metadata such as headline, projects,
+keywords, and substance. Useful when the next agent needs continuity quickly.
+Not replacement evidence.
 
 <details>
 <summary>Example: handoff shape</summary>
@@ -142,21 +143,19 @@ Fix transcript renderer
 
 ## Key Decisions
 - Keep raw traces as evidence.
-- Show deterministic transcript shape before talking about handoffs.
+- Treat handoffs as continuity notes, not ground truth.
 
 ## Open Threads
 - Decide whether the README also needs a visual diagram.
 
 ## Key Files
 - `README.md` - public explanation of the Gaal model
-- `src/render/session_md.rs` - transcript renderer
 ```
 
 </details>
 
-So the normal path is: search the facts, resolve the exact session, read the
-smallest faithful markdown view, and fall back to raw traces only when the task
-needs the original evidence.
+The normal path is: broad query -> exact session -> faithful view -> raw
+evidence if needed.
 
 ## What Agents Can Do With Gaal
 
