@@ -246,10 +246,9 @@ validated locally; it is not a declared minimum.
 | Hermes Agent | `~/.hermes/state.db` or `HERMES_STATE_DB` / `HERMES_HOME` overrides | `state.db` schema `6`; binary version not exposed | Experimental |
 | <span style="color:#6a737d">Gemini CLI</span> | `~/.gemini/tmp/*/chats/session-*.json` | `0.36.0` | Supported, legacy-ish |
 
-Agy support does not require [agent-mux](https://github.com/buildoak/agent-mux)
-for discovery, indexing, search, activity, attribution, transcript rendering,
-or resolve. Hermes support is useful but newer; it has been tested against one
-real installation shape plus sanitized fixtures.
+Agy support is native: Gaal discovers and parses local Antigravity transcript
+files directly. Hermes support is useful but newer; it has been tested against
+one real installation shape plus sanitized fixtures.
 
 ## Session IDs
 
