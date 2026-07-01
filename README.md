@@ -68,7 +68,9 @@ active, which artifacts were produced.
 
 The markdown views are the reading layer. A deterministic markdown view is
 rendered from source traces plus DB facts. No LLM decides what mattered. Same
-source data, same renderer version, same view structure.
+source data, same renderer version, same view structure. In Gaal, these views
+are typically per session; activity slices are the source-backed exception for
+time windows and checkouts.
 
 For transcripts, that means frontmatter, `# Session:`, `## Executive Summary`,
 `## Conversation`, and optional open threads or subagent activity. The point is
@@ -168,10 +170,10 @@ own history without pretending memory is magic.
    and load the exact transcript only when needed.
 
    ```bash
-   gaal recall "auth migration"
-   gaal search "auth migration"
-   gaal inspect <id>
-   gaal transcript <id>
+   gaal recall "auth migration"  # search generated continuity handoffs
+   gaal search "auth migration"  # search indexed facts from raw traces
+   gaal inspect <id>             # show session metadata, files, commands, tokens
+   gaal transcript <id>          # render or locate the markdown transcript
    ```
 
 2. Attribute changes across agents
@@ -185,16 +187,18 @@ own history without pretending memory is magic.
    gaal inspect <id> --files write
    ```
 
-3. Audit tool and subagent behavior
+3. Audit fanouts and tune weaker models
 
-   Parent sessions, worker sessions, Codex inside Claude, Claude inside Codex,
-   Gemini in the same pile: Gaal gives agents a shared surface for tracing what
-   ran, what failed, and where the evidence lives.
+   A practical loop: launch 20 `gpt-5.4-mini` xhigh workers, then use Gaal to
+   inspect the failures as a corpus. Which commands failed? Which files did
+   agents miss? Which prompt shape collapsed? Fix the tool contract, tighten the
+   prompt, run again. This is the 100x workflow for making weaker, cheaper
+   models useful.
 
    ```bash
    gaal ls --since 7d
+   gaal who ran cargo --failed --limit 20
    gaal activity --since 1d
-   gaal resolve <id>
    ```
 
 4. Build source-backed checkouts
