@@ -23,7 +23,7 @@ next run that has to inherit the mess.
 
 It started with a naive dream: interactions with AI should compound. Not just
 produce output, not just create another pile of logs somewhere, but actually
-leave behind usable evidence. I wrote the longer story in
+leave behind usable evidence. Longer story in
 [Gaal: strace for agents](https://www.nickoak.com/posts/gaal-dornik/).
 
 Building yet another "memory" felt like faux pas. The logs already existed. The

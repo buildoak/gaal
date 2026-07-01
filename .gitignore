@@ -1,6 +1,7 @@
 /target
 .tmp/
 _workbench/
+_archive/
 .gaal/
 tmp/
 .env
