@@ -169,6 +169,10 @@ evidence if needed.
 Gaal is not a nicer log browser. It is a way for agents to operate over their
 own history without pretending memory is magic.
 
+The command snippets below are agent-side moves: an agent asks for evidence,
+does something like `gaal search`, `gaal inspect`, or `gaal transcript`, then
+uses the result to continue the job.
+
 1. Re-enter old work with evidence
 
    A future agent can find the relevant prior session, inspect what happened,
