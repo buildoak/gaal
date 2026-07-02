@@ -1,6 +1,6 @@
 [package]
-name = "gaal"
-version = "0.4.0"
+name = "gaal-cli"
+version = "0.4.1"
 edition = "2021"
 description = "Session observability CLI for AI coding agents"
 license = "MIT"
@@ -24,6 +24,14 @@ exclude = [
     "*.local.*",
     ".DS_Store",
 ]
+
+[lib]
+name = "gaal"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gaal"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

@@ -404,8 +404,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "gaal"
-version = "0.4.0"
+name = "gaal-cli"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "chrono",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-02 — 0.4.1
+
+### Changed
+- **crates.io package name.** The publish package is now `gaal-cli` because
+  `gaal` is already occupied on crates.io. The installed binary, repo name,
+  CLI help, skill URLs, and runtime state remain `gaal`.
+
 ## 2026-06-24 — 0.4.0
 
 ### Added

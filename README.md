@@ -269,7 +269,19 @@ one real installation shape plus sanitized fixtures.
 
 Gaal is skill-first. The intended first user is an agent, not a human memorizing
 flags. Give your coding agent the repo link and ask it to install Gaal end to
-end. After the binary is on `PATH`, the first command is:
+end.
+
+Package-manager install:
+
+```bash
+brew install buildoak/tap/gaal
+cargo install gaal-cli
+```
+
+The crates.io package is `gaal-cli` because `gaal` was already occupied there;
+it still installs the `gaal` binary.
+
+After the binary is on `PATH`, the first command is:
 
 ```bash
 gaal onboard
