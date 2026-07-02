@@ -2,6 +2,16 @@
 
 This page is the shortest path from a fresh clone to your first useful `gaal` query. If you already have local Claude Code, Codex, Gemini, agy/Antigravity, or Hermes session logs, you can usually get from zero to indexed sessions in under five minutes.
 
+After any package-manager install, run:
+
+```bash
+gaal onboard
+```
+
+That command is designed for agentic installation. It points the installing
+agent at the latest bundled skill/reference material and the first-launch
+commands before any local traces are indexed.
+
 ## Build
 
 You need a Rust toolchain installed locally.

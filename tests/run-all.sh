@@ -144,8 +144,20 @@ assert_contains "$CAPTURED_OUT" "gaal "
 
 capture_gaal top-help --help
 assert_contains "$CAPTURED_OUT" "Agent session observability CLI"
+assert_contains "$CAPTURED_OUT" "New here?"
+assert_contains "$CAPTURED_OUT" "gaal onboard --dry-run"
+assert_contains "$CAPTURED_OUT" "gaal onboard"
 assert_contains "$CAPTURED_OUT" "index"
 assert_contains "$CAPTURED_OUT" "ls"
+
+capture_gaal onboard-dry-run onboard --dry-run
+assert_json_expr "onboard dry run" "$CAPTURED_OUT" \
+  'data["kind"] == "onboarding" and data["dry_run"] == True and data["skill"]["directory_url"].endswith("/gaal/tree/master/skill") and "gaal index backfill" in data["first_launch"]["commands"]'
+
+capture_gaal onboard-human -H onboard --dry-run
+assert_contains "$CAPTURED_OUT" "Agent install instruction:"
+assert_contains "$CAPTURED_OUT" "https://github.com/buildoak/gaal/tree/master/skill"
+assert_contains "$CAPTURED_OUT" "gaal index backfill"
 
 capture_gaal index-help index --help
 assert_contains "$CAPTURED_OUT" "backfill"

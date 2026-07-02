@@ -269,10 +269,20 @@ one real installation shape plus sanitized fixtures.
 
 Gaal is skill-first. The intended first user is an agent, not a human memorizing
 flags. Give your coding agent the repo link and ask it to install Gaal end to
-end using the bundled skill:
+end. After the binary is on `PATH`, the first command is:
+
+```bash
+gaal onboard
+```
+
+`gaal onboard --dry-run` explains the same flow without implying any local
+changes. It tells the installing agent to take the latest skill and first-run
+reference from the repo:
 
 ```text
+https://github.com/buildoak/gaal/tree/master/skill
 https://github.com/buildoak/gaal/blob/master/skill/SKILL.md
+https://github.com/buildoak/gaal/blob/master/skill/references/first-run.md
 ```
 
 For source install from the checkout:

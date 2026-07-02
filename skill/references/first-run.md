@@ -86,6 +86,28 @@ export GAAL_HOME=/tmp/gaal-home
 `GAAL_HOME` does not move source traces owned by Codex, Claude Code, Gemini,
 Antigravity, or Hermes.
 
+## Onboarding Command
+
+After any package-manager install, start with:
+
+```bash
+gaal onboard
+```
+
+For agentic installation, `gaal onboard --dry-run` is the smallest safe
+contract. It does not write files, index sessions, schedule jobs, install
+agent-mux, or generate handoffs. It tells the installing agent to use the latest
+skill and references from:
+
+```text
+https://github.com/buildoak/gaal/tree/master/skill
+https://github.com/buildoak/gaal/blob/master/skill/SKILL.md
+https://github.com/buildoak/gaal/blob/master/skill/references/first-run.md
+```
+
+That keeps the binary install simple while still giving agents the current
+operational contract before they touch local traces.
+
 ## Source Install
 
 Source install is canonical for the pre-launch path. Do not claim a crates.io

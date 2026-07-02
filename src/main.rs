@@ -2,9 +2,15 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use gaal::error::GaalError;
+use serde_json::json;
 
 #[derive(Debug, Parser)]
-#[command(name = "gaal", version, about = "Agent session observability CLI")]
+#[command(
+    name = "gaal",
+    version,
+    about = "Agent session observability CLI",
+    after_help = "New here?\n  gaal onboard --dry-run     Explain skill install and first launch\n  gaal onboard               Guided setup"
+)]
 struct Cli {
     /// Human-readable output (otherwise JSON).
     #[arg(short = 'H', long = "human", global = true)]
@@ -16,6 +22,13 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Explain agent-facing setup after package installation.
+    Onboard {
+        /// Explain the setup flow without implying any local changes.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Fleet view across sessions.
     Ls {
         /// Filter by engine.
@@ -437,6 +450,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
     let Cli { human, command } = cli;
 
     match command {
+        Commands::Onboard { dry_run } => run_onboard(dry_run, human),
         Commands::Ls {
             engine,
             session_type,
@@ -707,6 +721,86 @@ fn run(cli: Cli) -> Result<(), GaalError> {
     }
 }
 
+fn run_onboard(dry_run: bool, human: bool) -> Result<(), GaalError> {
+    const SKILL_URL: &str = "https://github.com/buildoak/gaal/tree/master/skill";
+    const SKILL_MD_URL: &str = "https://github.com/buildoak/gaal/blob/master/skill/SKILL.md";
+    const FIRST_RUN_URL: &str =
+        "https://github.com/buildoak/gaal/blob/master/skill/references/first-run.md";
+
+    let first_launch = [
+        "gaal index backfill",
+        "gaal index status",
+        "gaal ls -H --limit 5",
+    ];
+    let optional_after = [
+        "gaal create-handoff latest --dry-run",
+        "agent-mux config prompts",
+        "agent-mux config engines --json",
+    ];
+
+    if human {
+        println!("Gaal onboarding");
+        println!();
+        if dry_run {
+            println!("Dry run: this command explains setup only. It does not write files, install skills, index sessions, schedule jobs, install agent-mux, or generate handoffs.");
+            println!();
+        }
+        println!("Agent install instruction:");
+        println!("  1. Use the latest bundled Gaal skill from:");
+        println!("     {SKILL_URL}");
+        println!("  2. Read the first-run reference before acting:");
+        println!("     {FIRST_RUN_URL}");
+        println!("  3. Run the first local index:");
+        for cmd in first_launch {
+            println!("     {cmd}");
+        }
+        println!();
+        println!("Approval boundaries:");
+        println!("  - Skill/reference installation into agent-specific folders is explicit.");
+        println!("  - Scheduled indexing is explicit and must run only `gaal index backfill`.");
+        println!("  - agent-mux setup is optional; real handoff generation starts with dry-run.");
+        println!();
+        println!("Optional after the first index:");
+        for cmd in optional_after {
+            println!("  {cmd}");
+        }
+        return Ok(());
+    }
+
+    let payload = json!({
+        "ok": true,
+        "kind": "onboarding",
+        "dry_run": dry_run,
+        "summary": "Package installation only puts gaal on PATH. The installing agent should fetch the latest Gaal skill/reference from the repo, then run the first local index.",
+        "no_side_effects": [
+            "does_not_write_skill_files",
+            "does_not_index_sessions",
+            "does_not_install_scheduled_jobs",
+            "does_not_install_agent_mux",
+            "does_not_generate_handoffs"
+        ],
+        "skill": {
+            "directory_url": SKILL_URL,
+            "skill_md_url": SKILL_MD_URL,
+            "first_run_reference_url": FIRST_RUN_URL,
+            "instruction": "Install or load the latest skill directory from the GitHub repo path supported by the active agent harness. If the harness has no skill installer, read SKILL.md and skill/references/first-run.md into context before running setup commands."
+        },
+        "first_launch": {
+            "commands": first_launch,
+            "zero_session_state": "If ls reports no indexed sessions after backfill, the install can still be healthy; supported agent traces may not exist on this machine yet."
+        },
+        "approval_boundaries": [
+            "Installing skill/reference material into Codex, Claude, or agent-mux folders is explicit.",
+            "Scheduled indexing is explicit and must run only `gaal index backfill`.",
+            "agent-mux setup is optional and requires direct approval.",
+            "Real handoff generation must start with `gaal create-handoff ... --dry-run`."
+        ],
+        "optional_after_first_index": optional_after
+    });
+
+    gaal::output::json::print_json(&payload).map_err(GaalError::from)
+}
+
 fn convert_ls_engine(engine: Engine) -> gaal::commands::ls::LsEngine {
     match engine {
         Engine::Claude => gaal::commands::ls::LsEngine::Claude,
@@ -835,6 +929,7 @@ fn current_command_name() -> &'static str {
             "search" => return "search",
             "recall" => return "recall",
             "resolve" => return "resolve",
+            "onboard" => return "onboard",
             "salt" => return "salt",
             "find-salt" => return "find-salt",
             "create-handoff" => return "create-handoff",
