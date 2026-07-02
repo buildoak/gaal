@@ -1,4 +1,4 @@
-# CLAUDE.md - Gaal Contributor Notes
+# AGENTS.md - Gaal Contributor Notes
 
 Gaal is a local session observability CLI for AI coding agents. It indexes
 traces from Codex, Claude Code, Antigravity CLI, Hermes Agent, and Gemini CLI,

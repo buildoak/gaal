@@ -126,7 +126,7 @@ echo "$OUT" | jq -e '.sessions | length > 0' >/dev/null 2>&1 && pass "T1: non-em
 echo "$OUT" | jq -e '.sessions[0].fact_count > 0' >/dev/null 2>&1 && pass "T1: fact_count" || fail "T1: fact_count" "zero"
 
 # T2: Read
-OUT=$(gaal who read CLAUDE.md 2>/dev/null)
+OUT=$(gaal who read AGENTS.md 2>/dev/null)
 echo "$OUT" | jq -e '.sessions | length > 0' >/dev/null 2>&1 && pass "T2: results" || fail "T2: results" "empty"
 
 # T3: Ran

@@ -139,7 +139,7 @@ Use `--engine` to narrow any fleet or attribution query to a single engine.
 gaal ls --engine gemini --since 7d -H
 
 # Who wrote a file, Gemini sessions only
-gaal who wrote CLAUDE.md --engine gemini
+gaal who wrote AGENTS.md --engine gemini
 
 # Search within Gemini sessions
 gaal search "parser" --engine gemini
@@ -188,7 +188,7 @@ gaal ls --limit 1 | jq -e '.sessions | length == 1 and all(.[]; .id and .engine)
 The `who` verb consumes trailing arguments greedily. Do not pipe `gaal who ...` directly into another command if the shell could alter argument grouping. Capture it first, then pipe the captured JSON.
 
 ```bash
-OUTPUT=$(gaal who wrote CLAUDE.md --since 7d)
+OUTPUT=$(gaal who wrote AGENTS.md --since 7d)
 echo "$OUTPUT" | jq '.'
 ```
 

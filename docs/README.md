@@ -8,7 +8,7 @@
 gaal ls -H
 gaal inspect latest --tokens -H
 gaal activity --since 1d -H
-gaal who wrote CLAUDE.md
+gaal who wrote AGENTS.md
 gaal recall "auth refactor" --format brief
 ```
 

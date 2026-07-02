@@ -218,7 +218,7 @@ There is **no `installed` verb** in the current binary.
 ### Example
 
 ```bash
-OUTPUT=$(gaal who wrote CLAUDE.md --since 7d)
+OUTPUT=$(gaal who wrote AGENTS.md --since 7d)
 echo "$OUTPUT" | jq '.'
 ```
 

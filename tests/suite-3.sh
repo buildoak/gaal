@@ -17,7 +17,7 @@ assert "T1: non-empty" echo "$OUT" | jq -e '.sessions | length > 0'
 assert "T1: fact_count" echo "$OUT" | jq -e '.sessions[0].fact_count > 0'
 
 # T2-who-read: Read attribution
-OUT=$(gaal who read CLAUDE.md)
+OUT=$(gaal who read AGENTS.md)
 assert "T2: results" echo "$OUT" | jq -e '.sessions | length > 0'
 
 # T3-who-ran: Command attribution

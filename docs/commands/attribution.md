@@ -51,7 +51,7 @@ Human mode prints a brief session table by default. For subagent rows, parent-to
 ## Real Example
 
 ```bash
-$ gaal who wrote CLAUDE.md --limit 2
+$ gaal who wrote AGENTS.md --limit 2
 {
   "query_window": {
     "from": "2026-03-22",
@@ -65,7 +65,7 @@ $ gaal who wrote CLAUDE.md --limit 2
       "engine": "claude",
       "latest_ts": "2026-03-28T18:25:28.470Z",
       "fact_count": 2,
-      "subjects": ["CLAUDE.md"],
+      "subjects": ["AGENTS.md"],
       "headline": null,
       "session_type": "subagent",
       "parent_id": "7d5d03e4"

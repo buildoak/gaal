@@ -99,7 +99,7 @@ These four commands cover the main workflow: list sessions, inspect one deeply, 
 ```bash
 gaal ls -H
 gaal inspect latest --tokens -H
-gaal who wrote CLAUDE.md
+gaal who wrote AGENTS.md
 gaal transcript latest
 ```
 
