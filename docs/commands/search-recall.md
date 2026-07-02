@@ -73,7 +73,7 @@ gaal recall [OPTIONS] [QUERY]
 - `--id <session-id>`: direct handoff lookup by session ID (bypasses query scoring). Supports prefix, registered Hermes alias, and `latest`. Mutually exclusive with positional QUERY.
 - `--days-back <n>`: default `14`
 - `--limit <n>`: default `3`
-- `--format <summary|handoff|brief|full|eywa>`: default `brief`
+- `--format <summary|handoff|brief|full>`: default `brief`
 - `--substance <n>`: default `1`
 - `-H`, `--human`
 
@@ -83,7 +83,6 @@ gaal recall [OPTIONS] [QUERY]
 - `summary`: structured fields only.
 - `handoff`: structured summary plus raw handoff content.
 - `full`: summary plus handoff, files, and errors.
-- `eywa`: legacy markdown-oriented layout.
 
 If no query and no `--id` is passed, `recall` prints usage help and exits successfully.
 

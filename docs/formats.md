@@ -27,7 +27,6 @@ Use `gaal recall ... --format <name>` to control how much handoff material is re
 | `summary` | Structured fields only (`headline`, `projects`, `keywords`, `substance`) | Programmatic parsing, comparison | Low |
 | `handoff` | Structured summary + raw handoff content | Full context recovery | Medium |
 | `full` | Summary + handoff + files + errors | Deep investigation | High |
-| `eywa` | Legacy markdown-oriented layout | Backwards compatibility with eywa consumers | Medium |
 
 ## JSON Error Format
 
@@ -277,7 +276,6 @@ These commands rebuild Tantivy:
 - `index backfill` (only when at least one engine indexed new sessions on that run)
 - `index reindex`
 - `index prune`
-- `index import-eywa`
 
 ## Codex Subagent JSONL Schema
 

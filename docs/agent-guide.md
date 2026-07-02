@@ -82,7 +82,7 @@ exact recent session is selected.
 Use `recall` when you are resuming work and want continuity, not when you need raw session facts. Use `recall --id <session-id>` when you know which session's handoff you want. Use `recall <query>` when searching by topic.
 
 ```bash
-gaal recall 'topic' --format eywa --limit 5
+gaal recall 'topic' --format brief --limit 5
 gaal recall --id abc12345 --format brief -H
 gaal recall --id latest --format handoff
 ```
@@ -250,7 +250,7 @@ gaal ls --cwd /path/to/project --aggregate -H
 `gaal` is read-only by default, but not every command is harmless.
 
 - Read-only commands are the safe default for agents
-- Mutation commands include `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index import-eywa`, and `tag`
+- Mutation commands include `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index recover-orphans`, and `tag`
 - `create-handoff` dispatches to an LLM/agent backend and may consume subscription quota, API credits, metered usage, or local compute. `agent-mux` is the default backend for handoff generation, but core indexing, search, inspect, attribution, transcript, and tag workflows do not require it.
 - Use `--dry-run` before batch handoff generation
 - `index backfill` is operationally safe: it reads JSONL and writes derived state under `~/.gaal/`

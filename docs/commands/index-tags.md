@@ -105,20 +105,6 @@ Output:
 
 - JSON summary with `session_id` and `facts`
 
-## `index import-eywa`
-
-Usage:
-
-```bash
-gaal index import-eywa [PATH]
-```
-
-Output:
-
-- JSON summary with `imported`, `skipped`, and `errors`
-
-Detailed migration guidance lives in `migration.md`.
-
 ## `index prune`
 
 Usage:
@@ -159,7 +145,7 @@ Run with `--dry-run` first. This is an admin-only recovery tool, not part of nor
 
 ## Operational Note
 
-Any command that mutates facts rebuilds the Tantivy index afterwards. Rebuild triggers include `gaal index backfill` (only when at least one engine indexed new sessions), `gaal index reindex`, `gaal index prune`, `gaal index import-eywa`, and `gaal index recover-orphans`.
+Any command that mutates facts rebuilds the Tantivy index afterwards. Rebuild triggers include `gaal index backfill` (only when at least one engine indexed new sessions), `gaal index reindex`, `gaal index prune`, and `gaal index recover-orphans`.
 
 # `gaal tag`
 

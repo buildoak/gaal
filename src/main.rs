@@ -206,7 +206,7 @@ enum Commands {
         limit: usize,
     },
 
-    /// Semantic session retrieval (eywa replacement).
+    /// Ranked handoff retrieval for continuity.
     Recall {
         /// Optional topic query.
         query: Option<String>,
@@ -271,7 +271,7 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = Provider::AgentMux)]
         provider: Provider,
         /// Output format identifier.
-        #[arg(long, default_value = "eywa-compatible")]
+        #[arg(long, default_value = "markdown")]
         format: String,
         /// Run batch mode.
         #[arg(long)]
@@ -342,11 +342,6 @@ enum IndexCommand {
         /// Session ID.
         id: String,
     },
-    /// Import legacy eywa handoff-index data.
-    ImportEywa {
-        /// Optional path to handoff-index.json.
-        path: Option<String>,
-    },
     /// Remove old facts before a date.
     Prune {
         /// Upper-bound date (required).
@@ -410,7 +405,6 @@ enum RecallFormat {
     Handoff,
     Brief,
     Full,
-    Eywa,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -694,10 +688,6 @@ fn run(cli: Cli) -> Result<(), GaalError> {
                 let args = gaal::commands::index::ReindexArgs { id };
                 gaal::commands::index::run_reindex(args)
             }
-            IndexCommand::ImportEywa { path } => {
-                let args = gaal::commands::index::ImportEywaArgs { path };
-                gaal::commands::index::run_import_eywa(args)
-            }
             IndexCommand::Prune { before } => {
                 let args = gaal::commands::index::PruneArgs { before };
                 gaal::commands::index::run_prune(args)
@@ -762,7 +752,6 @@ fn convert_recall_format(format: RecallFormat) -> gaal::commands::recall::Recall
         RecallFormat::Handoff => gaal::commands::recall::RecallFormat::Handoff,
         RecallFormat::Brief => gaal::commands::recall::RecallFormat::Brief,
         RecallFormat::Full => gaal::commands::recall::RecallFormat::Full,
-        RecallFormat::Eywa => gaal::commands::recall::RecallFormat::Eywa,
     }
 }
 

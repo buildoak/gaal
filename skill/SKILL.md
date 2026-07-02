@@ -20,6 +20,9 @@ Treat this skill as required on first launch. A fresh agent should not guess
 where session history lives or whether an index exists; it should run the setup
 path below and then use Gaal's JSON output as the evidence surface.
 
+For deeper setup detail, see `skill/references/installation.md`. For suggested
+first-use prompts after installation, see `skill/references/onboarding.md`.
+
 ## First Launch
 
 Run this path before relying on Gaal in a new checkout, machine, container, or
@@ -83,9 +86,8 @@ gaal index status
 
 Mutating or externally sensitive commands:
 
-- `gaal index backfill`, `gaal index reindex`, `gaal index prune`,
-  `gaal index import-eywa`, and `gaal index recover-orphans` write derived
-  index state under `GAAL_HOME`.
+- `gaal index backfill`, `gaal index reindex`, `gaal index prune`, and
+  `gaal index recover-orphans` write derived index state under `GAAL_HOME`.
 - `gaal tag <id> <tag>` and `gaal tag <id> --remove <tag>` change local tags.
 - `gaal create-handoff ...` can send session content to an external LLM backend
   and may consume subscription quota, API credits, metered usage, or local

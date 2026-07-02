@@ -15,7 +15,6 @@ exclude = [
     "BACKLOG.md",
     "_archive/**",
     "tests/ax/**",
-    "defaults/migration-notes.md",
     ".gaal/**",
     ".tmp/**",
     "_workbench/**",

@@ -56,7 +56,7 @@ impl Default for HandoffConfig {
     fn default() -> Self {
         Self {
             prompt: gaal_home().join("prompts").join("handoff.md"),
-            format: "eywa".to_string(),
+            format: "markdown".to_string(),
         }
     }
 }

@@ -33,7 +33,7 @@ src/
     salt.rs            Unique token generation for self-identification
     find.rs            JSONL file discovery by salt token (find-salt)
     index/             Index maintenance (module directory)
-      mod.rs           backfill, reindex, prune, import-eywa, status
+      mod.rs           backfill, reindex, prune, status
       recover_orphans.rs  Orphaned subagent recovery
     tag.rs             Tag management
     runtime.rs         Shared command runtime (DB handle, config, output mode)

@@ -1,6 +1,6 @@
 # gaal
 
-`gaal` is session observability for AI coding agents. Claude Code, Codex, Gemini, Antigravity CLI (`agy`), and Hermes emit session logs, but those logs are usually large undocumented, engine-specific event streams that are painful to inspect directly. `gaal` parses all five formats, indexes them into SQLite plus Tantivy, and turns raw traces into answers in seconds. Agy support is currently experimental and targets current Antigravity transcript JSONL. The core mental model is that sessions are first-class queryable artifacts, not throwaway logs.
+`gaal` is session observability for AI coding agents. Claude Code, Codex, Gemini, Antigravity CLI (`agy`), and Hermes emit session logs, but those logs are usually large undocumented, engine-specific event streams that are painful to inspect directly. `gaal` parses all five formats, indexes them into SQLite plus Tantivy, and turns raw traces into answers in seconds. The core mental model is that sessions are first-class queryable artifacts, not throwaway logs.
 
 ## Quick Orientation
 
@@ -28,7 +28,6 @@ gaal recall "auth refactor" --format brief
 - [Agent Guide](agent-guide.md) -- how agents should consume gaal output
 - [Formats Reference](formats.md) -- output formats, exit codes
 - [Hermes Engine Notes](hermes-engine-plan.md) -- Hermes adapter design notes, fixture policy, and verification gates
-- [Eywa Migration](migration.md) -- eywa to gaal migration
 
 ## What gaal Does Not Do
 

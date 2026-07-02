@@ -18,7 +18,7 @@ timeout_secs = 120
 # Path to extraction prompt (relative to ~/.gaal/)
 prompt = "prompts/handoff.md"
 # Output format identifier
-format = "eywa-compatible"
+format = "markdown"
 
 [agent-mux]
 # Optional binary name or absolute path used by `gaal create-handoff`.
@@ -29,7 +29,3 @@ timeout_secs = 120
 # effort = "xhigh"
 # Override cwd for dispatch when the default session cwd is not suitable.
 # cwd = "/path/to/project/with/skills"
-
-[stuck]
-# Seconds of silence before a session is considered stuck
-silence_secs = 300

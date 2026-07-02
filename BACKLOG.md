@@ -1,93 +1,52 @@
-# BACKLOG.md — gaal
+# BACKLOG.md - Gaal Roadmap
 
-## Shipped (v0.1.0)
+This is the public roadmap for Gaal. It is not a private session ledger. Keep it
+short, current, and useful to someone deciding whether to use or contribute to
+the tool.
 
-| What | When | Session/Commit |
-|------|------|---------------|
-| Subagent P0 arc: `src/subagent/` module, DB indexing (5,170 subagents, 174 coordinators), `ls --include-subagents`, `inspect` Subagents table, `search` + `who` attribution, transcript DB-backed summaries | 2026-03-29 | [session: 2b0db33c] |
-| AX sprint fixes: JSON error parity (hint/example fields), `create-handoff latest`, `find-salt` false success, `--session-type` filter on `ls`, exit code compliance | 2026-03-29 | [session: 66ce8874] |
-| AX harness: 3-layer structure (layer1-errors, layer2-tasks, layer3-analysis), error quality scoring, first-attempt task workflows, trace analysis | 2026-03-29 | [session: 66ce8874] |
-| Transcript fixes: XML stripping before truncation in `get_first_user_prompt()`, model-by-agent_id lookup, `ls` Task column | 2026-03-29 | [commit: 80db650] |
-| DOCS.md creation + archive sweep: old root docs archived, README points to DOCS.md | 2026-03-29 | [commit: 46712e8] |
-| docs/ folder restructure: monolithic DOCS.md replaced with 13-page docs/ folder, all links valid | 2026-03-29 | [session: this] |
-| GAAL_HOME env var: allow override for relocatable data dir, enables sandboxed workers without HOME remapping | 2026-03-29 | [session: this] |
-| CLAUDE.md rewrite with AX convention, verification protocol, feature kill list | 2026-03-29 | [commit: 1d2a70d] |
-| BACKLOG.md reconciliation | 2026-03-29 | [commit: 1cc1b1d] |
-| SKILL.md audit: verified against current command surface and binary behavior | 2026-03-29 | [commit: 3cd740a] |
-| SKILL.md rewrite: philosophy-first rewrite, eywa content killed, vision/mission/design principles added, operational manual moved to reference material | 2026-03-30 | [commit: 3cd740a, session: 0e49b03c] |
-| `latest` selector in `tag`: `gaal tag latest add/remove/ls` — latest resolution extended to tag command, parity with inspect/transcript | 2026-03-30 | [commit: 29826b7, session: 0e49b03c] |
-| Orphan recovery: `gaal index recover-orphans` — recovered 3,437 subagents from 4,173 orphan files across 400 parent groups. 9 ghost parents created with `_recovered` tag. 736 collisions (prompt_suggestion noise). Symlink dedup, FK-safe ghost insertion, savepoint-per-orphan. | 2026-03-29 | [session: 0e49b03c] |
-| `subagent_type` indexing (P0): Extract from Agent tool_use input via prompt-matching correlation. New `subagent_type` column in sessions table, `--subagent-type` filter on `ls`, shown in inspect human/JSON. Auto-tag on ingest (P2). `task` field in ls/inspect JSON (P1). | 2026-03-30 | |
-| `gaal resolve` command: short ID to full paths/metadata. DB-only lookup, path construction, existence checks. JSON default, -H human. Exit codes 0/2/3. | 2026-03-30 | |
-| fix(inspect): subagent `total_tokens` now includes `cache_read_tokens + cache_creation_tokens`. Was 98-99% undercount for Claude Code subagents. Fixed in both `inspect` and `transcript` rendering. | 2026-03-30 | |
-| `gaal activity` MVP: source-backed transcript-shaped activity slices over half-open windows, separate activity cache namespace, Codex `thread_spawn` lineage fallback, and passive agent-mux dispatch metadata in manifests. | 2026-05-26 | [branch: feature/activity-slices] |
+## Recently Shipped
 
----
+| Area | Status |
+| --- | --- |
+| Multi-engine indexing | Codex, Claude Code, Antigravity CLI, Hermes Agent, and Gemini CLI are normalized into one session/fact model. |
+| Deterministic transcripts | Per-session markdown transcripts can be rendered and read without loading raw JSONL by hand. |
+| Activity slices | `gaal activity` renders historical, source-backed work slices across time windows. |
+| Attribution | `gaal who` can answer which sessions read, wrote, ran, changed, touched, or deleted a target. |
+| Short ID resolution | `gaal resolve` makes short session handles explicit and debuggable. |
+| Subagent visibility | Coordinator/subagent relationships are indexed where source traces expose them. |
+| Agent-facing skill | `skill/SKILL.md` documents the JSON-first agent workflow and safety model. |
 
-## Open Backlog
+## Open Roadmap
 
-| Priority | Item | Description |
-|----------|------|-------------|
-| ~~P0~~ | ~~Orphan recovery~~ | **SHIPPED** 2026-03-29. `gaal index recover-orphans` — 3,437 subagents recovered, 9 ghost parents, 736 prompt_suggestion collisions (expected). |
-| ~~P0~~ | ~~subagent_type indexing~~ | **SHIPPED** 2026-03-30. `subagent_type` extracted from Agent tool_use input, stored in sessions table, filterable via `--subagent-type`, auto-tagged on ingest. `task` field populated in both ls and inspect JSON via 3-level cascade. |
-| ~~P0~~ | ~~SKILL.md rewrite~~ | **SHIPPED** 2026-03-30. Philosophy-first rewrite. Eywa content killed. Vision/mission/design principles added. [commit: 3cd740a, session: 0e49b03c] |
-| P1 | AX harness sandbox fix | Use `--sandbox none` for AX test workers (our own code, not untrusted). Fixes SQLite lockfile failures in Layer 2 tasks. Dispatch config issue, not a gaal code fix. Note: AX layer2 failures on salt/find-salt were caused by Codex sandboxing (SQLite lockfile + HOME remapping), not by the salt logic itself. Salt is reliable. |
-| P1 | Subagent Phase 4 polish | ~~Orphan handling~~ (shipped). **Parent-description preference logic is implemented** but has an ID mismatch bug being fixed separately [session: agent-a55f90b5625e4ac74]. **Zero-turn subagent handling: NOT STARTED.** |
-| ~~P2~~ | ~~Codex subagent audit~~ | **SHIPPED** 2026-03-30. Full implementation: forked_from_id + role/nickname indexing in parser, extract_codex_spawn_summaries() in subagent/parent_parser.rs, parent→child linking and coordinator promotion in backfill pipeline. 14 Codex coordinators, 49 Codex subagents with roles indexed. Discovery bug fixed (full head scan). [commits: 7c8cea7, 4292e2c, 585960b, 6ccc84a, 693b58f] |
-| ~~P2~~ | ~~`latest` selector in tag~~ | **SHIPPED** 2026-03-30. `gaal tag latest add/remove/ls` works. [commit: 29826b7, session: 0e49b03c] |
-| P2 | Agent-mux worker visibility | Workers dispatched via Bash have no `toolUseResult`, no subagent JSONL. Needs new metadata format from agent-mux side — not a gaal code problem until agent-mux emits it. |
-| P2 | Activity slice optimization | `gaal activity` is intentionally richness-first. A full Codex day with many large sessions can exceed 5s in debug builds; optimize only after profiling release builds and preserving transcript fidelity. |
-| P2 | Hermes integration audit | Hermes support is shipped, but needs a proper post-merge audit across larger live samples: CLI/Telegram/cron sources, parent-linked continuations, transcript/tool-result fidelity, handoff dry-run planning, resolver/full-ID behavior, scheduled dad-Mac indexing, and regression checks that Claude/Codex/Gemini paths remain unchanged. Keep raw private Hermes content out of fixtures and reports. [identified: 2026-05-05] |
-| P2 | Session-aware search reranker validation | Naive BM25 is already good for exact fact retrieval when queries contain rare lexical anchors. Narrower gap: finding the right session from several medium-common phrases, especially in mixed operational sessions, where repeated command/help rows from one wrong session can swamp the true session because the phrase bundle is distinctive at the session level, not always the fact-row level. Do not auto-build this; validate against a larger sample of real user searches first. If confirmed and bundled into future search work, first slice should be explicit `--view sessions` / `--by-session` query-time reranking over current Tantivy hits, preserving raw fact mode as the exact-incident escape hatch. Any shipped CLI change must include docs/README/SKILL/test updates per CLAUDE.md. [session: 5ae5c9af] |
-| P3 | Incremental parsing | **Byte-offset resume is fully working and actively used.** Remaining work: SHA-256 prefix trust gate — fingerprint computation + corruption guard to prevent silent data loss when session files are rewritten from start. Framework exists (`parse_session_incremental()`). |
-| P3 | Gemini subagent session discovery | Currently only top-level `session-*.json` files are discovered. Nested subagent sessions at `chats/<parentSessionId>/<uuid>.json` are skipped. Need recursive discovery under each `chats/` directory, parse root `kind` field to determine session type, and map parent-child relationships via directory structure. Only 2 subagent sessions exist on disk currently — low urgency but needed for completeness. [identified: 2026-04-06] |
+| Priority | Item | Why It Matters |
+| --- | --- | --- |
+| P1 | Public onboarding examples | New users should feel the "oh, this is useful" moment in the first five minutes. |
+| P1 | AX harness sanitation | The harness is valuable, but generated outputs must stay local or be sanitized fixtures. |
+| P1 | Hermes compatibility sweep | Hermes support works against known fixtures, but more installation shapes need coverage. |
+| P2 | Session-level search reranking | Fact-level BM25 is good for exact evidence; session-level ranking may improve broad recall queries. |
+| P2 | Activity performance pass | Rich activity slices can be expensive on very dense days; optimize after profiling release builds. |
+| P2 | Gemini nested session discovery | Current Gemini support focuses on top-level sessions; nested/subagent-like sessions need fuller discovery. |
+| P3 | Incremental parsing fingerprint guard | Byte-offset resume works; add a stronger rewrite/corruption guard before trusting offsets forever. |
 
----
+## Deliberately Not Planned
 
-## Killed
+These are out of scope unless new evidence changes the tradeoff.
 
-These were deliberately removed, not deferred. Do not re-add.
+| Item | Reason |
+| --- | --- |
+| Live process monitor | Gaal is a trace/index/read tool, not a daemon. |
+| Stuck or loop detection | Too much heuristic noise. |
+| Web UI | The current product center is the agent-facing CLI. |
+| Secret redaction as a guarantee | Gaal reads private local traces; users must treat source logs and derived views as private data. |
 
-- ~~AX sandbox HOME lockfile as gaal code fix~~ — dispatch config issue, use `--sandbox none`
-- ~~`gaal active` (process monitoring)~~ — too fragile, killed in v0.1.0 cut
-- ~~Stuck/loop detection~~ — insufficient signal, wrong more than right
-- ~~Parent-child linking via PID~~ — 1 out of 2,433 sessions ever linked; salt-based discovery replaced it
+## Contribution Shape
 
----
+Good contributions usually include:
 
-## Reference: Subagent Data Architecture
+- one focused behavior change
+- fixture or test coverage
+- README/docs/skill updates when the public contract changes
+- evidence from `cargo test` and `./tests/run-all.sh`
 
-**Verified 2026-03-29** [session: 2b0db33c]
-
-**Two-source model:**
-
-| Source | Role | What it provides |
-|--------|------|-----------------|
-| Parent JSONL `toolUseResult` blocks | Fleet index | agentId, totalTokens, totalDurationMs, totalToolUseCount, status, prompt/description |
-| Subagent JSONL (`subagents/agent-{agentId}.jsonl`) | Detail store | Full conversation, every tool call, every file read/write, per-turn token usage |
-
-**Path determinism:** `Parent JSONL → toolUseResult.agentId → {session_dir}/subagents/agent-{agentId}.jsonl`
-
-**Dead end — do not build on:** `SubagentProgress` events. Deprecated in CC v2.1.86+. Use only as legacy fallback for pre-v2.1.86 sessions.
-
-**Target AX examples:**
-
-`gaal who read src/render/session_md.rs` — attribution flows through parent to the subagent that did the work:
-```
-  7d5d03e4  2026-03-28  claude-opus-4-6     -> a59e6762 (Fix Agent rendering in transcripts)
-```
-
-`gaal inspect <parent-id>` — Subagents table sourced from parent `toolUseResult`, no subagent JSONL read needed:
-```
-  Subagents (34):
-  ID        Model          Tokens    Duration  Description
-  a59e6762  sonnet-4-6     75K       4m 47s    Fix Agent rendering in transcripts
-```
-
-`gaal inspect <subagent-id>` — same as any session, shows internal facts:
-```
-  Session: a59e6762 (subagent of 7d5d03e4)
-  Files read: session_md.rs, CLAUDE.md
-  Files written: session_md.rs
-  Commands: cargo build --release
-```
+The high bar is simple: Gaal should make agent history easier to find and read
+without pretending that generated summaries are the source of truth.

@@ -11,3 +11,10 @@ tmp/
 *.local
 *.local.*
 .DS_Store
+
+# Generated AX harness outputs. They often contain private trace material.
+tests/ax/layer1-errors/errors*.json
+tests/ax/layer1-errors/judgments*.json
+tests/ax/layer2-tasks/results.json
+tests/ax/layer3-analysis/analysis.json
+tests/ax/layer3-analysis/analysis.md

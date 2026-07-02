@@ -75,6 +75,11 @@ category = "category-name"
 
 ## Output Artifacts
 
+These files are generated run artifacts and are intentionally ignored by Git.
+They can contain local paths, private session metadata, prompts, and handoff
+paths from the machine that ran the harness. Keep reusable scenarios in
+`*.toml` manifests or sanitized fixtures instead.
+
 | File | Layer | What |
 |------|-------|------|
 | `layer1-errors/errors.json` | 1 | Raw error outputs with exit code validation |

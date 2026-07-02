@@ -20,7 +20,7 @@ gaal create-handoff [OPTIONS] [ID]
   `agent-mux` is the supported real-execution provider. `openrouter` may be
   visible for planning/dry-run compatibility, but real execution is not
   implemented unless dry-run reports `provider_supported: true`.
-- `--format <string>`: default `eywa-compatible`
+- `--format <string>`: default `markdown`
 - `--batch`
 - `--since <duration|date>`: default `7d`
 - `--parallel <n>`: default `1`

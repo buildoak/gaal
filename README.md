@@ -1,9 +1,10 @@
 # gaal
 
 [![crates.io](https://img.shields.io/crates/v/gaal.svg)](https://crates.io/crates/gaal)
-[![CI](https://github.com/buildoak/gaal/actions/workflows/ci.yml/badge.svg)](https://github.com/buildoak/gaal/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS-lightgrey)
+
+**Turn harness logs into transparent and traceable knowledge layer**
 
 Gaal is `strace` for AI coding agents: a local CLI for traceability,
 observability, and continuity across agent sessions.
@@ -272,7 +273,7 @@ flags. Give your coding agent the repo link and ask it to install Gaal end to
 end using the bundled skill:
 
 ```text
-https://github.com/buildoak/gaal/skill/SKILL.md
+https://github.com/buildoak/gaal/blob/master/skill/SKILL.md
 ```
 
 For a manual install, use a local Rust toolchain:
@@ -516,7 +517,6 @@ Run `gaal --help` and `gaal <command> --help` for the full current contract.
 | `gaal index status` | Show index health and counts. |
 | `gaal index reindex <id>` | Force re-index of one session. |
 | `gaal index prune --before <date>` | Remove old indexed facts before a date. |
-| `gaal index import-eywa` | Import legacy handoff index data. |
 | `gaal index recover-orphans --dry-run` | Preview recovery of orphaned subagent files before writing derived rows. |
 | `gaal tag <id> <tag>` | Add a local tag to a session. |
 | `gaal tag <id> --remove <tag>` | Remove a local tag from a session. |

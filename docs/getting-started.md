@@ -12,30 +12,32 @@ Build with the release profile:
 cargo build --release
 ```
 
-Use `--release` every time. The installed binary is expected to be a symlink to `target/release/gaal`, so debug builds do not update what you actually run after install.
+Use `--release` for local development builds. For normal manual installation,
+`cargo install --path .` copies the release binary into Cargo's bin directory.
 
 Rough build times:
 
 - Clean build: about 8 minutes
 - Incremental build: about 30 seconds
 
-For a local install, keep one checkout and point your shell path at its release binary. For example:
+For the simplest local install:
 
 ```bash
-~/src/gaal
+git clone https://github.com/buildoak/gaal.git
+cd gaal
+cargo install --path .
 ```
 
-On macOS with Homebrew, a typical setup is:
+For development or scheduled indexing, you may prefer one checkout with a
+stable symlink:
 
 ```bash
-ln -sf ~/src/gaal/target/release/gaal /opt/homebrew/bin/gaal
-ln -sf ~/src/gaal/target/release/gaal ~/.cargo/bin/gaal
+cargo build --release
+ln -sf "$PWD/target/release/gaal" /opt/homebrew/bin/gaal
 ```
 
-`~/.cargo/bin/gaal` is compatibility only. If it becomes a real copied binary,
-replace it with the symlink above; otherwise shell PATH order can run stale
-code. For services and scheduled scripts, prefer `/opt/homebrew/bin/gaal` or
-put `/opt/homebrew/bin` before cargo paths.
+The LaunchAgent example in `defaults/` expects `/opt/homebrew/bin/gaal`. If you
+use a different path, edit the plist before loading it.
 
 ## Requirements
 
@@ -137,7 +139,7 @@ These are the practical defaults in `~/.gaal/config.toml`:
 | `llm.default_model` | `gpt-5.4-mini` |
 | `llm.timeout_secs` | `120` |
 | `handoff.prompt` | `prompts/handoff.md` |
-| `handoff.format` | `eywa-compatible` |
+| `handoff.format` | `markdown` |
 | `agent-mux.path` | `agent-mux` |
 | `agent-mux.effort` | `xhigh` |
 

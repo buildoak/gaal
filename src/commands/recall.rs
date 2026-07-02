@@ -51,8 +51,6 @@ pub enum RecallFormat {
     Handoff,
     /// Summary + handoff + files + errors.
     Full,
-    /// Eywa-compatible plain markdown output.
-    Eywa,
 }
 
 #[derive(Debug, Clone)]
@@ -159,7 +157,6 @@ pub fn run(args: RecallArgs) -> Result<(), GaalError> {
         RecallFormat::Brief => render_brief(&ranked, args.human),
         RecallFormat::Handoff => render_handoff(&ranked, args.human),
         RecallFormat::Full => render_full(&conn, &ranked, args.human),
-        RecallFormat::Eywa => render_eywa(&ranked, args.human),
     }
 }
 
@@ -217,7 +214,6 @@ fn run_by_id(raw_id: &str, args: &RecallArgs) -> Result<(), GaalError> {
         RecallFormat::Brief => render_brief(&ranked, args.human),
         RecallFormat::Handoff => render_handoff(&ranked, args.human),
         RecallFormat::Full => render_full(&conn, &ranked, args.human),
-        RecallFormat::Eywa => render_eywa(&ranked, args.human),
     }
 }
 
@@ -524,53 +520,6 @@ fn render_full(conn: &Connection, results: &[ScoredSession], human: bool) -> Res
     }
 }
 
-fn render_eywa(results: &[ScoredSession], _human: bool) -> Result<(), GaalError> {
-    let count = results.len();
-    println!("## Gaal: {} past sessions\n", count);
-
-    for (idx, row) in results.iter().enumerate() {
-        let date = row.session.session_date.to_string();
-        let headline = row
-            .session
-            .handoff
-            .headline
-            .as_deref()
-            .unwrap_or("(no headline)");
-        println!("### {} --- {}\n", date, headline);
-
-        // Read handoff markdown and strip YAML frontmatter
-        if let Some(content) = read_handoff_markdown(row.session.handoff.content_path.as_deref()) {
-            let stripped = strip_yaml_frontmatter(&content);
-            println!("{}", stripped.trim());
-        } else {
-            println!("(handoff content unavailable)");
-        }
-
-        if idx < count - 1 {
-            println!("\n---\n");
-        }
-    }
-
-    Ok(())
-}
-
-/// Strip YAML frontmatter (content between --- delimiters at the start of the document).
-fn strip_yaml_frontmatter(content: &str) -> &str {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return content;
-    }
-    // Find the closing ---
-    let after_first = &trimmed[3..];
-    if let Some(end_pos) = after_first.find("\n---") {
-        let remainder = &after_first[end_pos + 4..];
-        // Skip any trailing newline after the closing ---
-        remainder.strip_prefix('\n').unwrap_or(remainder)
-    } else {
-        content
-    }
-}
-
 /// Print a structured session header for human-readable output.
 fn print_human_session_header(summary: &RecallSummary) {
     println!(
@@ -764,9 +713,7 @@ fn print_recall_help() {
     eprintln!("  --id <id>          Direct handoff lookup by session ID (bypasses search)");
     eprintln!("  --days-back <n>    Recency window in days (default: 14)");
     eprintln!("  --limit <n>        Max number of sessions to return (default: 3)");
-    eprintln!(
-        "  --format <fmt>     Output format: summary, brief, handoff, full, eywa (default: brief)"
-    );
+    eprintln!("  --format <fmt>     Output format: summary, brief, handoff, full (default: brief)");
     eprintln!("  --substance <n>    Minimum substance score (default: 1)");
     eprintln!("  -H                 Human-readable output");
     eprintln!();

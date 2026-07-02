@@ -251,7 +251,7 @@ gaal search "gaussian moat" --field commands --limit 5 -H
 
 ## 7. `recall`
 
-Semantic session retrieval. This is the eywa replacement surface.
+Ranked handoff retrieval for continuity.
 
 ### Flags
 
@@ -260,7 +260,7 @@ Semantic session retrieval. This is the eywa replacement surface.
 | `[QUERY]` | Optional topic query |
 | `--days-back <DAYS_BACK>` | Recency window in days |
 | `--limit <LIMIT>` | Max number of sessions |
-| `--format <FORMAT>` | `summary`, `handoff`, `brief`, `full`, or `eywa` |
+| `--format <FORMAT>` | `summary`, `handoff`, `brief`, or `full` |
 | `--id <ID>` | Direct handoff lookup by session ID (bypasses search). Supports prefix, `latest` |
 | `--substance <SUBSTANCE>` | Minimum substance score |
 | `-H, --human` | Human-readable output |
@@ -269,7 +269,7 @@ Semantic session retrieval. This is the eywa replacement surface.
 
 ```bash
 gaal recall "peekaboo" --format brief --limit 5
-gaal recall --id latest --format eywa
+gaal recall --id latest --format handoff
 ```
 
 ---
@@ -288,7 +288,7 @@ LLM-powered handoff generation.
 | `--model <MODEL>` | Extraction model |
 | `--prompt <PROMPT>` | Custom prompt path |
 | `--provider <PROVIDER>` | `agent-mux` or `openrouter`; `agent-mux` is the supported real-execution provider unless dry-run reports another provider as supported |
-| `--format <FORMAT>` | Output format; default is `eywa-compatible` |
+| `--format <FORMAT>` | Output format; default is `markdown` |
 | `--batch` | Batch mode |
 | `--since <SINCE>` | Lower bound for batch candidates |
 | `--parallel <PARALLEL>` | Max concurrent batch workers |
@@ -319,7 +319,6 @@ Index maintenance commands.
 | `backfill` | Index all existing JSONL files |
 | `status` | Show index health/status |
 | `reindex` | Force re-index of one session |
-| `import-eywa` | Import legacy eywa handoff-index data |
 | `prune` | Remove old facts before a date |
 | `recover-orphans` | Scan for orphaned subagent JSONL files and create ghost parent records |
 

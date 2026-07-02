@@ -20,13 +20,13 @@ use crate::commands::search;
 use crate::config::{gaal_home, load_config};
 use crate::db::open_db;
 use crate::db::queries::{
-    delete_session, get_handoff, get_index_status, get_meta, get_session, insert_facts_batch,
-    set_meta, upsert_handoff, upsert_session, SessionRow,
+    delete_session, get_index_status, get_meta, get_session, insert_facts_batch, set_meta,
+    upsert_session, SessionRow,
 };
 use crate::discovery::codex::truncate_codex_id;
 use crate::discovery::{discover_sessions_with_cutoff, DiscoveredSession};
 use crate::error::GaalError;
-use crate::model::{Fact, HandoffRecord};
+use crate::model::Fact;
 use crate::output::human::print_table;
 use crate::output::json::print_json;
 use crate::parser::types::Engine;
@@ -68,13 +68,6 @@ pub struct ReindexArgs {
     pub id: String,
 }
 
-/// Arguments for `gaal index import-eywa`.
-#[derive(Debug, Clone)]
-pub struct ImportEywaArgs {
-    /// Optional path to `handoff-index.json`.
-    pub path: Option<String>,
-}
-
 /// Arguments for `gaal index prune`.
 #[derive(Debug, Clone)]
 pub struct PruneArgs {
@@ -99,34 +92,10 @@ struct ReindexSummary {
     facts: usize,
 }
 
-#[derive(Debug, Serialize)]
-struct ImportEywaSummary {
-    imported: usize,
-    skipped: usize,
-    errors: usize,
-}
-
 #[derive(Debug)]
 pub(crate) enum IndexOutcome {
     Indexed,
     Skipped,
-}
-
-#[derive(Debug, Clone)]
-struct EywaEntry {
-    session_id: String,
-    engine: Option<String>,
-    model: Option<String>,
-    cwd: Option<String>,
-    started_at: Option<String>,
-    headline: Option<String>,
-    projects: Vec<String>,
-    keywords: Vec<String>,
-    substance: i32,
-    duration_minutes: i32,
-    generated_at: Option<String>,
-    generated_by: Option<String>,
-    content_path: Option<String>,
 }
 
 /// Run `gaal index backfill`.
@@ -475,38 +444,6 @@ pub fn run_reindex(args: ReindexArgs) -> Result<(), GaalError> {
         facts: facts.len(),
     };
     print_json(&payload).map_err(GaalError::from)
-}
-
-/// Run `gaal index import-eywa`.
-pub fn run_import_eywa(args: ImportEywaArgs) -> Result<(), GaalError> {
-    let conn = open_db()?;
-    let path = args
-        .path
-        .map(PathBuf::from)
-        .unwrap_or_else(default_eywa_index_path);
-    let raw = fs::read_to_string(&path).map_err(GaalError::from)?;
-    let root: Value = serde_json::from_str(&raw)
-        .map_err(|e| GaalError::ParseError(format!("invalid eywa index JSON: {e}")))?;
-    let entries = parse_eywa_entries(&root)?;
-
-    let mut summary = ImportEywaSummary {
-        imported: 0,
-        skipped: 0,
-        errors: 0,
-    };
-
-    for entry in entries {
-        match import_eywa_entry(&conn, &entry) {
-            Ok(true) => summary.imported += 1,
-            Ok(false) => summary.skipped += 1,
-            Err(err) => {
-                summary.errors += 1;
-                eprintln!("failed importing eywa record {}: {}", entry.session_id, err);
-            }
-        }
-    }
-
-    print_json(&summary).map_err(GaalError::from)
 }
 
 /// Run `gaal index prune`.
@@ -1354,273 +1291,6 @@ pub(super) fn file_len_i64(path: &Path) -> Result<i64, GaalError> {
 fn u64_to_i64(value: u64) -> Result<i64, GaalError> {
     i64::try_from(value)
         .map_err(|_| GaalError::Internal("value exceeds i64 range for SQLite integer".to_string()))
-}
-
-fn default_eywa_index_path() -> PathBuf {
-    gaal_home()
-        .join("data")
-        .join("eywa")
-        .join("handoff-index.json")
-}
-
-fn import_eywa_entry(conn: &rusqlite::Connection, entry: &EywaEntry) -> Result<bool, GaalError> {
-    if entry.session_id.trim().is_empty() {
-        return Ok(false);
-    }
-
-    let existing = get_session(conn, &entry.session_id)?;
-    if existing.is_none() {
-        let stub = build_eywa_session_stub(entry);
-        upsert_session(conn, &stub)?;
-    }
-
-    let had_handoff = get_handoff(conn, &entry.session_id)?.is_some();
-    let content_path = resolve_eywa_content_path(entry);
-    let handoff = HandoffRecord {
-        session_id: entry.session_id.clone(),
-        headline: entry.headline.clone(),
-        projects: entry.projects.clone(),
-        keywords: entry.keywords.clone(),
-        substance: entry.substance,
-        duration_minutes: entry.duration_minutes,
-        generated_at: entry.generated_at.clone(),
-        generated_by: entry.generated_by.clone(),
-        content_path,
-    };
-    upsert_handoff(conn, &handoff)?;
-    Ok(!had_handoff)
-}
-
-/// Resolve the content_path for an eywa import entry.
-///
-/// Resolution order:
-/// 1. Use entry content_path when it points to an existing file.
-/// 2. Expand and check `~/...` paths.
-/// 3. Derive from date + session id under known handoff directories.
-fn resolve_eywa_content_path(entry: &EywaEntry) -> Option<String> {
-    if let Some(path_str) = entry.content_path.as_deref() {
-        let trimmed = path_str.trim();
-        if !trimmed.is_empty() && !trimmed.starts_with("eywa://") {
-            let path = Path::new(trimmed);
-            if path.exists() {
-                return Some(trimmed.to_string());
-            }
-
-            if let Some(rest) = trimmed.strip_prefix("~/") {
-                if let Some(home) = dirs::home_dir() {
-                    let expanded = home.join(rest);
-                    if expanded.exists() {
-                        return Some(expanded.to_string_lossy().to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    let date_str = entry
-        .started_at
-        .as_deref()
-        .or(entry.generated_at.as_deref())?;
-    let (year, month, day) = extract_date_parts(date_str);
-    let filename = format!("{}.md", entry.session_id);
-    let candidate_roots = [
-        gaal_home().join("data").join("eywa").join("handoffs"),
-        gaal_home().join("data").join("claude").join("handoffs"),
-        gaal_home().join("data").join("agy").join("handoffs"),
-    ];
-
-    for root in candidate_roots {
-        let candidate = root.join(&year).join(&month).join(&day).join(&filename);
-        if candidate.exists() {
-            return Some(candidate.to_string_lossy().to_string());
-        }
-    }
-
-    None
-}
-
-fn build_eywa_session_stub(entry: &EywaEntry) -> SessionRow {
-    let started_at = entry
-        .started_at
-        .clone()
-        .or_else(|| entry.generated_at.clone())
-        .unwrap_or_else(|| EPOCH_RFC3339.to_string());
-
-    SessionRow {
-        id: entry.session_id.clone(),
-        engine: normalize_engine_string(entry.engine.as_deref()),
-        model: entry.model.clone(),
-        cwd: entry.cwd.clone(),
-        started_at: started_at.clone(),
-        ended_at: Some(started_at.clone()),
-        exit_signal: None,
-        last_event_at: Some(started_at),
-        parent_id: None,
-        session_type: "standalone".to_string(),
-        jsonl_path: entry
-            .content_path
-            .clone()
-            .unwrap_or_else(|| format!("eywa://{}", entry.session_id)),
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        cache_read_tokens: 0,
-        cache_creation_tokens: 0,
-        reasoning_tokens: 0,
-        total_tools: 0,
-        total_turns: 0,
-        peak_context: 0,
-        last_indexed_offset: 0,
-        subagent_type: None,
-        gemini_summary: None,
-    }
-}
-
-fn normalize_engine_string(value: Option<&str>) -> String {
-    let candidate = value
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    match candidate.as_str() {
-        "claude" | "codex" | "gemini" | "agy" | "hermes" => candidate,
-        _ => "claude".to_string(),
-    }
-}
-
-fn parse_eywa_entries(root: &Value) -> Result<Vec<EywaEntry>, GaalError> {
-    if let Some(entries) = root.as_array() {
-        return entries
-            .iter()
-            .map(value_to_eywa_entry)
-            .collect::<Result<Vec<_>, _>>();
-    }
-
-    if let Some(entries) = root.get("entries").and_then(Value::as_array) {
-        return entries
-            .iter()
-            .map(value_to_eywa_entry)
-            .collect::<Result<Vec<_>, _>>();
-    }
-
-    if let Some(map) = root.get("handoffs").and_then(Value::as_object) {
-        let mut out = Vec::with_capacity(map.len());
-        for (session_id, payload) in map {
-            let mut entry = value_to_eywa_entry(payload)?;
-            if entry.session_id.is_empty() {
-                entry.session_id = session_id.to_string();
-            }
-            out.push(entry);
-        }
-        return Ok(out);
-    }
-
-    if let Some(map) = root.as_object() {
-        let mut out = Vec::with_capacity(map.len());
-        for (session_id, payload) in map {
-            let mut entry = value_to_eywa_entry(payload)?;
-            if entry.session_id.is_empty() {
-                entry.session_id = session_id.to_string();
-            }
-            out.push(entry);
-        }
-        return Ok(out);
-    }
-
-    Err(GaalError::ParseError(
-        "eywa index must be a JSON array or object".to_string(),
-    ))
-}
-
-fn value_to_eywa_entry(value: &Value) -> Result<EywaEntry, GaalError> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| GaalError::ParseError("eywa entry must be an object".to_string()))?;
-
-    let session_id = first_string(obj, &["session_id", "id", "session"]).unwrap_or_default();
-    let projects = first_string_vec(obj, &["projects"]);
-    let keywords = first_string_vec(obj, &["keywords", "tags"]);
-
-    Ok(EywaEntry {
-        session_id,
-        engine: first_string(obj, &["engine"]),
-        model: first_string(obj, &["model"]),
-        cwd: first_string(obj, &["cwd"]),
-        started_at: first_string(obj, &["started_at", "date", "started"]),
-        headline: first_string(obj, &["headline", "summary", "title"]),
-        projects,
-        keywords,
-        substance: first_i32(obj, &["substance"]).unwrap_or(0),
-        duration_minutes: first_i32(obj, &["duration_minutes", "duration"]).unwrap_or(0),
-        generated_at: first_string(obj, &["generated_at", "updated_at"]),
-        generated_by: first_string(obj, &["generated_by"]),
-        content_path: first_string(obj, &["content_path", "path", "handoff_path"]),
-    })
-}
-
-fn first_string(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        let value = obj.get(*key);
-        let Some(value) = value else {
-            continue;
-        };
-        if let Some(text) = value.as_str() {
-            return Some(text.to_string());
-        }
-        if value.is_number() || value.is_boolean() {
-            return Some(value.to_string());
-        }
-    }
-    None
-}
-
-fn first_i32(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<i32> {
-    for key in keys {
-        let value = obj.get(*key);
-        let Some(value) = value else {
-            continue;
-        };
-        if let Some(v) = value.as_i64() {
-            if let Ok(out) = i32::try_from(v) {
-                return Some(out);
-            }
-        }
-        if let Some(text) = value.as_str() {
-            if let Ok(parsed) = text.parse::<i32>() {
-                return Some(parsed);
-            }
-        }
-    }
-    None
-}
-
-fn first_string_vec(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Vec<String> {
-    for key in keys {
-        let Some(value) = obj.get(*key) else {
-            continue;
-        };
-        if let Some(arr) = value.as_array() {
-            let mut out = Vec::new();
-            for item in arr {
-                if let Some(text) = item.as_str() {
-                    out.push(text.to_string());
-                } else if item.is_number() || item.is_boolean() {
-                    out.push(item.to_string());
-                }
-            }
-            return out;
-        }
-        if let Some(text) = value.as_str() {
-            let out = text
-                .split(',')
-                .map(str::trim)
-                .filter(|part| !part.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>();
-            if !out.is_empty() {
-                return out;
-            }
-        }
-    }
-    Vec::new()
 }
 
 #[cfg(test)]
