@@ -66,12 +66,12 @@ die() {
 
 run_cmd() {
   if [ "${DRY_RUN}" -eq 1 ]; then
-    printf '+'
+    local line="+"
     while [ "$#" -gt 0 ]; do
-      printf ' %s' "$1"
+      line="${line} $1"
       shift
     done
-    printf '\n'
+    printf '%s\n' "${line}"
   else
     "$@"
   fi
