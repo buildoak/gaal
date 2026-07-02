@@ -276,6 +276,7 @@ These commands rebuild Tantivy:
 - `index backfill` (only when at least one engine indexed new sessions on that run)
 - `index reindex`
 - `index prune`
+- `index recover-orphans`
 
 ## Codex Subagent JSONL Schema
 

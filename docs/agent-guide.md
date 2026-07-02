@@ -183,13 +183,14 @@ Use `jq -e` to turn CLI output into an assertion gate.
 gaal ls --limit 1 | jq -e '.sessions | length == 1 and all(.[]; .id and .engine)' > /dev/null
 ```
 
-## Pipe Gotchas
+## Target Argument Gotchas
 
-The `who` verb consumes trailing arguments greedily. Do not pipe `gaal who ...` directly into another command if the shell could alter argument grouping. Capture it first, then pipe the captured JSON.
+The `who` verb accepts a free-form target. Put flags before long multi-word
+targets when possible, or quote the target exactly.
 
 ```bash
-OUTPUT=$(gaal who wrote AGENTS.md --since 7d)
-echo "$OUTPUT" | jq '.'
+gaal who wrote --since 7d "AGENTS.md"
+gaal who ran --since 7d "cargo test"
 ```
 
 Transcript behavior is also easy to misuse:

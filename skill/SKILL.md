@@ -148,11 +148,12 @@ gaal who ran cargo --failed --limit 20
 ```
 
 `who` verbs are `read`, `wrote`, `ran`, `touched`, `changed`, and `deleted`.
-Because `who` consumes trailing arguments greedily, capture before piping:
+Because `who` accepts a free-form target, put flags before long multi-word
+targets when possible, or quote the target exactly:
 
 ```bash
-OUTPUT=$(gaal who wrote src/main.rs --since 7d)
-echo "$OUTPUT" | jq '.'
+gaal who wrote --since 7d "src/main.rs"
+gaal who ran --since 7d "cargo test"
 ```
 
 ### Inspect Evidence
@@ -204,13 +205,18 @@ RESULT=$(gaal find-salt GAAL_SALT_<hex>)
 echo "$RESULT" | jq '{session_id, engine, jsonl_path, indexed, handoff}'
 ```
 
-Then, only when a handoff is needed:
+Then preview the handoff plan. Do not skip the dry run:
 
 ```bash
 JSONL=$(echo "$RESULT" | jq -r .jsonl_path)
 gaal create-handoff --jsonl "$JSONL" --dry-run
-gaal create-handoff --jsonl "$JSONL"
 ```
+
+Only run the non-dry-run command after checking that the dry-run output has the
+expected session, provider, model, effort, `provider_supported: true`, no
+surprising warnings, and side effects you explicitly intend. Non-dry-run
+handoff generation can spend tokens and send transcript content to the
+configured backend.
 
 ## Handoffs
 
@@ -236,11 +242,13 @@ Useful forms:
 ```bash
 command -v agent-mux
 gaal create-handoff 249aad1e --dry-run
-gaal create-handoff 249aad1e
-gaal create-handoff latest --provider agent-mux --effort medium
 gaal create-handoff --jsonl /path/to/session.jsonl --dry-run
 gaal create-handoff --batch --since 1d --min-turns 3 --dry-run
 ```
+
+Non-dry-run examples are intentionally omitted here. Use the matching command
+only after the dry-run plan is acceptable and the task explicitly calls for a
+generated continuity artifact.
 
 Session ID notes:
 

@@ -15,8 +15,9 @@ gaal recall "auth refactor" --format brief
 ## Table of Contents
 
 - [Getting Started](getting-started.md) -- build, install, first commands
+- [Philosophy](philosophy.md) -- core principles behind the tool
 - [Architecture](architecture.md) -- data model, two-source subagent model, session lifecycle
-- [Commands](commands/) -- full command reference (one page per command group)
+- [Commands](commands/README.md) -- full command reference (one page per command group)
   - [Fleet View: ls](commands/fleet-view.md)
   - [Activity: activity](commands/activity.md)
   - [Drill-Down: inspect, transcript](commands/drill-down.md)

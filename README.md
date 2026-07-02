@@ -534,8 +534,9 @@ registered alias. When unsure, run `gaal resolve <id> -H`.
 Full docs live in [`docs/`](./docs/):
 
 - [Getting started](./docs/getting-started.md)
+- [Philosophy](./docs/philosophy.md)
 - [Architecture](./docs/architecture.md)
-- [Command reference](./docs/commands/)
+- [Command reference](./docs/commands/README.md)
 - [Agent guide](./docs/agent-guide.md)
 - [Formats and exit codes](./docs/formats.md)
 - [Hermes engine notes](./docs/hermes-engine-plan.md)

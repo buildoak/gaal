@@ -4,7 +4,6 @@
 
 | Issue | Symptom | Cause | Workaround |
 |-------|---------|-------|------------|
-| **Pipe gotcha with `gaal who`** | `gaal who wrote X \| jq` fails or produces unexpected output | `who` verb consumes trailing arguments greedily, eating the pipe | Capture to variable first: `OUTPUT=$(gaal who wrote X); echo "$OUTPUT" \| jq` |
 | **`recall` returns no useful results** | `gaal recall "topic"` returns no matches even when sessions exist | Recall searches generated handoffs, not raw session facts | Use `gaal search` for raw indexed facts, or generate a handoff for a chosen session only when continuity generation is appropriate |
 | **`contains_error` false positives** | Sessions flagged with errors that have none | Strings like `"error_count: 0"` or `"no errors found"` match error detection | Check `.errors` array in `gaal inspect <id> --errors` for actual errors. Ignore summary-level flags. |
 | **Claude token counts near-zero** | Claude sessions show `tokens.input: 13, tokens.output: 11` despite hundreds of tool calls | Claude JSONL parser did not accumulate usage from some historical assistant message shapes | Use `tools_used` as a proxy for old sessions and reindex after parser fixes. Codex sessions unaffected. |

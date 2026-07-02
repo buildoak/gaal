@@ -25,9 +25,11 @@ src/
   commands/            One file per command
     ls.rs              Fleet view over indexed sessions
     inspect.rs         Session detail view
+    activity.rs        Source-backed activity slices across time windows
     who.rs             Inverted attribution queries
     search.rs          BM25 full-text search via Tantivy
     recall.rs          Ranked handoff retrieval for session continuity
+    resolve.rs         Short ID, prefix, and Hermes alias resolution
     transcript.rs      Markdown transcript rendering
     handoff.rs         LLM-powered handoff generation (create-handoff)
     salt.rs            Unique token generation for self-identification
