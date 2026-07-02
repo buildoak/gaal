@@ -86,8 +86,7 @@ gaal create-handoff latest --dry-run    # preview handoff generation
 
 Do not guess setup. If Gaal is new on this machine or checkout, read:
 
-- `skill/references/installation.md`
-- `skill/references/onboarding.md`
+- `skill/references/first-run.md`
 
 Minimal smoke path:
 
@@ -97,9 +96,9 @@ gaal index status
 gaal ls -H --limit 5
 ```
 
-If the binary or index is missing, follow the installation reference. Keep
-`GAAL_HOME` in mind for sandboxes and CI; it relocates derived Gaal state, not
-the source traces owned by agent harnesses.
+If the binary or index is missing, follow the first-run reference. It owns
+source install, scheduled indexing, handoff onboarding, first-use prompts, and
+`GAAL_HOME` caveats.
 
 ## Session Taxonomy
 
@@ -218,8 +217,7 @@ Full command flags, output schemas, format comparison tables, and operational de
 
 | Need | Where | Read when |
 |------|-------|-----------|
-| Install path | `skill/references/installation.md` | First setup, missing binary, missing index, sandbox/CI setup |
-| First useful prompts | `skill/references/onboarding.md` | After installation, when asking an agent to explore your work patterns |
+| First run | `skill/references/first-run.md` | First setup, missing binary, missing index, scheduled indexing, handoff onboarding, first useful prompts |
 | Verb reference | `skill/references/verb-reference.md` | Exact flags, supported engines, and command-specific caveats |
 | Troubleshooting | `skill/references/troubleshooting.md` | No index, no results, ambiguous IDs, handoff provider issues |
 | Command reference by group | `docs/commands/` | Public command docs and output examples |
@@ -229,7 +227,7 @@ Full command flags, output schemas, format comparison tables, and operational de
 
 | What | Path |
 |------|------|
-| Binary | `gaal` (symlink to `target/release/gaal`) |
+| Binary | `gaal` on `PATH`; source install usually places it under Cargo's bin directory, and scheduled jobs render the verified absolute path |
 | Data root | `~/.gaal/` (override with `GAAL_HOME` env var) |
 | SQLite index | `$GAAL_HOME/index.db` |
 | Tantivy FTS | `$GAAL_HOME/tantivy/` |

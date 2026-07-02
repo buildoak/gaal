@@ -13,31 +13,38 @@ cargo build --release
 ```
 
 Use `--release` for local development builds. For normal manual installation,
-`cargo install --path .` copies the release binary into Cargo's bin directory.
+`cargo install --path . --force` refreshes the release binary in Cargo's bin
+directory.
 
 Rough build times:
 
 - Clean build: about 8 minutes
 - Incremental build: about 30 seconds
 
-For the simplest local install:
+For the simplest local install, use the source installer from the checkout:
 
 ```bash
 git clone https://github.com/buildoak/gaal.git
 cd gaal
-cargo install --path .
+./install.sh --no-schedule
 ```
 
-For development or scheduled indexing, you may prefer one checkout with a
-stable symlink:
+For manual installation without the helper:
 
 ```bash
-cargo build --release
-ln -sf "$PWD/target/release/gaal" /opt/homebrew/bin/gaal
+cargo install --path . --force
 ```
 
-The LaunchAgent example in `defaults/` expects `/opt/homebrew/bin/gaal`. If you
-use a different path, edit the plist before loading it.
+Scheduled indexing is recommended after the first install, but it is explicit:
+
+```bash
+./install.sh --schedule
+./install.sh print-plist
+./install.sh status
+```
+
+The scheduled job runs only `gaal index backfill`. It does not create handoffs,
+call LLM backends, or run recall.
 
 ## Requirements
 

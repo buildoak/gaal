@@ -64,7 +64,7 @@ description = "Reindexing a nonexistent session"
 
 [[errors]]
 name = "create-handoff-nonexistent"
-command = "gaal create-handoff nonexistent123"
+command = "gaal create-handoff nonexistent123 --dry-run"
 expected_exit = 3
 description = "Handoff for a nonexistent session"
 

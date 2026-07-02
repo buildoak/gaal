@@ -30,6 +30,33 @@ There is **no separate `active` command**. `activity` is historical and source-b
 
 ---
 
+## Engine and Source Support
+
+`gaal index backfill` discovers supported local agent trace artifacts, parses
+them into normalized sessions and facts, stores those rows in SQLite, and
+rebuilds Tantivy full-text search from the indexed facts when new sessions are
+indexed. It does not index arbitrary JSON/JSONL files.
+
+Supported source shapes:
+
+| Engine | Source artifact | Boundary |
+|--------|-----------------|----------|
+| Codex CLI | `~/.codex/sessions/**/rollout-*.jsonl` | JSONL rollout traces. Codex UI/web history is unsupported unless it writes this local trace shape. |
+| Claude Code | `~/.claude/projects/<project>/*.jsonl` plus parent-linked `subagents/agent-*.jsonl` | JSONL Claude Code traces. Claude desktop/web history is unsupported unless it writes this local trace shape. |
+| Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON session files, re-parsed as a whole. |
+| Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | Native but experimental JSONL transcript support; no agy SQLite/blob parsing. |
+| Hermes Agent | `HERMES_STATE_DB`, `HERMES_HOME/state.db`, or `~/.hermes/state.db` | Logical sessions parsed from the Hermes SQLite state DB. |
+
+Indexed facts include prompts, replies, commands, file reads/writes, errors,
+git operations, and task-spawn records where the source exposes them. Subagent
+relationships are parsed only where trace schemas expose usable evidence:
+Claude parent `toolUseResult`/Agent events and child JSONL files, Codex
+`forked_from_id`/subagent source metadata plus parent spawn/wait/close events,
+and Hermes parent session IDs as lineage metadata. Gaal does not infer complete
+lineage when the source trace does not contain it.
+
+---
+
 ## 1. `ls`
 
 Fleet view across sessions.
@@ -301,9 +328,10 @@ LLM-powered handoff generation.
 ### Examples
 
 ```bash
-gaal create-handoff 249aad1e
+gaal create-handoff 249aad1e --dry-run
+gaal create-handoff 249aad1e  # only after review and a continuity need
 gaal create-handoff --batch --since 1d --dry-run
-gaal create-handoff --jsonl "$JSONL"
+gaal create-handoff --jsonl "$JSONL" --dry-run
 ```
 
 ---
@@ -316,11 +344,22 @@ Index maintenance commands.
 
 | Subcommand | Meaning |
 |------------|---------|
-| `backfill` | Index all existing JSONL files |
+| `backfill` | Discover and index supported local trace artifacts (JSONL, JSON, Hermes SQLite) |
 | `status` | Show index health/status |
 | `reindex` | Force re-index of one session |
 | `prune` | Remove old facts before a date |
 | `recover-orphans` | Scan for orphaned subagent JSONL files and create ghost parent records |
+
+### Notes
+
+- First run performs a full discovery pass across supported engines unless
+  `--engine` is supplied. Later runs use per-engine mtime cursors and skip
+  unchanged sessions when possible.
+- Claude and Codex JSONL can use byte-offset incremental parsing. Gemini JSON,
+  agy transcript JSONL, and Hermes SQLite are re-parsed as complete source
+  artifacts when they need indexing.
+- `--with-markdown` additionally writes deterministic session markdown; it is
+  not required for SQLite/Tantivy indexing.
 
 ### Example
 

@@ -2,20 +2,23 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Template only. Prefer ./install.sh print-plist or
+         defaults/gaal-cron-install.sh --print-plist, which render the verified
+         absolute gaal binary path for this machine. -->
     <key>Label</key>
     <string>com.gaal.index</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>-c</string>
-        <string>/opt/homebrew/bin/gaal index backfill 2>/dev/null</string>
+        <string>/ABSOLUTE/PATH/TO/gaal</string>
+        <string>index</string>
+        <string>backfill</string>
     </array>
     <key>StartInterval</key>
     <integer>14400</integer>
     <key>StandardOutPath</key>
-    <string>/tmp/gaal-index.log</string>
+    <string>/tmp/gaal-index.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/gaal-index.log</string>
+    <string>/tmp/gaal-index.err.log</string>
     <key>RunAtLoad</key>
     <true/>
 </dict>

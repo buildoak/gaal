@@ -184,7 +184,7 @@ Handoff:    ~/.gaal/data/claude/handoffs/2026/03/30/dc5e98dc.md [not generated]
 1. Run `gaal salt` and capture the emitted token.
 2. Echo that token into the live session so it is flushed into the session JSONL.
 3. Run `gaal find-salt <token>` — this returns full indexed session context when available, including JSONL path, model, session type, token counts when known, transcript path, and handoff status.
-4. If a handoff is needed: `gaal create-handoff --jsonl <jsonl_path>`.
+4. If a handoff is needed: `gaal create-handoff --jsonl <jsonl_path> --dry-run`; generate only after review and a continuity need.
 
 These must be separate tool calls because `salt` output has to be written into the session log before `find-salt` scans for it. If `find-salt` runs before the tool result is flushed, discovery can miss the active session.
 

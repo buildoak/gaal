@@ -316,7 +316,7 @@ enum Commands {
 
 #[derive(Debug, Subcommand)]
 enum IndexCommand {
-    /// Index all existing JSONL files.
+    /// Index supported local agent trace artifacts into SQLite + Tantivy.
     Backfill {
         /// Restrict backfill to one engine.
         #[arg(long)]

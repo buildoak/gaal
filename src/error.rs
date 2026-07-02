@@ -130,7 +130,7 @@ fn command_example(command: &str) -> String {
         "recall" => "gaal recall \"auth migration\" -H".to_string(),
         "resolve" => "gaal resolve dc5e98dc".to_string(),
         "find-salt" => "gaal find-salt GAAL_SALT_abc123".to_string(),
-        "create-handoff" => "gaal create-handoff latest".to_string(),
+        "create-handoff" => "gaal create-handoff latest --dry-run".to_string(),
         "index" => "gaal index backfill".to_string(),
         "tag" => "gaal tag 249aad1e deployment".to_string(),
         _ => "gaal ls --since 7d -H".to_string(),
@@ -179,7 +179,7 @@ fn not_found_message(command: &str, target: &str) -> (String, String, String) {
             (
                 format!("No handoff found for session `{session_id}`."),
                 format!("gaal recall --id {session_id} --format brief -H", session_id = &session_id[..session_id.len().min(8)]),
-                format!("Generate one with: `gaal create-handoff {session_id}`", session_id = &session_id[..session_id.len().min(8)]),
+                format!("Preview one with: `gaal create-handoff {session_id} --dry-run`; generate only when a continuity artifact is needed", session_id = &session_id[..session_id.len().min(8)]),
             )
         }
         "recall" => (

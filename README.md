@@ -1,6 +1,5 @@
 # gaal
 
-[![crates.io](https://img.shields.io/crates/v/gaal.svg)](https://crates.io/crates/gaal)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS-lightgrey)
 
@@ -276,15 +275,27 @@ end using the bundled skill:
 https://github.com/buildoak/gaal/blob/master/skill/SKILL.md
 ```
 
-For a manual install, use a local Rust toolchain:
+For source install from the checkout:
 
 ```bash
 git clone https://github.com/buildoak/gaal.git
 cd gaal
-cargo install --path .
+./install.sh --no-schedule
 ```
 
-Index your existing local session traces:
+The installer explains what it is about to do before it changes anything:
+install from source, verify the binary, build the first local index, and show
+the zero-session state if this machine has no supported traces yet. It does not
+silently install background jobs, install agent-mux, generate handoffs, or call
+LLM backends.
+
+For manual install without the helper:
+
+```bash
+cargo install --path . --force
+```
+
+Index your existing local session traces if you skipped the helper:
 
 ```bash
 gaal index backfill
@@ -300,6 +311,33 @@ gaal ls -H --limit 5
 On a brand-new machine, `gaal index backfill` can succeed with zero sessions if
 no supported agent has written traces yet. Run an agent for a bit, then backfill
 again.
+
+Recommended, explicit scheduling:
+
+```bash
+./install.sh --schedule
+./install.sh print-plist
+./install.sh status
+```
+
+The scheduled job runs only `gaal index backfill`. It does not create handoffs,
+run recall, call agent-mux, or use an LLM backend.
+
+Optional handoff backend setup:
+
+```bash
+./install.sh handoff-setup
+./install.sh handoff-setup --install-agent-mux
+```
+
+Core Gaal does not need agent-mux. Handoff generation does: agent-mux is the
+preferred real-execution backend once configured. Setup checks agent-mux and
+runs only `gaal create-handoff latest --dry-run`; real handoff generation
+always remains a separate user-approved command.
+
+For the full first-run contract, including storage paths, scheduled indexing,
+handoff safety, and first useful prompts, read
+[`skill/references/first-run.md`](skill/references/first-run.md).
 
 By default, Gaal stores its derived database, Tantivy index, rendered
 transcripts, config, and generated handoffs under `~/.gaal/`. In CI or
@@ -351,7 +389,7 @@ For one known session:
 
 ```bash
 gaal create-handoff <id> --dry-run
-gaal create-handoff <id>
+gaal create-handoff <id>  # only after review and a continuity need
 gaal recall --id <id> --format handoff -H
 ```
 
@@ -370,7 +408,7 @@ If that returns a JSONL path and a handoff is appropriate:
 
 ```bash
 gaal create-handoff --jsonl /path/to/session.jsonl --dry-run
-gaal create-handoff --jsonl /path/to/session.jsonl
+gaal create-handoff --jsonl /path/to/session.jsonl  # only after review and a continuity need
 ```
 
 `find-salt` scans Claude Code, Codex, and agy JSONL session logs. It does not
@@ -506,7 +544,7 @@ Run `gaal --help` and `gaal <command> --help` for the full current contract.
 | `gaal salt` | Emit a unique token for self-identification. |
 | `gaal find-salt <token>` | Find the Claude Code, Codex, or agy JSONL file containing that token in tool/action output, with indexed session context when available. |
 | `gaal create-handoff <id>` | Generate a handoff markdown artifact through the configured backend. Use `--dry-run` first; [agent-mux](https://github.com/buildoak/agent-mux) is the supported real-execution provider today. |
-| `gaal create-handoff --jsonl <path>` | Generate from an explicit JSONL path, usually after `find-salt`. |
+| `gaal create-handoff --jsonl <path>` | Generate from an explicit JSONL path, usually after `find-salt`; preview with `--dry-run` first. |
 | `gaal create-handoff --batch --since 1d --min-turns 3 --dry-run` | Preview batch handoff candidates before generating anything. |
 
 ### Maintain

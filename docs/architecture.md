@@ -102,7 +102,28 @@ engine source artifacts on disk
   -> output/ or render/
 ```
 
-The indexing and query path is: engine source artifacts on disk -> discovery/ -> parser/ -> db/ -> commands/ -> output/ or render/. Today that means Claude and Codex JSONL, Gemini JSON, Agy JSONL, and Hermes SQLite.
+The indexing and query path is: engine source artifacts on disk -> discovery/ -> parser/ -> db/ -> commands/ -> output/ or render/. Today that means Claude Code and Codex CLI JSONL, Gemini CLI JSON, Agy/Antigravity transcript JSONL, and Hermes SQLite.
+
+Backfill indexes raw traces from supported local agent CLIs into SQLite session
+rows plus normalized facts, then rebuilds Tantivy FTS from those facts when new
+sessions are indexed. Optional markdown generation renders derived session
+views under Gaal's data directory; the source traces remain the authority.
+
+Supported source roots and formats:
+
+| Engine | Discovery source | Indexed shape |
+|--------|------------------|---------------|
+| Claude Code | `~/.claude/projects/<project>/*.jsonl` | Parent JSONL sessions plus linked `subagents/agent-*.jsonl` where parent traces expose Agent metadata. |
+| Codex CLI | `~/.codex/sessions/**/rollout-*.jsonl` | Rollout JSONL sessions; child sessions link to parents only when `forked_from_id` or subagent source metadata is present. |
+| Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON session files. |
+| Agy / Antigravity CLI | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | Transcript JSONL; SQLite/blob sidecars are not parsed. |
+| Hermes Agent | `HERMES_STATE_DB`, `HERMES_HOME/state.db`, or `~/.hermes/state.db` | Logical sessions from the Hermes SQLite state DB. |
+
+Codex and Claude desktop/web UI histories are not supported unless they write
+one of the local CLI trace shapes above. Subagent and lineage support is
+evidence-bound: Gaal records relationships only when the source schema exposes
+parent IDs, child files, or lifecycle events; it does not reconstruct complete
+lineage from absence.
 
 ## Data Model
 
@@ -328,14 +349,14 @@ The common operator workflow is:
 2. `gaal inspect latest`
 3. `gaal who <verb> <target>` or `gaal search <query>`
 4. `gaal transcript <id>`
-5. `gaal create-handoff <id>`
+5. `gaal create-handoff <id> --dry-run`
 6. `gaal recall <topic>`
 
 The self-handoff flow is:
 
 1. Run `gaal salt`
 2. Run `gaal find-salt <token>`
-3. Run `gaal create-handoff --jsonl <path>`
+3. Run `gaal create-handoff --jsonl <path> --dry-run`
 
 This flow depends on salt-based self-identification so an in-progress session can locate its own JSONL on disk before generating a handoff.
 

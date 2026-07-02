@@ -18,7 +18,7 @@ Use this table first. It is the fastest way to choose the correct command.
 | Who wrote/read/ran X? | `gaal who <verb> <target>` |
 | Free-text search across content | `gaal search <query>` |
 | Handoff recall for continuity | `gaal recall [query]` |
-| Generate handoff document | `gaal create-handoff <id>` |
+| Preview or generate handoff document | `gaal create-handoff <id> --dry-run` first |
 | Self-identify current session | `gaal salt` -> later `gaal find-salt` -> optional `gaal create-handoff --jsonl ... --dry-run` |
 | Cross-session prompt injection | `session-ctl` (different tool) |
 
@@ -26,7 +26,7 @@ Use this table first. It is the fastest way to choose the correct command.
 
 The primary consumers of `gaal` are agents, not humans. Prefer machine-readable JSON unless a human explicitly asks for a table or card view.
 
-`gaal` supports five engines: Claude Code (JSONL), Codex (JSONL), Gemini (single JSON), Antigravity CLI / `agy` (JSONL), and Hermes Agent (SQLite). All five are indexed into the same session, fact, transcript, tag, and handoff model. Agy support is native, experimental, and does not require agent-mux. Hermes support is newer and has been tested against one real installation shape plus sanitized fixtures; treat unusual Hermes installations as compatibility work until fixtures cover them.
+`gaal` supports five engines: Claude Code (JSONL), Codex (JSONL), Gemini (single JSON), Antigravity CLI / `agy` (JSONL), and Hermes Agent (SQLite). All five are indexed into the same session, fact, transcript, tag, and handoff model. Agy support is native, experimental, and does not require agent-mux. Hermes support is newer and has been tested against one real installation shape plus sanitized fixtures; treat unusual Hermes installations as compatibility work until fixtures cover them. Agent-mux is optional for core Gaal, but is the preferred default backend for real handoff delivery once configured.
 
 The core mental model:
 
@@ -37,7 +37,7 @@ The core mental model:
 - `gaal who` answers "which sessions touched this thing?"
 - `gaal search` answers "where does this text appear?"
 - `gaal recall` answers "what past handoffs are relevant to this work?"
-- `gaal create-handoff` answers "generate continuity material for future agents"
+- `gaal create-handoff` answers "preview or generate continuity material for future agents"
 
 Before depending on `recall`, make sure handoffs and the index actually exist.
 
@@ -89,11 +89,13 @@ gaal recall --id latest --format handoff
 
 ### Handoff at session end
 
-Use `create-handoff` when wrapping up a session or producing a continuity artifact for another agent.
+Use `create-handoff` when wrapping up a session or producing a continuity artifact for another agent. Preview first with `--dry-run`; generate a real handoff only when there is a continuity reason and the plan is acceptable.
+
+For first-run handoff backend setup, see the [first-run reference](../skill/references/first-run.md).
 
 ```bash
 gaal create-handoff latest --dry-run
-gaal create-handoff latest                  # only after reviewing the dry run
+gaal create-handoff latest                  # only after review and a continuity need
 gaal create-handoff latest --effort high --dry-run
 gaal create-handoff --batch --since 1d --dry-run
 ```
@@ -125,7 +127,7 @@ If a handoff is needed, preview first:
 
 ```bash
 gaal create-handoff --jsonl /path/to/session.jsonl --dry-run
-gaal create-handoff --jsonl /path/to/session.jsonl
+gaal create-handoff --jsonl /path/to/session.jsonl  # only after review and a continuity need
 ```
 
 CRITICAL: `gaal salt` and `gaal find-salt` must be separate tool calls. The JSONL must flush between those calls or `find-salt` may miss the current session. Do not hide this split inside one shell script.
@@ -212,7 +214,7 @@ Avoid these patterns. They usually create incorrect assumptions or unnecessary w
 | Treat `gaal activity` as live process status | Use it for historical/indexed activity; use fleet/process tools for live status |
 | Call `gaal inspect` in a loop | Use `gaal inspect --ids a1b2,c3d4` |
 | Assume `gaal recall` works without handoffs | Check gaal index status first |
-| Run default `gaal create-handoff` without a configured handoff backend | Verify `agent-mux` availability first, or choose and test another supported provider |
+| Run default `gaal create-handoff` cold | Run `gaal create-handoff <id> --dry-run`, review provider/support/side effects, then generate only if continuity is needed |
 
 ## Sandbox Usage
 
@@ -252,8 +254,8 @@ gaal ls --cwd /path/to/project --aggregate -H
 
 - Read-only commands are the safe default for agents
 - Mutation commands include `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index recover-orphans`, and `tag`
-- `create-handoff` dispatches to an LLM/agent backend and may consume subscription quota, API credits, metered usage, or local compute. `agent-mux` is the default backend for handoff generation, but core indexing, search, inspect, attribution, transcript, and tag workflows do not require it.
-- Use `--dry-run` before batch handoff generation
+- `create-handoff` dispatches to an LLM/agent backend and may consume subscription quota, API credits, metered usage, or local compute. `agent-mux` is optional for core Gaal and is the preferred default backend for real handoff delivery once configured.
+- Use `--dry-run` before any handoff generation. It previews handoff planning; it is not a broad promise that unrelated setup, index, or DB initialization cannot happen elsewhere.
 - `index backfill` is operationally safe: it reads JSONL and writes derived state under `~/.gaal/`
 
 Practical agent rule: do not mutate anything unless the task explicitly requires continuity generation, tagging, or index maintenance.
