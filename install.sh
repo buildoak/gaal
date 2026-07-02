@@ -149,12 +149,16 @@ Optional handoff backend setup:
 EOF
 }
 
+gaal_state_dir() {
+  printf '%s\n' "${GAAL_HOME:-${HOME}/.gaal}"
+}
+
 print_install_plan() {
   cat <<EOF
 What this installer is about to do:
   1. Build and install Gaal from this source checkout with Cargo.
   2. Verify the exact installed Gaal binary.
-  3. Create or refresh Gaal's local derived index under \${GAAL_HOME:-${HOME}/.gaal}.
+  3. Create or refresh Gaal's local derived index under $(gaal_state_dir).
   4. Show the first sessions if any exist; explain the clean zero-session case if none exist.
   5. Offer scheduled indexing only when explicitly approved.
 
@@ -435,7 +439,7 @@ install() {
     run_cmd "${GAAL_BIN}" --version
   fi
 
-  log "Derived Gaal state lives under \${GAAL_HOME:-${HOME}/.gaal}; source traces stay where agent tools wrote them."
+  log "Derived Gaal state lives under $(gaal_state_dir); source traces stay where agent tools wrote them."
 
   if [ "${SKIP_INDEX}" -eq 0 ]; then
     run_cmd "${GAAL_BIN}" index backfill
