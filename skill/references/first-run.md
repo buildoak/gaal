@@ -108,11 +108,30 @@ https://github.com/buildoak/gaal/blob/master/skill/references/first-run.md
 That keeps the binary install simple while still giving agents the current
 operational contract before they touch local traces.
 
+## Updating An Existing Install
+
+If Gaal is already installed, update the binary and reload the current skill
+contract before touching local traces:
+
+```bash
+brew upgrade buildoak/tap/gaal
+# or
+cargo install gaal-cli --force
+
+gaal onboard --dry-run
+```
+
+Agent rule: package managers update the `gaal` binary, not the agent-facing
+skill files already copied into Codex, Claude, or agent-mux environments. Use
+the skill URL from `gaal onboard --dry-run` and refresh the local skill copy
+through the active harness's supported skill-install mechanism. If the harness
+has no skill installer, read `SKILL.md` and this first-run reference into
+context before running setup or migration commands.
+
 ## Source Install
 
-Source install is canonical for the pre-launch path. Do not claim a crates.io
-install path until release packaging has actually been verified. A future
-crates.io path can be added here later.
+Source install remains the most inspectable fallback when package-manager
+installation is unavailable or when developing Gaal itself.
 
 ```bash
 git clone https://github.com/buildoak/gaal.git

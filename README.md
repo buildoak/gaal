@@ -19,6 +19,31 @@ the smaller token-efficient markdown views and navigation tools around them.
 Agent-first is literal here: JSON by default, source-backed, and built for the
 next run that has to inherit the mess.
 
+## Install
+
+```bash
+brew install buildoak/tap/gaal
+# or
+cargo install gaal-cli
+
+gaal onboard --dry-run
+gaal index backfill
+gaal ls -H --limit 5
+```
+
+The crates.io package is `gaal-cli` because `gaal` was already occupied there;
+it still installs the `gaal` binary.
+
+If you are giving this to a coding agent, use this prompt:
+
+```text
+Install or update Gaal, then load the latest Gaal skill from
+https://github.com/buildoak/gaal/tree/master/skill.
+Run `gaal onboard --dry-run`, follow its first-launch commands, and do not
+enable scheduled indexing, install agent-mux, or generate handoffs unless I
+explicitly approve that step.
+```
+
 ## Why This Exists
 
 It started with a naive dream: interactions with AI should compound. Not just
@@ -280,6 +305,13 @@ cargo install gaal-cli
 
 The crates.io package is `gaal-cli` because `gaal` was already occupied there;
 it still installs the `gaal` binary.
+
+Existing installs can be refreshed with:
+
+```bash
+brew upgrade buildoak/tap/gaal
+cargo install gaal-cli --force
+```
 
 After the binary is on `PATH`, the first command is:
 

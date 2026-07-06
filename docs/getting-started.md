@@ -12,6 +12,17 @@ That command is designed for agentic installation. It points the installing
 agent at the latest bundled skill/reference material and the first-launch
 commands before any local traces are indexed.
 
+For existing installs, refresh the binary first, then run onboarding again so
+the agent sees the latest skill/update contract:
+
+```bash
+brew upgrade buildoak/tap/gaal
+# or
+cargo install gaal-cli --force
+
+gaal onboard --dry-run
+```
+
 ## Build
 
 You need a Rust toolchain installed locally.

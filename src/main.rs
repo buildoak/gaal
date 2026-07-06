@@ -732,6 +732,10 @@ fn run_onboard(dry_run: bool, human: bool) -> Result<(), GaalError> {
         "gaal index status",
         "gaal ls -H --limit 5",
     ];
+    let update_commands = [
+        "brew upgrade buildoak/tap/gaal",
+        "cargo install gaal-cli --force",
+    ];
     let optional_after = [
         "gaal create-handoff latest --dry-run",
         "agent-mux config prompts",
@@ -764,6 +768,12 @@ fn run_onboard(dry_run: bool, human: bool) -> Result<(), GaalError> {
         for cmd in optional_after {
             println!("  {cmd}");
         }
+        println!();
+        println!("Existing install update:");
+        for cmd in update_commands {
+            println!("  {cmd}");
+        }
+        println!("  gaal onboard --dry-run");
         return Ok(());
     }
 
@@ -771,7 +781,7 @@ fn run_onboard(dry_run: bool, human: bool) -> Result<(), GaalError> {
         "ok": true,
         "kind": "onboarding",
         "dry_run": dry_run,
-        "summary": "Package installation only puts gaal on PATH. The installing agent should fetch the latest Gaal skill/reference from the repo, then run the first local index.",
+        "summary": "Package installation only puts gaal on PATH. The installing or updating agent should fetch the latest Gaal skill/reference from the repo, then run the first local index.",
         "no_side_effects": [
             "does_not_write_skill_files",
             "does_not_index_sessions",
@@ -784,6 +794,11 @@ fn run_onboard(dry_run: bool, human: bool) -> Result<(), GaalError> {
             "skill_md_url": SKILL_MD_URL,
             "first_run_reference_url": FIRST_RUN_URL,
             "instruction": "Install or load the latest skill directory from the GitHub repo path supported by the active agent harness. If the harness has no skill installer, read SKILL.md and skill/references/first-run.md into context before running setup commands."
+        },
+        "update": {
+            "binary_commands": update_commands,
+            "skill_instruction": "Package managers update the gaal binary, not copied agent skills. Refresh the local Gaal skill from the skill.directory_url through the active harness's supported skill-install mechanism, or read SKILL.md plus skill/references/first-run.md into context if no installer exists.",
+            "then_run": "gaal onboard --dry-run"
         },
         "first_launch": {
             "commands": first_launch,
