@@ -88,6 +88,17 @@ Do not guess setup. If Gaal is new on this machine or checkout, read:
 
 - `skill/references/first-run.md`
 
+Onboarding contract:
+
+```bash
+gaal onboard --dry-run
+```
+
+Use this after package install or binary update. It has no setup side effects:
+it does not write skill files, index sessions, schedule jobs, install agent-mux,
+or generate handoffs. It tells the installing agent where to load the latest
+Gaal skill/reference material and which first-launch commands to run.
+
 Minimal smoke path:
 
 ```bash
