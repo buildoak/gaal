@@ -647,11 +647,14 @@ gaal transcript <full-uuid-or-last8>
 ```
 
 Gaal reads `${GROK_HOME:-~/.grok}/sessions/<percent-encoded-cwd>/<full-uuid>/`.
-`updates.jsonl` is the primary visible source; `chat_history.jsonl` is fallback.
+`updates.jsonl` is the primary visible source; `chat_history.jsonl` is used only
+when updates contain no recoverable visible events, and the two are not merged.
 Thoughts, prompt context, system prompts, summaries/titles, rewind files, and
-unknown Grok files are excluded or reported as private/unknown rather than
-indexed as visible facts. Pattern-based secret redaction and tool-output size
-limits apply to derived Grok text only; both are defense-in-depth, not a
+non-text/image payload bodies are excluded from visible facts. Unrecognized
+Grok files and lifecycle records fail closed: their bodies are not indexed,
+while counts remain visible in `gaal inspect <id> --source` and
+`gaal index status` diagnostics. Pattern-based secret redaction and tool-output
+size limits apply to derived Grok text only; both are defense-in-depth, not a
 complete sanitization guarantee. Raw Grok files on disk are not modified.
 
 ## Docs

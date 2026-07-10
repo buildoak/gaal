@@ -115,6 +115,22 @@ If the binary or index is missing, follow the first-run reference. It owns
 source install, scheduled indexing, handoff onboarding, first-use prompts, and
 `GAAL_HOME` caveats.
 
+## Grok Trace Contract
+
+Treat a native Grok session as one multi-file directory, not one JSONL file.
+`updates.jsonl` is the primary visible source; `chat_history.jsonl` is fallback
+only when updates contain no recoverable visible events, and the two are not
+merged. The full UUID is canonical; its unique last-eight dash-stripped alias
+is accepted for lookup.
+
+Grok thoughts, prompt context, system prompts, summaries/titles, rewind files,
+and non-text/image payload bodies do not become visible facts. Unrecognized
+files and lifecycle records fail closed: their bodies are excluded and their
+counts stay available through `gaal inspect <id> --source` and
+`gaal index status`. Visible derived text receives best-effort pattern
+redaction and projected tool output is size-bounded, but neither makes raw Grok
+traces safe to publish. Gaal does not modify those raw source files.
+
 ## Session Taxonomy
 
 ```
