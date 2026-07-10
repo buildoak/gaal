@@ -14,8 +14,8 @@ description: |
 
 Session observability for AI coding agents.
 
-Codex, Claude Code, Grok Build, Antigravity CLI, Hermes, and Gemini leave traces
-on disk: JSONL, SQLite, JSON, and multi-file harness-owned artifacts. Raw, they're usually the
+Codex, Claude Code, Antigravity CLI, Hermes, and Gemini leave traces on disk:
+JSONL, SQLite, JSON, and harness-owned artifacts. Raw, they're usually the
 wrong interface for the next agent. Gaal keeps the raw evidence in place,
 indexes the boring facts, and renders smaller markdown views when an agent needs
 to read.
@@ -107,29 +107,12 @@ gaal index status
 gaal ls -H --limit 5
 ```
 
-An unfiltered `gaal index backfill` discovers every supported engine, including
-Grok. `--engine grok` narrows a diagnostic run; it is not required for normal
-or scheduled indexing.
+Use unfiltered `gaal index backfill` for normal indexing; it includes Grok.
+Reserve `--engine grok` for scoped diagnostics or repair.
 
 If the binary or index is missing, follow the first-run reference. It owns
 source install, scheduled indexing, handoff onboarding, first-use prompts, and
 `GAAL_HOME` caveats.
-
-## Grok Trace Contract
-
-Treat a native Grok session as one multi-file directory, not one JSONL file.
-`updates.jsonl` is the primary visible source; `chat_history.jsonl` is fallback
-only when updates contain no recoverable visible events, and the two are not
-merged. The full UUID is canonical; its unique last-eight dash-stripped alias
-is accepted for lookup.
-
-Grok thoughts, prompt context, system prompts, summaries/titles, rewind files,
-and non-text/image payload bodies do not become visible facts. Unrecognized
-files and lifecycle records fail closed: their bodies are excluded and their
-counts stay available through `gaal inspect <id> --source` and
-`gaal index status`. Visible derived text receives best-effort pattern
-redaction and projected tool output is size-bounded, but neither makes raw Grok
-traces safe to publish. Gaal does not modify those raw source files.
 
 ## Session Taxonomy
 
@@ -174,14 +157,9 @@ gaal find-salt GAAL_SALT_<hex>
 the session log before scanning. Pass the literal token printed by `gaal salt`;
 do not rely on shell variables persisting across agent tool calls.
 
-`find-salt` scans Claude Code, Codex, Antigravity traces, and Grok visible source
-artifacts for executed tool/action output. It does not identify Gemini JSON
-sessions or Hermes SQLite sessions. For Grok, the legacy `jsonl_path` output
-field contains the session directory because native Grok sessions are
-multi-file artifacts.
-
-If a handoff is needed after self-identification, inspect the returned source
-artifact path and run a dry-run first:
+`find-salt` scans Claude Code, Codex, Antigravity, and Grok visible sources; it
+does not support Gemini or Hermes. For Grok, legacy `jsonl_path` is the session
+directory. Inspect the returned source artifact before a handoff dry run:
 
 ```bash
 gaal create-handoff --jsonl /path/to/session.jsonl --dry-run
@@ -252,6 +230,7 @@ Full command flags, output schemas, format comparison tables, and operational de
 | Need | Where | Read when |
 |------|-------|-----------|
 | First run | `skill/references/first-run.md` | First setup, missing binary, missing index, scheduled indexing, handoff onboarding, first useful prompts |
+| Grok | [Grok playbook](references/grok-playbook.md) | Indexing, identity, privacy, diagnostics, or troubleshooting Grok sessions |
 | Verb reference | `skill/references/verb-reference.md` | Exact flags, supported engines, and command-specific caveats |
 | Troubleshooting | `skill/references/troubleshooting.md` | No index, no results, ambiguous IDs, handoff provider issues |
 | Command reference by group | `docs/commands/` | Public command docs and output examples |
