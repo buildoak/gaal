@@ -73,6 +73,7 @@ pub enum LsEngine {
     Gemini,
     Agy,
     Hermes,
+    Grok,
 }
 
 /// Supported `gaal ls --sort` fields.
@@ -305,6 +306,7 @@ impl LsEngine {
             Self::Gemini => "gemini",
             Self::Agy => "agy",
             Self::Hermes => "hermes",
+            Self::Grok => "grok",
         }
     }
 }

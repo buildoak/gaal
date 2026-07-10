@@ -1,0 +1,17 @@
+{
+  "agent_name": "grok-build-plan",
+  "chat_format_version": 2,
+  "created_at": "2026-07-09T11:30:11.000000Z",
+  "current_model_id": "grok-4.5",
+  "generated_title": "Tool fixture private title",
+  "git_root_dir": "/tmp/gaal-grok-fixture/",
+  "grok_home": "/tmp/grok-fixture-home/.grok",
+  "last_active_at": "2026-07-09T11:30:25.000000Z",
+  "num_chat_messages": 5,
+  "num_messages": 6,
+  "reasoning_effort": "low",
+  "request_id": "req-fixture-2",
+  "sandbox_profile": "off",
+  "session_summary": "Tool-heavy fixture private summary",
+  "updated_at": "2026-07-09T11:30:25.000000Z"
+}

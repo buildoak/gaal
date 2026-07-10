@@ -26,6 +26,7 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
         .map_err(map_db_err)?;
 
     migrate_sessions_engine_check(conn)?;
+    migrate_session_aliases_engine_check(conn)?;
 
     // Gate the migration behind a column-existence check so we don't attempt
     // ALTER TABLE (which requires a write lock) on every startup.
@@ -110,6 +111,7 @@ pub fn init_db(conn: &Connection) -> Result<(), GaalError> {
 
     conn.execute_batch(DB_SCHEMA).map_err(map_db_err)?;
     crate::db::queries::backfill_hermes_aliases(conn)?;
+    crate::db::queries::backfill_grok_aliases(conn)?;
     Ok(())
 }
 
@@ -118,16 +120,7 @@ fn migrate_sessions_engine_check(conn: &Connection) -> Result<(), GaalError> {
         return Ok(());
     }
 
-    let agy_probe_inserted = conn
-        .execute(
-            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('__gaal_agy_probe__', 'agy', '1970-01-01T00:00:00Z', '__probe__')",
-            [],
-        )
-        .is_ok();
-
-    if agy_probe_inserted {
-        conn.execute("DELETE FROM sessions WHERE id = '__gaal_agy_probe__'", [])
-            .ok();
+    if sessions_accept_all_known_engines(conn)? {
         return Ok(());
     }
 
@@ -172,6 +165,107 @@ fn migrate_sessions_engine_check(conn: &Connection) -> Result<(), GaalError> {
     }
 
     migration_result
+}
+
+fn migrate_session_aliases_engine_check(conn: &Connection) -> Result<(), GaalError> {
+    if !table_exists(conn, "session_aliases")? {
+        return Ok(());
+    }
+
+    if session_aliases_accept_all_known_engines(conn)? {
+        return Ok(());
+    }
+
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
+        .map_err(map_db_err)?;
+
+    let migration_result = (|| {
+        conn.execute_batch(SESSION_ALIASES_TABLE_WITH_ALL_ENGINES)
+            .map_err(map_db_err)?;
+        conn.execute(
+            r#"
+            INSERT INTO session_aliases_new (alias, session_id, engine, scheme, counter, created_at)
+            SELECT alias, session_id, engine, scheme, counter, created_at FROM session_aliases
+            "#,
+            [],
+        )
+        .map_err(map_db_err)?;
+        conn.execute_batch(
+            r#"
+            DROP TABLE session_aliases;
+            ALTER TABLE session_aliases_new RENAME TO session_aliases;
+            "#,
+        )
+        .map_err(map_db_err)?;
+        Ok(())
+    })();
+
+    let reenable_fk_result = conn.execute_batch("PRAGMA foreign_keys = ON;");
+    if let Err(err) = reenable_fk_result {
+        return Err(map_db_err(err));
+    }
+
+    migration_result
+}
+
+fn sessions_accept_all_known_engines(conn: &Connection) -> Result<bool, GaalError> {
+    for engine in KNOWN_ENGINES {
+        let probe_id = format!("__gaal_{engine}_probe__");
+        let inserted = conn
+            .execute(
+                "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES (?1, ?2, '1970-01-01T00:00:00Z', '__probe__')",
+                (&probe_id, engine),
+            )
+            .is_ok();
+        if inserted {
+            conn.execute("DELETE FROM sessions WHERE id = ?1", [&probe_id])
+                .ok();
+            continue;
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn session_aliases_accept_all_known_engines(conn: &Connection) -> Result<bool, GaalError> {
+    let probe_session_id = "__gaal_alias_engine_probe_session__";
+    let inserted_session = conn
+        .execute(
+            "INSERT OR IGNORE INTO sessions (id, engine, started_at, jsonl_path) VALUES (?1, 'claude', '1970-01-01T00:00:00Z', '__probe__')",
+            [probe_session_id],
+        )
+        .is_ok();
+    if !inserted_session {
+        return Ok(false);
+    }
+
+    for engine in KNOWN_ENGINES {
+        let alias = format!("__gaal_{engine}_alias_probe__");
+        let inserted = conn
+            .execute(
+                "INSERT INTO session_aliases (alias, session_id, engine, scheme, counter, created_at) VALUES (?1, ?2, ?3, '__probe__', 0, 0)",
+                (&alias, probe_session_id, engine),
+            )
+            .is_ok();
+        if inserted {
+            conn.execute("DELETE FROM session_aliases WHERE alias = ?1", [&alias])
+                .ok();
+            continue;
+        }
+        conn.execute(
+            "DELETE FROM sessions WHERE id = ?1 AND jsonl_path = '__probe__'",
+            [probe_session_id],
+        )
+        .ok();
+        return Ok(false);
+    }
+
+    conn.execute(
+        "DELETE FROM sessions WHERE id = ?1 AND jsonl_path = '__probe__'",
+        [probe_session_id],
+    )
+    .ok();
+    Ok(true)
 }
 
 fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, GaalError> {
@@ -224,10 +318,12 @@ const SESSION_COLUMNS: &[&str] = &[
     "gemini_summary",
 ];
 
+const KNOWN_ENGINES: &[&str] = &["claude", "codex", "gemini", "agy", "hermes", "grok"];
+
 const SESSIONS_TABLE_WITH_ALL_ENGINES: &str = r#"
 CREATE TABLE sessions_new (
     id TEXT PRIMARY KEY,
-    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes')),
+    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes', 'grok')),
     model TEXT,
     cwd TEXT,
     started_at TEXT NOT NULL,
@@ -251,12 +347,24 @@ CREATE TABLE sessions_new (
 );
 "#;
 
+const SESSION_ALIASES_TABLE_WITH_ALL_ENGINES: &str = r#"
+CREATE TABLE session_aliases_new (
+    alias TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes', 'grok')),
+    scheme TEXT NOT NULL,
+    counter INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    UNIQUE(session_id, engine, scheme)
+);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn migrates_sessions_check_constraint_to_allow_gemini_hermes_and_agy() {
+    fn migrates_sessions_check_constraint_to_allow_gemini_hermes_agy_and_grok() {
         let conn = Connection::open_in_memory().expect("open db");
         conn.execute_batch(
             r#"
@@ -306,6 +414,11 @@ mod tests {
             [],
         )
         .expect("insert agy session");
+        conn.execute(
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('019f46d3-0000-7000-8000-000000000001', 'grok', '2026-01-05T00:00:00Z', '/tmp/grok-session')",
+            [],
+        )
+        .expect("insert grok session");
 
         let fact_count: i64 = conn
             .query_row(
@@ -318,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_sessions_check_constraint_from_hermes_schema_to_allow_agy() {
+    fn migrates_sessions_check_constraint_from_hermes_schema_to_allow_agy_and_grok() {
         let conn = Connection::open_in_memory().expect("open db");
         conn.execute_batch(
             r#"
@@ -358,6 +471,11 @@ mod tests {
             [],
         )
         .expect("insert agy session");
+        conn.execute(
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('019f46d3-0000-7000-8000-000000000002', 'grok', '2026-01-05T00:00:00Z', '/tmp/grok-session')",
+            [],
+        )
+        .expect("insert grok session");
 
         let hermes_count: i64 = conn
             .query_row(
@@ -376,6 +494,60 @@ mod tests {
             )
             .expect("count hermes aliases");
         assert_eq!(alias_count, 1);
+    }
+
+    #[test]
+    fn migrates_session_aliases_check_constraint_to_allow_grok() {
+        let conn = Connection::open_in_memory().expect("open db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes')),
+                started_at TEXT NOT NULL,
+                jsonl_path TEXT NOT NULL
+            );
+            CREATE TABLE session_aliases (
+                alias TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes')),
+                scheme TEXT NOT NULL,
+                counter INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                UNIQUE(session_id, engine, scheme)
+            );
+            INSERT INTO sessions (id, engine, started_at, jsonl_path)
+            VALUES ('sess-hermes', 'hermes', '2026-01-03T00:00:00Z', '/tmp/state.db');
+            INSERT INTO session_aliases (alias, session_id, engine, scheme, counter, created_at)
+            VALUES ('abcdefgh', 'sess-hermes', 'hermes', 'hermes-v1', 0, 0);
+            "#,
+        )
+        .expect("seed old alias schema");
+
+        init_db(&conn).expect("migrate schema");
+
+        conn.execute(
+            "INSERT INTO sessions (id, engine, started_at, jsonl_path) VALUES ('019f46d3-0000-7000-8000-000000000003', 'grok', '2026-01-05T00:00:00Z', '/tmp/grok-session')",
+            [],
+        )
+        .expect("insert grok session");
+        conn.execute(
+            r#"
+            INSERT INTO session_aliases (alias, session_id, engine, scheme, counter, created_at)
+            VALUES ('019f46d3-0000-7000-8000-000000000003', '019f46d3-0000-7000-8000-000000000003', 'grok', 'grok-full-id', 0, 0)
+            "#,
+            [],
+        )
+        .expect("insert grok alias");
+
+        let hermes_alias_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_aliases WHERE alias = 'abcdefgh' AND session_id = 'sess-hermes'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count hermes aliases");
+        assert_eq!(hermes_alias_count, 1);
     }
 }
 
@@ -444,7 +616,9 @@ pub fn open_db_readonly() -> Result<Connection, GaalError> {
     conn.busy_timeout(Duration::from_millis(5_000))
         .map_err(map_db_err)?;
 
-    if crate::db::queries::hermes_alias_registry_needs_migration(&conn)? {
+    if crate::db::queries::hermes_alias_registry_needs_migration(&conn)?
+        || crate::db::queries::grok_alias_registry_needs_migration(&conn)?
+    {
         drop(conn);
         return open_db();
     }

@@ -154,8 +154,10 @@ gaal find-salt GAAL_SALT_<hex>
 the session log before scanning. Pass the literal token printed by `gaal salt`;
 do not rely on shell variables persisting across agent tool calls.
 
-`find-salt` scans Claude Code, Codex, and Antigravity JSONL traces. It does not
-identify Gemini JSON sessions or Hermes SQLite sessions.
+`find-salt` scans Claude Code, Codex, Antigravity JSONL traces, and Grok visible
+session sources. It does not identify Gemini JSON sessions or Hermes SQLite
+sessions. For Grok, the returned `jsonl_path` is the session directory because
+native Grok sessions are multi-file artifacts.
 
 If a handoff is needed after self-identification, inspect the returned JSONL
 path and run a dry-run first:

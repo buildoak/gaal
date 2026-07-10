@@ -16,7 +16,7 @@ use crate::parser::event::{
     ContentBlock as ParserContentBlock, EventKind, SessionEvent, ToolUseEvent,
 };
 use crate::parser::types::Engine;
-use crate::parser::{agy, claude, codex, detect_engine, gemini, hermes};
+use crate::parser::{agy, claude, codex, detect_engine, gemini, grok, hermes};
 
 // Dubai timezone: UTC+4.
 const DUBAI_OFFSET_SECS: i32 = 4 * 3600;
@@ -227,6 +227,9 @@ pub fn render_session_markdown(path: &Path) -> Result<String> {
         Engine::Hermes => {
             bail!("Hermes sessions require a session id; use render_hermes_session_markdown")
         }
+        Engine::Grok => {
+            bail!("Grok sessions require native session-directory rendering")
+        }
     };
     let session = events_to_session_data(&events, path, engine);
     Ok(session_to_markdown(&session))
@@ -253,6 +256,9 @@ pub fn render_session_markdown_with_db(
                 bail!("Hermes sessions require override_session_id")
             };
             hermes::parse_events(path, session_id)?
+        }
+        Engine::Grok => {
+            bail!("Grok sessions require native session-directory rendering")
         }
     };
     let mut session = events_to_session_data(&events, path, engine);
@@ -289,6 +295,14 @@ pub fn render_hermes_session_markdown(
     Ok(session_to_markdown(&session))
 }
 
+/// Render one native Grok session directory.
+pub fn render_grok_session_markdown(path: &Path, session_id: &str) -> Result<String> {
+    let events = grok::parse_events(path, session_id)?;
+    let mut session = events_to_session_data(&events, path, Engine::Grok);
+    session.session_id = session_id.to_string();
+    Ok(session_to_markdown(&session))
+}
+
 /// Render a source-backed activity slice for one session.
 ///
 /// The full source is parsed first, then the normalized SessionData is sliced.
@@ -310,6 +324,9 @@ pub fn render_session_activity_markdown_with_db(
                 bail!("Hermes activity rendering requires override_session_id")
             };
             hermes::parse_events(path, session_id)?
+        }
+        Engine::Grok => {
+            bail!("Grok sessions require native session-directory activity rendering")
         }
     };
     let mut session = events_to_session_data(&events, path, engine);
@@ -350,6 +367,18 @@ pub fn render_hermes_session_activity_markdown(
         }
     }
 
+    Ok(render_activity_slice(session, window))
+}
+
+/// Render an activity slice for one native Grok session directory.
+pub fn render_grok_session_activity_markdown(
+    path: &Path,
+    session_id: &str,
+    window: &TimeWindow,
+) -> Result<ActivityRender> {
+    let events = grok::parse_events(path, session_id)?;
+    let mut session = events_to_session_data(&events, path, Engine::Grok);
+    session.session_id = session_id.to_string();
     Ok(render_activity_slice(session, window))
 }
 
@@ -474,6 +503,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Gemini => "Gemini",
         Engine::Agy => "Agy",
         Engine::Hermes => "Hermes",
+        Engine::Grok => "Grok",
     }
 }
 
@@ -2283,7 +2313,7 @@ fn render_conversation(
     // Accumulator for merging tool-only assistant turns.
     let mut pending_tools: Vec<ToolAnnotation> = Vec::new();
     let mut pending_time: Option<String> = None;
-    let include_tool_results = matches!(engine, Engine::Hermes | Engine::Agy);
+    let include_tool_results = matches!(engine, Engine::Hermes | Engine::Agy | Engine::Grok);
 
     for turn in turns {
         let ts = turn.timestamp_start.as_deref();

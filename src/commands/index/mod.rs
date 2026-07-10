@@ -20,8 +20,8 @@ use crate::commands::search;
 use crate::config::{gaal_home, load_config};
 use crate::db::open_db;
 use crate::db::queries::{
-    delete_session, get_index_status, get_meta, get_session, insert_facts_batch, set_meta,
-    upsert_session, SessionRow,
+    delete_session, get_grok_diagnostic_summary, get_index_status, get_meta, get_session,
+    insert_facts_batch, replace_grok_source_state, set_meta, upsert_session, SessionRow,
 };
 use crate::discovery::codex::truncate_codex_id;
 use crate::discovery::{discover_sessions_with_cutoff, DiscoveredSession};
@@ -136,16 +136,12 @@ pub fn run_backfill(args: BackfillArgs) -> Result<(), GaalError> {
     let invalid_codex_error_sessions = load_codex_invalid_error_sessions(&conn)?;
 
     let run_start = SystemTime::now();
-    let engines = backfill_engines();
+    let engines = engine_filter
+        .map(|engine| vec![engine])
+        .unwrap_or_else(backfill_engines);
     let mut any_engine_indexed = false;
 
     for engine in engines {
-        if let Some(requested) = engine_filter {
-            if requested != engine {
-                continue;
-            }
-        }
-
         let cursor_key = backfill_cursor_key(engine);
         let cursor = get_meta(&conn, cursor_key)
             .map_err(GaalError::from)?
@@ -220,6 +216,7 @@ fn backfill_cursor_key(engine: Engine) -> &'static str {
         Engine::Gemini => "backfill:gemini",
         Engine::Agy => "backfill:agy",
         Engine::Hermes => "backfill:hermes",
+        Engine::Grok => "backfill:grok",
     }
 }
 
@@ -356,8 +353,9 @@ fn run_engine_pass(
 pub fn run_status(human: bool) -> Result<(), GaalError> {
     let conn = open_db()?;
     let status = get_index_status(&conn)?;
+    let grok = get_grok_diagnostic_summary(&conn)?;
     if human {
-        print_status_human(&status);
+        print_status_human(&status, &grok);
         return Ok(());
     }
 
@@ -370,12 +368,16 @@ pub fn run_status(human: bool) -> Result<(), GaalError> {
         "handoffs_total": status.handoffs_total,
         "last_indexed_at": status.last_indexed_at,
         "oldest_session": status.oldest_session,
-        "newest_session": status.newest_session
+        "newest_session": status.newest_session,
+        "grok": grok
     });
     print_json(&payload).map_err(GaalError::from)
 }
 
-fn print_status_human(status: &crate::db::queries::IndexStatus) {
+fn print_status_human(
+    status: &crate::db::queries::IndexStatus,
+    grok: &crate::db::queries::GrokDiagnosticSummary,
+) {
     println!("Index status");
     println!("Sessions: {}", status.sessions_total);
     println!("Facts: {}", status.facts_total);
@@ -403,40 +405,70 @@ fn print_status_human(status: &crate::db::queries::IndexStatus) {
         println!();
         print_table(&["Engine", "Sessions"], &rows);
     }
+    if grok.source_artifacts > 0 || grok.parser_observations > 0 {
+        println!();
+        println!("Grok diagnostics");
+        println!("Sessions with artifacts: {}", grok.sessions_with_artifacts);
+        println!("Source artifacts: {}", grok.source_artifacts);
+        println!("Parser observations: {}", grok.parser_observations);
+        println!("Unknown records: {}", grok.unknown_records);
+        println!("Malformed records: {}", grok.malformed_records);
+        println!("Private records: {}", grok.private_records);
+        println!("Redacted records: {}", grok.redacted_records);
+    }
 }
 
 /// Run `gaal index reindex`.
 pub fn run_reindex(args: ReindexArgs) -> Result<(), GaalError> {
-    let conn = open_db()?;
+    let mut conn = open_db()?;
     let existing = get_session(&conn, &args.id)?.ok_or_else(|| GaalError::NotFound(args.id))?;
     let path = PathBuf::from(&existing.jsonl_path);
     if !path.exists() {
         return Err(GaalError::NotFound(existing.jsonl_path));
     }
 
-    let parsed = if existing.engine == "hermes" {
-        crate::parser::hermes::parse_session(&path, &existing.id).map_err(GaalError::from)?
+    let (parsed, offset) = if existing.engine == "hermes" {
+        (
+            crate::parser::hermes::parse_session(&path, &existing.id).map_err(GaalError::from)?,
+            file_len_i64(&path)?,
+        )
+    } else if existing.engine == "grok" {
+        (
+            crate::parser::grok::parse_session(&path, &existing.id).map_err(GaalError::from)?,
+            u64_to_i64(crate::discovery::grok::session_index_key(&path))?,
+        )
     } else {
-        parse_session(&path).map_err(GaalError::from)?
+        (
+            parse_session(&path).map_err(GaalError::from)?,
+            file_len_i64(&path)?,
+        )
     };
-    let offset = file_len_i64(&path)?;
     let mut row = build_full_session_row(&parsed, &path, offset);
     row.id = existing.id.clone();
     row.session_type = existing.session_type.clone();
     row.parent_id = existing.parent_id.clone();
     row.subagent_type = existing.subagent_type.clone();
     let facts = normalize_facts(parsed.facts, &existing.id);
+    let source_state =
+        (existing.engine == "grok").then(|| crate::parser::grok::source_state(&path, &existing.id));
 
-    conn.execute(
+    let tx = conn
+        .savepoint_with_name("reindex_session")
+        .map_err(GaalError::from)?;
+    tx.execute(
         "DELETE FROM facts WHERE session_id = :session_id",
         named_params! { ":session_id": &existing.id },
     )
     .map_err(GaalError::from)?;
 
-    upsert_session(&conn, &row)?;
+    upsert_session(&tx, &row)?;
     if !facts.is_empty() {
-        insert_facts_batch(&conn, &facts)?;
+        insert_facts_batch(&tx, &facts)?;
     }
+    if let Some(state) = &source_state {
+        replace_grok_source_state(&tx, &existing.id, state)?;
+    }
+    tx.commit().map_err(GaalError::from)?;
     search::build_search_index(&conn)?;
 
     let payload = ReindexSummary {
@@ -509,6 +541,7 @@ pub(crate) fn index_discovered_session(
                 && discovered.engine != Engine::Gemini
                 && discovered.engine != Engine::Agy
                 && discovered.engine != Engine::Hermes
+                && discovered.engine != Engine::Grok
         })
         .unwrap_or(false);
 
@@ -595,6 +628,8 @@ pub(crate) fn index_discovered_session(
     apply_codex_subagent_link(&mut session_row, discovered, parsed.meta.agent_role.clone());
     apply_hermes_lineage(&mut session_row, discovered);
     let facts = normalize_facts(parsed.facts, target_id);
+    let source_state = (discovered.engine == Engine::Grok)
+        .then(|| crate::parser::grok::source_state(&discovered.path, target_id));
 
     // Wrap delete-old-facts + upsert + insert-facts + links in a single
     // savepoint to reduce lock acquisition cycles under parallel load.
@@ -615,6 +650,9 @@ pub(crate) fn index_discovered_session(
     upsert_session(&tx, &session_row)?;
     if !facts.is_empty() {
         insert_facts_batch(&tx, &facts)?;
+    }
+    if let Some(state) = &source_state {
+        replace_grok_source_state(&tx, target_id, state)?;
     }
     tx.commit().map_err(GaalError::from)?;
     if discovered.engine == Engine::Claude {
@@ -1238,6 +1276,8 @@ fn render_discovered_markdown(
             conn,
             &discovered.id,
         )
+    } else if discovered.engine == Engine::Grok {
+        crate::render::session_md::render_grok_session_markdown(&discovered.path, &discovered.id)
     } else {
         crate::render::session_md::render_session_markdown_with_db(
             &discovered.path,

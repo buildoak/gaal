@@ -377,6 +377,7 @@ enum Engine {
     Gemini,
     Agy,
     Hermes,
+    Grok,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -384,6 +385,7 @@ enum SaltEngine {
     Claude,
     Codex,
     Agy,
+    Grok,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -823,6 +825,7 @@ fn convert_ls_engine(engine: Engine) -> gaal::commands::ls::LsEngine {
         Engine::Gemini => gaal::commands::ls::LsEngine::Gemini,
         Engine::Agy => gaal::commands::ls::LsEngine::Agy,
         Engine::Hermes => gaal::commands::ls::LsEngine::Hermes,
+        Engine::Grok => gaal::commands::ls::LsEngine::Grok,
     }
 }
 
@@ -878,6 +881,7 @@ fn convert_engine_string(engine: Engine) -> String {
         Engine::Gemini => "gemini".to_string(),
         Engine::Agy => "agy".to_string(),
         Engine::Hermes => "hermes".to_string(),
+        Engine::Grok => "grok".to_string(),
     }
 }
 
@@ -886,6 +890,7 @@ fn convert_salt_engine_string(engine: SaltEngine) -> String {
         SaltEngine::Claude => "claude".to_string(),
         SaltEngine::Codex => "codex".to_string(),
         SaltEngine::Agy => "agy".to_string(),
+        SaltEngine::Grok => "grok".to_string(),
     }
 }
 

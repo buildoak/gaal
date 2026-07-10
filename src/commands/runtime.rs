@@ -190,7 +190,7 @@ fn extract_session_id(record: &Value, engine: Engine) -> Option<String> {
             .or_else(|| record.get("session_id"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        Engine::Hermes => None,
+        Engine::Hermes | Engine::Grok => None,
     }
 }
 
@@ -240,7 +240,7 @@ fn extract_usage_sample(record: &Value, engine: Engine) -> Option<UsageSample> {
                 return None;
             }
         }
-        Engine::Gemini | Engine::Agy | Engine::Hermes => return None,
+        Engine::Gemini | Engine::Agy | Engine::Hermes | Engine::Grok => return None,
     };
 
     (tokens > 0).then_some(UsageSample {
@@ -264,7 +264,7 @@ fn extract_actions(record: &Value, engine: Engine, ts: Option<String>) -> Vec<Ac
         Engine::Claude => extract_claude_actions(record, ts),
         Engine::Codex => extract_codex_actions(record, ts),
         Engine::Agy => extract_agy_actions(record, ts),
-        Engine::Gemini | Engine::Hermes => Vec::new(),
+        Engine::Gemini | Engine::Hermes | Engine::Grok => Vec::new(),
     }
 }
 

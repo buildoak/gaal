@@ -19,6 +19,8 @@ pub enum Engine {
     Agy,
     /// Hermes Agent SQLite session store.
     Hermes,
+    /// Grok Build native session directory.
+    Grok,
 }
 
 impl Display for Engine {
@@ -29,6 +31,7 @@ impl Display for Engine {
             Self::Gemini => "gemini",
             Self::Agy => "agy",
             Self::Hermes => "hermes",
+            Self::Grok => "grok",
         };
         write!(f, "{value}")
     }
@@ -44,6 +47,7 @@ impl FromStr for Engine {
             "gemini" => Ok(Self::Gemini),
             "agy" => Ok(Self::Agy),
             "hermes" => Ok(Self::Hermes),
+            "grok" => Ok(Self::Grok),
             other => Err(GaalError::ParseError(format!("invalid engine: {other}"))),
         }
     }

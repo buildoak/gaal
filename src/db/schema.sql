@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
-    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes')),
+    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes', 'grok')),
     model TEXT,
     cwd TEXT,
     started_at TEXT NOT NULL,
@@ -59,11 +59,51 @@ CREATE TABLE IF NOT EXISTS session_tags (
 CREATE TABLE IF NOT EXISTS session_aliases (
     alias TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes')),
+    engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'gemini', 'agy', 'hermes', 'grok')),
     scheme TEXT NOT NULL,
     counter INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     UNIQUE(session_id, engine, scheme)
+);
+
+CREATE TABLE IF NOT EXISTS source_artifacts (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    visibility TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    mtime_unix INTEGER,
+    fingerprint INTEGER NOT NULL DEFAULT 0,
+    parse_status TEXT NOT NULL,
+    visible_count INTEGER NOT NULL DEFAULT 0,
+    private_count INTEGER NOT NULL DEFAULT 0,
+    redacted_count INTEGER NOT NULL DEFAULT 0,
+    unknown_count INTEGER NOT NULL DEFAULT 0,
+    malformed_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, role, rel_path)
+);
+
+CREATE TABLE IF NOT EXISTS grok_session_meta (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_name TEXT,
+    chat_format_version INTEGER,
+    current_model_id TEXT,
+    reasoning_effort TEXT,
+    sandbox_profile TEXT,
+    source_schema_version TEXT,
+    visibility_policy_version TEXT
+);
+
+CREATE TABLE IF NOT EXISTS parser_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    parser TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    source_role TEXT,
+    source_ref TEXT,
+    count INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -85,3 +125,5 @@ CREATE INDEX IF NOT EXISTS idx_handoffs_substance ON handoffs(substance);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON session_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_session_aliases_session ON session_aliases(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_aliases_engine ON session_aliases(engine);
+CREATE INDEX IF NOT EXISTS idx_source_artifacts_session ON source_artifacts(session_id);
+CREATE INDEX IF NOT EXISTS idx_parser_observations_session ON parser_observations(session_id);

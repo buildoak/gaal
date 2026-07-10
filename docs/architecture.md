@@ -29,11 +29,11 @@ src/
     who.rs             Inverted attribution queries
     search.rs          BM25 full-text search via Tantivy
     recall.rs          Ranked handoff retrieval for session continuity
-    resolve.rs         Short ID, prefix, and Hermes alias resolution
+    resolve.rs         Short ID, prefix, Hermes alias, and Grok last-8 alias resolution
     transcript.rs      Markdown transcript rendering
     handoff.rs         LLM-powered handoff generation (create-handoff)
     salt.rs            Unique token generation for self-identification
-    find.rs            JSONL file discovery by salt token (find-salt)
+    find.rs            source discovery by salt token (find-salt)
     index/             Index maintenance (module directory)
       mod.rs           backfill, reindex, prune, status
       recover_orphans.rs  Orphaned subagent recovery

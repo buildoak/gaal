@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 
 use crate::db::open_db_readonly;
 use crate::db::queries::{
-    get_facts, get_handoff, get_session, get_tags, resolve_session_ids, SessionRow,
+    get_facts, get_grok_source_state, get_handoff, get_session, get_tags, resolve_session_ids,
+    GrokSourceState, SessionRow,
 };
 use crate::error::GaalError;
 use crate::model::{
@@ -134,6 +135,7 @@ struct InspectData {
     command_count: Option<usize>,
     error_count: Option<usize>,
     git_op_count: Option<usize>,
+    grok_source: Option<GrokSourceState>,
 }
 
 /// Execute the `gaal inspect` command.
@@ -454,6 +456,11 @@ fn build_inspect_data(
         command_count,
         error_count,
         git_op_count,
+        grok_source: if args.source && row.engine == "grok" {
+            Some(get_grok_source_state(conn, &row.id)?)
+        } else {
+            None
+        },
     })
 }
 
@@ -471,6 +478,7 @@ fn to_json_value(data: InspectData, args: &InspectArgs) -> Result<Value, GaalErr
         command_count,
         error_count,
         git_op_count,
+        grok_source,
     } = data;
 
     let mut map = match serde_json::to_value(record)
@@ -550,6 +558,13 @@ fn to_json_value(data: InspectData, args: &InspectArgs) -> Result<Value, GaalErr
 
     if !args.source {
         map.remove("jsonl_path");
+    } else if let Some(source_state) = grok_source {
+        map.insert(
+            "source".to_string(),
+            serde_json::to_value(source_state).map_err(|e| {
+                GaalError::Internal(format!("failed to serialize source state: {e}"))
+            })?,
+        );
     }
 
     if let Some(trace) = trace {
@@ -965,8 +980,10 @@ fn extract_cache_tokens(row: &SessionRow) -> (i64, i64) {
     let engine = match row.engine.as_str() {
         "claude" => crate::parser::Engine::Claude,
         "codex" => crate::parser::Engine::Codex,
+        "gemini" => crate::parser::Engine::Gemini,
         "agy" => crate::parser::Engine::Agy,
         "hermes" => crate::parser::Engine::Hermes,
+        "grok" => crate::parser::Engine::Grok,
         _ => return (0, 0),
     };
 
@@ -976,6 +993,7 @@ fn extract_cache_tokens(row: &SessionRow) -> (i64, i64) {
         crate::parser::Engine::Gemini => crate::parser::gemini::parse_events(path),
         crate::parser::Engine::Agy => crate::parser::agy::parse_events(path),
         crate::parser::Engine::Hermes => crate::parser::hermes::parse_events(path, &row.id),
+        crate::parser::Engine::Grok => return (0, 0),
     };
 
     let events = match events {
@@ -1174,6 +1192,19 @@ fn print_human(records: &[InspectData], args: &InspectArgs) {
 
         if args.source {
             println!("Source: {}", record.jsonl_path);
+            if let Some(source) = &data.grok_source {
+                println!("Grok source artifacts: {}", source.artifacts.len());
+                println!("Grok parser observations: {}", source.observations.len());
+                for observation in source.observations.iter().take(5) {
+                    println!(
+                        "  - [{}] {}: {} ({})",
+                        observation.severity,
+                        observation.kind,
+                        observation.message,
+                        observation.count
+                    );
+                }
+            }
         }
 
         if args.tokens {

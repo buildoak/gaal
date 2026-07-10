@@ -39,13 +39,31 @@ pub fn is_hermes_alias(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || (b'2'..=b'7').contains(&byte))
 }
 
+/// Last 8 hex characters of a dash-stripped Grok UUID.
+///
+/// Grok frequently emits UUIDv7-shaped IDs with timestamp-heavy prefixes, so
+/// this mirrors Codex's human lookup convention while preserving the full UUID
+/// as the canonical session ID.
+pub fn grok_alias_candidate(session_id: &str) -> Option<String> {
+    let hex: String = session_id.chars().filter(|c| *c != '-').collect();
+    if hex.len() < 8 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(hex[hex.len() - 8..].to_ascii_lowercase())
+}
+
+pub fn is_grok_alias(value: &str) -> bool {
+    value.len() == 8 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// Return the filename/session-display identifier used for derived artifacts.
 ///
-/// Claude, Codex, Gemini, and agy keep the historic first-8 convention. Hermes IDs
-/// start with date/time components, so first-8 aliases collide across sessions.
+/// Claude, Gemini, and agy keep the historic first-8 convention. Codex session
+/// IDs are already shortened during discovery. Hermes and Grok keep full
+/// sanitized IDs for artifacts; their short IDs live in the alias registry.
 pub fn session_artifact_id(engine: &str, id: &str) -> String {
     let sanitized = sanitize_filename(id);
-    if engine == "hermes" {
+    if matches!(engine, "hermes" | "grok") {
         sanitized
     } else {
         sanitized.chars().take(8).collect()
@@ -105,6 +123,20 @@ mod tests {
             session_artifact_id("hermes", "20260504_141414_childbb"),
             "20260504_141414_childbb"
         );
-        assert_eq!(session_artifact_id("codex", "abcdef123456"), "abcdef12");
+        assert_eq!(
+            session_artifact_id("grok", "019f46d3-79f7-74a2-a11c-0d1df7cc19be"),
+            "019f46d3-79f7-74a2-a11c-0d1df7cc19be"
+        );
+        assert_eq!(session_artifact_id("claude", "abcdef123456"), "abcdef12");
+    }
+
+    #[test]
+    fn grok_alias_candidate_uses_last_8_dash_stripped_hex() {
+        assert_eq!(
+            grok_alias_candidate("019f4711-2e99-78a3-a9ec-6fd31874b168").as_deref(),
+            Some("1874b168")
+        );
+        assert!(is_grok_alias("1874b168"));
+        assert_eq!(grok_alias_candidate("not-a-uuid"), None);
     }
 }

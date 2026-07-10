@@ -41,6 +41,7 @@ gaal create-handoff [OPTIONS] [ID]
 
 - a session ID
 - a registered Hermes alias
+- a Grok last-8 alias
 - `today`
 - `latest`
 

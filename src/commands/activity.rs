@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, SecondsFormat, Utc};
 use serde::Serialize;
@@ -121,13 +122,17 @@ pub fn run(args: ActivityArgs) -> Result<(), GaalError> {
             continue;
         }
 
-        let before_stat = fs::metadata(source)
-            .ok()
-            .map(|m| (m.len(), m.modified().ok()));
+        let before_stat = source_render_state(&session.engine, source);
         let mut activity = match if session.engine == "hermes" {
             crate::render::session_md::render_hermes_session_activity_markdown(
                 source,
                 &conn,
+                &session.id,
+                &window,
+            )
+        } else if session.engine == "grok" {
+            crate::render::session_md::render_grok_session_activity_markdown(
+                source,
                 &session.id,
                 &window,
             )
@@ -149,9 +154,7 @@ pub fn run(args: ActivityArgs) -> Result<(), GaalError> {
                 continue;
             }
         };
-        let after_stat = fs::metadata(source)
-            .ok()
-            .map(|m| (m.len(), m.modified().ok()));
+        let after_stat = source_render_state(&session.engine, source);
         if before_stat != after_stat {
             activity
                 .warnings
@@ -411,6 +414,15 @@ fn timestamp_before(left: &str, right: &str) -> bool {
         (Ok(left), Ok(right)) => left < right,
         _ => left < right,
     }
+}
+
+fn source_render_state(engine: &str, source: &Path) -> Option<(u64, Option<SystemTime>)> {
+    if engine == "grok" {
+        return Some((crate::discovery::grok::session_index_key(source), None));
+    }
+    fs::metadata(source)
+        .ok()
+        .map(|metadata| (metadata.len(), metadata.modified().ok()))
 }
 
 #[derive(Debug, Clone)]

@@ -749,12 +749,22 @@ fn scan_dry_run_session_for_plan(session: &DryRunSession) -> Result<JsonlPlanSta
     if session.engine == "hermes" {
         return scan_hermes_source_for_plan(&session.jsonl_path, &session.id, &session.started_at);
     }
+    if session.engine == "grok" {
+        return scan_grok_source_for_plan(&session.jsonl_path, &session.id, &session.started_at);
+    }
     scan_jsonl_for_plan(&session.jsonl_path)
 }
 
 fn scan_indexed_session_for_plan(session: &SessionRow) -> Result<JsonlPlanStats, GaalError> {
     if session.engine == "hermes" {
         return scan_hermes_source_for_plan(
+            Path::new(&session.jsonl_path),
+            &session.id,
+            &session.started_at,
+        );
+    }
+    if session.engine == "grok" {
+        return scan_grok_source_for_plan(
             Path::new(&session.jsonl_path),
             &session.id,
             &session.started_at,
@@ -812,6 +822,25 @@ fn scan_hermes_source_for_plan(
     let transcript =
         crate::render::session_md::render_hermes_session_markdown(db_path, &conn, session_id)
             .map_err(|e| GaalError::Internal(format!("render Hermes transcript: {e}")))?;
+    Ok(JsonlPlanStats {
+        chars: transcript.len() as u64,
+        lines: transcript.lines().count().max(1),
+        compaction_lines: Vec::new(),
+        first_timestamp: Some(started_at.to_string()),
+    })
+}
+
+fn scan_grok_source_for_plan(
+    session_dir: &Path,
+    session_id: &str,
+    started_at: &str,
+) -> Result<JsonlPlanStats, GaalError> {
+    if !session_dir.exists() {
+        return Err(GaalError::NotFound(session_dir.display().to_string()));
+    }
+    let transcript =
+        crate::render::session_md::render_grok_session_markdown(session_dir, session_id)
+            .map_err(|e| GaalError::Internal(format!("render Grok transcript: {e}")))?;
     Ok(JsonlPlanStats {
         chars: transcript.len() as u64,
         lines: transcript.lines().count().max(1),
@@ -2223,7 +2252,7 @@ fn index_single_jsonl(
 fn truncate_session_id(raw: &str, engine: &Engine) -> String {
     match engine {
         Engine::Claude | Engine::Gemini | Engine::Agy => raw.chars().take(8).collect(),
-        Engine::Hermes => crate::util::sanitize_filename(raw),
+        Engine::Hermes | Engine::Grok => crate::util::sanitize_filename(raw),
         Engine::Codex => {
             let hex: String = raw.chars().filter(|c| *c != '-').collect();
             if hex.len() > 8 {
@@ -2276,6 +2305,8 @@ fn resolve_session_transcript(
                 ),
                 Err(err) => Err(anyhow!("open gaal DB for Hermes transcript: {err}")),
             }
+        } else if session.engine == "grok" {
+            crate::render::session_md::render_grok_session_markdown(source_path, &session.id)
         } else {
             crate::render::session_md::render_session_markdown(source_path)
         };
@@ -2352,6 +2383,8 @@ fn resolve_dry_run_session_transcript(session: &DryRunSession) -> Option<String>
                 ),
                 Err(err) => Err(anyhow!("open gaal DB for Hermes transcript: {err}")),
             }
+        } else if session.engine == "grok" {
+            crate::render::session_md::render_grok_session_markdown(source_path, &session.id)
         } else {
             crate::render::session_md::render_session_markdown(source_path)
         };

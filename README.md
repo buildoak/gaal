@@ -458,15 +458,17 @@ gaal salt
 gaal find-salt GAAL_SALT_<hex> -H
 ```
 
-If that returns a JSONL path and a handoff is appropriate:
+If that returns a source path and a handoff is appropriate:
 
 ```bash
-gaal create-handoff --jsonl /path/to/session.jsonl --dry-run
-gaal create-handoff --jsonl /path/to/session.jsonl  # only after review and a continuity need
+gaal create-handoff --jsonl /path/to/source --dry-run
+gaal create-handoff --jsonl /path/to/source  # only after review and a continuity need
 ```
 
-`find-salt` scans Claude Code, Codex, and agy JSONL session logs. It does not
-identify Gemini JSON sessions or Hermes SQLite sessions.
+`find-salt` scans Claude Code, Codex, agy JSONL logs, and Grok visible session
+sources. For Grok, the returned `jsonl_path` is the session directory because
+native Grok sessions are multi-file artifacts. It does not identify Gemini JSON
+sessions or Hermes SQLite sessions.
 
 Provider caveat: real handoff execution is currently supported through
 [agent-mux](https://github.com/buildoak/agent-mux). The CLI may expose other
@@ -589,14 +591,14 @@ Run `gaal --help` and `gaal <command> --help` for the full current contract.
 | `gaal who <verb> <target>` | Attribution query for `read`, `wrote`, `ran`, `touched`, `changed`, or `deleted`. |
 | `gaal search <query>` | Full-text search over indexed facts. |
 | `gaal recall <query>` | Search generated local handoffs. Use `--id <id>` for direct handoff lookup. |
-| `gaal resolve <id>` | Resolve an indexed session ID, unique prefix, or registered Hermes alias to source and artifact paths. |
+| `gaal resolve <id>` | Resolve an indexed session ID, unique prefix, registered Hermes alias, or Grok last-8 alias to source and artifact paths. |
 
 ### Continuity
 
 | Command | Purpose |
 | --- | --- |
 | `gaal salt` | Emit a unique token for self-identification. |
-| `gaal find-salt <token>` | Find the Claude Code, Codex, or agy JSONL file containing that token in tool/action output, with indexed session context when available. |
+| `gaal find-salt <token>` | Find the Claude Code, Codex, agy, or Grok source containing that token in tool/action output, with indexed session context when available. |
 | `gaal create-handoff <id>` | Generate a handoff markdown artifact through the configured backend. Use `--dry-run` first; [agent-mux](https://github.com/buildoak/agent-mux) is the supported real-execution provider today. |
 | `gaal create-handoff --jsonl <path>` | Generate from an explicit JSONL path, usually after `find-salt`; preview with `--dry-run` first. |
 | `gaal create-handoff --batch --since 1d --min-turns 3 --dry-run` | Preview batch handoff candidates before generating anything. |
@@ -605,7 +607,7 @@ Run `gaal --help` and `gaal <command> --help` for the full current contract.
 
 | Command | Purpose |
 | --- | --- |
-| `gaal index backfill` | Incrementally index discovered sessions. Supports `--engine`, `--since`, `--force`, and optional transcript markdown output. |
+| `gaal index backfill` | Incrementally index discovered sessions. Supports `--engine`, `--since`, `--force`, and optional transcript markdown output. Grok is opt-in via `--engine grok`. |
 | `gaal index status` | Show index health and counts. |
 | `gaal index reindex <id>` | Force re-index of one session. |
 | `gaal index prune --before <date>` | Remove old indexed facts before a date. |
@@ -619,7 +621,27 @@ Run `gaal --help` and `gaal <command> --help` for the full current contract.
 Session IDs are lookup handles, and short IDs are engine-specific. Codex uses
 the last 8 UUID hex characters; Claude Code, Gemini, and Agy usually use the
 first 8 native ID characters; Hermes keeps the full native ID and adds a
-registered alias. When unsure, run `gaal resolve <id> -H`.
+registered alias. Grok keeps the full UUID as canonical/artifact ID and adds a
+Codex-style last-8 dash-stripped lookup alias when unique. When unsure, run
+`gaal resolve <id> -H`.
+
+## Grok
+
+Native Grok support is explicit because Grok Build is still a fast-moving
+multi-file trace format:
+
+```bash
+gaal index backfill --engine grok
+gaal inspect <full-uuid-or-last8> --source
+gaal transcript <full-uuid-or-last8>
+```
+
+Gaal reads `${GROK_HOME:-~/.grok}/sessions/<percent-encoded-cwd>/<full-uuid>/`.
+`updates.jsonl` is the primary visible source; `chat_history.jsonl` is fallback.
+Thoughts, prompt context, system prompts, summaries/titles, rewind files, and
+unknown Grok files are omitted or redacted from derived output by default.
+Pattern-based secret redaction is best-effort for derived Grok text only; raw
+Grok files on disk are not modified.
 
 ## Docs
 

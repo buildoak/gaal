@@ -38,6 +38,11 @@ pub fn run(args: FindArgs) -> Result<(), GaalError> {
             home.join(".gemini").join("antigravity-cli").join("brain"),
             SaltRootKind::AgyBrainTranscripts,
         ),
+        (
+            "grok",
+            grok_sessions_root(&home),
+            SaltRootKind::GrokVisibleSources,
+        ),
     ];
 
     for (engine_name, root, root_kind) in roots {
@@ -54,14 +59,15 @@ pub fn run(args: FindArgs) -> Result<(), GaalError> {
 
         let engine = infer_engine(&path);
         let session_id = infer_session_id(&path, engine)?;
+        let source_path = reported_source_path(&path, engine);
 
         // Try enriching from DB
         let enriched = try_enrich(&session_id, engine, &home);
 
         if args.human {
-            print_human(&session_id, engine, &path, &enriched);
+            print_human(&session_id, engine, &source_path, &enriched);
         } else {
-            print_json(&session_id, engine, &path, &enriched);
+            print_json(&session_id, engine, &source_path, &enriched);
         }
         return Ok(());
     }
@@ -73,6 +79,7 @@ pub fn run(args: FindArgs) -> Result<(), GaalError> {
 enum SaltRootKind {
     AnyJsonl,
     AgyBrainTranscripts,
+    GrokVisibleSources,
 }
 
 /// Enriched session data from the DB, if available.
@@ -109,6 +116,7 @@ fn to_db_id(raw_id: &str, engine: &str) -> String {
                 hex
             }
         }
+        "grok" => raw_id.to_string(),
         _ => raw_id.chars().take(8).collect(),
     }
 }
@@ -157,7 +165,7 @@ fn compute_transcript_path(
         return (None, false);
     }
 
-    let short_id = &session_id[..session_id.len().min(8)];
+    let artifact_id = crate::util::session_artifact_id(engine, session_id);
     let gaal_home = std::env::var("GAAL_HOME")
         .ok()
         .map(PathBuf::from)
@@ -170,7 +178,7 @@ fn compute_transcript_path(
         .join(parts[0])
         .join(parts[1])
         .join(parts[2])
-        .join(format!("{short_id}.md"));
+        .join(format!("{artifact_id}.md"));
 
     let exists = path.exists();
     (Some(path.to_string_lossy().to_string()), exists)
@@ -334,6 +342,7 @@ fn line_contains_salt_output(line: &str, salt: &str) -> bool {
     claude_salt_match(&value, salt)
         || codex_salt_match(&value, salt)
         || agy_salt_match(&value, salt)
+        || grok_salt_match(&value, salt)
 }
 
 fn claude_salt_match(value: &Value, salt: &str) -> bool {
@@ -396,6 +405,24 @@ fn agy_salt_match(value: &Value, salt: &str) -> bool {
         })
 }
 
+fn grok_salt_match(value: &Value, salt: &str) -> bool {
+    match value
+        .pointer("/params/update/sessionUpdate")
+        .and_then(Value::as_str)
+    {
+        Some("tool_call_update") => value
+            .pointer("/params/update/rawOutput/content")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                value
+                    .pointer("/params/update/rawOutput/text")
+                    .and_then(Value::as_str)
+            })
+            .is_some_and(|text| text.contains(salt)),
+        _ => false,
+    }
+}
+
 fn is_agy_output_type(record_type: &str) -> bool {
     matches!(
         record_type,
@@ -431,8 +458,23 @@ impl SaltRootKind {
         match self {
             Self::AnyJsonl => is_jsonl(path),
             Self::AgyBrainTranscripts => is_agy_brain_transcript(path),
+            Self::GrokVisibleSources => is_grok_visible_source(path),
         }
     }
+}
+
+fn grok_sessions_root(home: &Path) -> PathBuf {
+    std::env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".grok"))
+        .join("sessions")
+}
+
+fn is_grok_visible_source(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("updates.jsonl" | "chat_history.jsonl")
+    )
 }
 
 fn is_agy_brain_transcript(path: &Path) -> bool {
@@ -468,6 +510,7 @@ fn infer_engine(path: &Path) -> &'static str {
         Ok(Engine::Gemini) => "gemini",
         Ok(Engine::Agy) => "agy",
         Ok(Engine::Hermes) => "hermes",
+        Ok(Engine::Grok) => "grok",
         Err(_) => {
             let path_str = path.to_string_lossy();
             if path_str.contains("/.claude/projects/") {
@@ -489,9 +532,24 @@ fn infer_session_id(path: &Path, engine: &str) -> Result<String, GaalError> {
             return Ok(session_id);
         }
     }
+    if engine == "grok" {
+        return path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| GaalError::ParseError("invalid Grok source path".to_string()));
+    }
 
     path.file_stem()
         .and_then(|stem| stem.to_str())
         .ok_or_else(|| GaalError::ParseError("invalid jsonl filename".to_string()))
         .map(str::to_string)
+}
+
+fn reported_source_path(path: &Path, engine: &str) -> PathBuf {
+    if engine == "grok" {
+        return path.parent().unwrap_or(path).to_path_buf();
+    }
+    path.to_path_buf()
 }

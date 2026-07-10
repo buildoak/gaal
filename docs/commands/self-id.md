@@ -27,7 +27,7 @@ GAAL_SALT_d0a6e1d5530bf6c9
 
 # `gaal find-salt`
 
-Purpose: scan Claude Code, Codex, and Antigravity brain JSONL session logs and return the first file containing a salt token in tool/action output. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
+Purpose: scan Claude Code, Codex, Antigravity brain, and Grok visible session sources and return the first source containing a salt token in tool/action output. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
 
 ## Usage
 
@@ -38,7 +38,7 @@ gaal find-salt [OPTIONS] [SALT]
 ## Flags
 
 - `-H`, `--human`
-- `--engine <claude|codex|agy>` — restrict the salt scan to one JSONL-backed
+- `--engine <claude|codex|agy|grok>` — restrict the salt scan to one
   source engine
 
 ## JSON Output
@@ -47,8 +47,9 @@ When the session is indexed (has been processed by `gaal index backfill`):
 
 - `session_id` — native source session identifier; agy uses the 8-character
   brain UUID prefix
-- `engine` — `claude`, `codex`, or `agy`
-- `jsonl_path` — absolute path to the JSONL file
+- `engine` — `claude`, `codex`, `agy`, or `grok`
+- `jsonl_path` — absolute path to the source file; for Grok this is the
+  session directory because native Grok sessions are multi-file artifacts
 - `indexed` — `true`
 - `model` — model name (e.g. `claude-opus-4-6`)
 - `cwd` — working directory of the session
@@ -70,9 +71,9 @@ When not indexed:
 
 Notes:
 
-- The returned `session_id` is derived from the native source identity. Agy uses the first 8 characters of the Antigravity brain UUID.
-- This command scans `~/.claude/projects/`, `~/.codex/`, and Antigravity brain `transcript_full.jsonl` / `transcript.jsonl` files.
-- Agy matching ignores user prompt echoes. The salt must appear in an executed action output record such as command output, file/search output, image-generation output, or an error message.
+- The returned `session_id` is derived from the native source identity. Agy uses the first 8 characters of the Antigravity brain UUID. Grok keeps the full UUID.
+- This command scans `~/.claude/projects/`, `~/.codex/`, Antigravity brain `transcript_full.jsonl` / `transcript.jsonl` files, and `${GROK_HOME:-~/.grok}/sessions/.../{updates.jsonl,chat_history.jsonl}`.
+- Agy and Grok matching ignore user prompt echoes. The salt must appear in an executed action/tool output record such as command output, file/search output, image-generation output, or an error message.
 - Enrichment is best-effort: if the DB is unavailable or the session is not indexed, the command still succeeds with the base 3 fields plus `"indexed": false`.
 
 ## Real Examples
@@ -110,7 +111,7 @@ Status:  not indexed (run 'gaal index backfill' to index)
 
 # `gaal resolve`
 
-Purpose: resolve a session ID, unique prefix, or registered Hermes alias to session metadata and derived artifact paths.
+Purpose: resolve a session ID, unique prefix, registered Hermes alias, or Grok last-8 alias to session metadata and derived artifact paths.
 
 ## Usage
 

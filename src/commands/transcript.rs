@@ -170,6 +170,10 @@ fn render_markdown(session: &SessionRow, conn: Option<&Connection>) -> Result<St
         )
         .map_err(|e| GaalError::Internal(format!("failed to render session markdown: {e}")));
     }
+    if session.engine == "grok" {
+        return crate::render::session_md::render_grok_session_markdown(source_path, &session.id)
+            .map_err(|e| GaalError::Internal(format!("failed to render session markdown: {e}")));
+    }
 
     // Pass the DB session ID as override — subagent JSONLs contain the parent's
     // sessionId field, so the JSONL-derived ID would be wrong in frontmatter.

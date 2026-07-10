@@ -408,10 +408,11 @@ gaal salt
 
 ## 12. `find-salt`
 
-Find the first JSONL file containing the provided salt token.
+Find the first source file/directory containing the provided salt token.
 
-Scans Claude Code, Codex, and Antigravity brain JSONL logs. Agy matches only
-executed action output records and ignores user prompt echoes.
+Scans Claude Code, Codex, Antigravity brain JSONL logs, and Grok visible session
+sources. Agy and Grok match only executed action/tool output records and ignore
+user prompt echoes. For Grok, the returned `jsonl_path` is the session directory.
 
 ### Flags
 
@@ -419,7 +420,7 @@ executed action output records and ignores user prompt echoes.
 |------|---------|
 | `[SALT]` | Salt token to search for |
 | `-H, --human` | Human-readable output |
-| `--engine <ENGINE>` | Restrict scan to `claude`, `codex`, or `agy` |
+| `--engine <ENGINE>` | Restrict scan to `claude`, `codex`, `agy`, or `grok` |
 
 ### Example
 

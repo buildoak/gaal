@@ -9,6 +9,8 @@ use crate::error::GaalError;
 use crate::model::{Fact, HandoffRecord};
 
 const HERMES_ALIAS_SCHEME: &str = "hermes-fnv64-base32-8-v1";
+const GROK_ALIAS_SCHEME: &str = "grok-uuid-last8-v1";
+const GROK_ALIAS_UNAVAILABLE_SCHEME: &str = "grok-uuid-last8-unavailable-v1";
 const MAX_ALIAS_COLLISION_RETRIES: u32 = 1024;
 
 /// Database-level session row, flattened to only SQLite-backed fields.
@@ -141,6 +143,65 @@ pub struct IndexStatus {
     pub newest_session: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceArtifactRecord {
+    pub session_id: String,
+    pub role: String,
+    pub rel_path: String,
+    pub visibility: String,
+    pub size_bytes: i64,
+    pub mtime_unix: Option<i64>,
+    pub fingerprint: i64,
+    pub parse_status: String,
+    pub visible_count: i64,
+    pub private_count: i64,
+    pub redacted_count: i64,
+    pub unknown_count: i64,
+    pub malformed_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GrokSessionMetaRecord {
+    pub session_id: String,
+    pub agent_name: Option<String>,
+    pub chat_format_version: Option<i64>,
+    pub current_model_id: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub sandbox_profile: Option<String>,
+    pub source_schema_version: String,
+    pub visibility_policy_version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ParserObservationRecord {
+    pub session_id: String,
+    pub parser: String,
+    pub severity: String,
+    pub kind: String,
+    pub message: String,
+    pub source_role: Option<String>,
+    pub source_ref: Option<String>,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GrokSourceState {
+    pub meta: Option<GrokSessionMetaRecord>,
+    pub artifacts: Vec<SourceArtifactRecord>,
+    pub observations: Vec<ParserObservationRecord>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GrokDiagnosticSummary {
+    pub sessions_with_artifacts: i64,
+    pub source_artifacts: i64,
+    pub parser_observations: i64,
+    pub unknown_records: i64,
+    pub malformed_records: i64,
+    pub private_records: i64,
+    pub redacted_records: i64,
+}
+
 /// Aggregate counters for a filtered session set.
 #[derive(Debug, Clone, Default)]
 pub struct AggregateResult {
@@ -218,10 +279,276 @@ pub fn upsert_session(conn: &Connection, session: &SessionRow) -> Result<(), Gaa
         },
     )
     .map_err(db_err)?;
-    if session.engine == "hermes" {
-        register_hermes_alias(conn, &session.id)?;
+    match session.engine.as_str() {
+        "hermes" => {
+            register_hermes_alias(conn, &session.id)?;
+        }
+        "grok" => {
+            register_grok_alias(conn, &session.id)?;
+        }
+        _ => {}
     }
     Ok(())
+}
+
+pub fn replace_grok_source_state(
+    conn: &Connection,
+    session_id: &str,
+    state: &GrokSourceState,
+) -> Result<(), GaalError> {
+    conn.execute(
+        "DELETE FROM source_artifacts WHERE session_id = :session_id",
+        named_params! { ":session_id": session_id },
+    )
+    .map_err(db_err)?;
+    conn.execute(
+        "DELETE FROM grok_session_meta WHERE session_id = :session_id",
+        named_params! { ":session_id": session_id },
+    )
+    .map_err(db_err)?;
+    conn.execute(
+        "DELETE FROM parser_observations WHERE session_id = :session_id AND parser = 'grok'",
+        named_params! { ":session_id": session_id },
+    )
+    .map_err(db_err)?;
+
+    if let Some(meta) = &state.meta {
+        conn.execute(
+            r#"
+            INSERT INTO grok_session_meta (
+                session_id, agent_name, chat_format_version, current_model_id,
+                reasoning_effort, sandbox_profile, source_schema_version,
+                visibility_policy_version
+            )
+            VALUES (
+                :session_id, :agent_name, :chat_format_version, :current_model_id,
+                :reasoning_effort, :sandbox_profile, :source_schema_version,
+                :visibility_policy_version
+            )
+            "#,
+            named_params! {
+                ":session_id": session_id,
+                ":agent_name": &meta.agent_name,
+                ":chat_format_version": meta.chat_format_version,
+                ":current_model_id": &meta.current_model_id,
+                ":reasoning_effort": &meta.reasoning_effort,
+                ":sandbox_profile": &meta.sandbox_profile,
+                ":source_schema_version": &meta.source_schema_version,
+                ":visibility_policy_version": &meta.visibility_policy_version,
+            },
+        )
+        .map_err(db_err)?;
+    }
+
+    for artifact in &state.artifacts {
+        conn.execute(
+            r#"
+            INSERT INTO source_artifacts (
+                session_id, role, rel_path, visibility, size_bytes, mtime_unix,
+                fingerprint, parse_status, visible_count, private_count,
+                redacted_count, unknown_count, malformed_count
+            )
+            VALUES (
+                :session_id, :role, :rel_path, :visibility, :size_bytes, :mtime_unix,
+                :fingerprint, :parse_status, :visible_count, :private_count,
+                :redacted_count, :unknown_count, :malformed_count
+            )
+            "#,
+            named_params! {
+                ":session_id": session_id,
+                ":role": &artifact.role,
+                ":rel_path": &artifact.rel_path,
+                ":visibility": &artifact.visibility,
+                ":size_bytes": artifact.size_bytes,
+                ":mtime_unix": artifact.mtime_unix,
+                ":fingerprint": artifact.fingerprint,
+                ":parse_status": &artifact.parse_status,
+                ":visible_count": artifact.visible_count,
+                ":private_count": artifact.private_count,
+                ":redacted_count": artifact.redacted_count,
+                ":unknown_count": artifact.unknown_count,
+                ":malformed_count": artifact.malformed_count,
+            },
+        )
+        .map_err(db_err)?;
+    }
+
+    for observation in &state.observations {
+        conn.execute(
+            r#"
+            INSERT INTO parser_observations (
+                session_id, parser, severity, kind, message, source_role, source_ref, count
+            )
+            VALUES (
+                :session_id, :parser, :severity, :kind, :message, :source_role, :source_ref, :count
+            )
+            "#,
+            named_params! {
+                ":session_id": session_id,
+                ":parser": &observation.parser,
+                ":severity": &observation.severity,
+                ":kind": &observation.kind,
+                ":message": &observation.message,
+                ":source_role": &observation.source_role,
+                ":source_ref": &observation.source_ref,
+                ":count": observation.count,
+            },
+        )
+        .map_err(db_err)?;
+    }
+
+    Ok(())
+}
+
+pub fn get_grok_source_state(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<GrokSourceState, GaalError> {
+    let meta = conn
+        .query_row(
+            r#"
+            SELECT session_id, agent_name, chat_format_version, current_model_id,
+                   reasoning_effort, sandbox_profile, source_schema_version,
+                   visibility_policy_version
+            FROM grok_session_meta
+            WHERE session_id = :session_id
+            "#,
+            named_params! { ":session_id": session_id },
+            |row| {
+                Ok(GrokSessionMetaRecord {
+                    session_id: row.get(0)?,
+                    agent_name: row.get(1)?,
+                    chat_format_version: row.get(2)?,
+                    current_model_id: row.get(3)?,
+                    reasoning_effort: row.get(4)?,
+                    sandbox_profile: row.get(5)?,
+                    source_schema_version: row.get(6)?,
+                    visibility_policy_version: row.get(7)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(db_err)?;
+
+    let mut artifacts_stmt = conn
+        .prepare(
+            r#"
+            SELECT session_id, role, rel_path, visibility, size_bytes, mtime_unix,
+                   fingerprint, parse_status, visible_count, private_count,
+                   redacted_count, unknown_count, malformed_count
+            FROM source_artifacts
+            WHERE session_id = :session_id
+            ORDER BY role, rel_path
+            "#,
+        )
+        .map_err(db_err)?;
+    let artifacts = artifacts_stmt
+        .query_map(named_params! { ":session_id": session_id }, |row| {
+            Ok(SourceArtifactRecord {
+                session_id: row.get(0)?,
+                role: row.get(1)?,
+                rel_path: row.get(2)?,
+                visibility: row.get(3)?,
+                size_bytes: row.get(4)?,
+                mtime_unix: row.get(5)?,
+                fingerprint: row.get(6)?,
+                parse_status: row.get(7)?,
+                visible_count: row.get(8)?,
+                private_count: row.get(9)?,
+                redacted_count: row.get(10)?,
+                unknown_count: row.get(11)?,
+                malformed_count: row.get(12)?,
+            })
+        })
+        .map_err(db_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_err)?;
+
+    let mut observations_stmt = conn
+        .prepare(
+            r#"
+            SELECT session_id, parser, severity, kind, message, source_role, source_ref, count
+            FROM parser_observations
+            WHERE session_id = :session_id AND parser = 'grok'
+            ORDER BY severity DESC, kind, source_role
+            "#,
+        )
+        .map_err(db_err)?;
+    let observations = observations_stmt
+        .query_map(named_params! { ":session_id": session_id }, |row| {
+            Ok(ParserObservationRecord {
+                session_id: row.get(0)?,
+                parser: row.get(1)?,
+                severity: row.get(2)?,
+                kind: row.get(3)?,
+                message: row.get(4)?,
+                source_role: row.get(5)?,
+                source_ref: row.get(6)?,
+                count: row.get(7)?,
+            })
+        })
+        .map_err(db_err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_err)?;
+
+    Ok(GrokSourceState {
+        meta,
+        artifacts,
+        observations,
+    })
+}
+
+pub fn get_grok_diagnostic_summary(conn: &Connection) -> Result<GrokDiagnosticSummary, GaalError> {
+    let sessions_with_artifacts = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT session_id) FROM source_artifacts",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(db_err)?;
+    let source_artifacts = conn
+        .query_row("SELECT COUNT(*) FROM source_artifacts", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(db_err)?;
+    let parser_observations = conn
+        .query_row(
+            "SELECT COUNT(*) FROM parser_observations WHERE parser = 'grok'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(db_err)?;
+    let (unknown_records, malformed_records, private_records, redacted_records) = conn
+        .query_row(
+            r#"
+            SELECT
+                COALESCE(SUM(unknown_count), 0),
+                COALESCE(SUM(malformed_count), 0),
+                COALESCE(SUM(private_count), 0),
+                COALESCE(SUM(redacted_count), 0)
+            FROM source_artifacts
+            "#,
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .map_err(db_err)?;
+
+    Ok(GrokDiagnosticSummary {
+        sessions_with_artifacts,
+        source_artifacts,
+        parser_observations,
+        unknown_records,
+        malformed_records,
+        private_records,
+        redacted_records,
+    })
 }
 
 /// Ensure every existing Hermes session has a durable alias row.
@@ -254,6 +581,32 @@ pub fn backfill_hermes_aliases(conn: &Connection) -> Result<(), GaalError> {
     Ok(())
 }
 
+/// Ensure every existing Grok session has its last-8 lookup alias when unique.
+pub fn backfill_grok_aliases(conn: &Connection) -> Result<(), GaalError> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id
+            FROM sessions
+            WHERE engine = 'grok'
+            ORDER BY started_at ASC, id ASC
+            "#,
+        )
+        .map_err(db_err)?;
+    let mut rows = stmt.query([]).map_err(db_err)?;
+    let mut ids = Vec::new();
+    while let Some(row) = rows.next().map_err(db_err)? {
+        ids.push(row.get::<_, String>(0).map_err(db_err)?);
+    }
+    drop(rows);
+    drop(stmt);
+
+    for id in ids {
+        register_grok_alias(conn, &id)?;
+    }
+    Ok(())
+}
+
 /// Register or fetch the deterministic 8-character alias for a Hermes session.
 ///
 /// The first candidate hashes `hermes:` plus the full native session id. If the
@@ -274,7 +627,14 @@ pub fn register_hermes_alias(conn: &Connection, session_id: &str) -> Result<Stri
             Some(existing_id) if existing_id == session_id => return Ok(alias),
             Some(_) => continue,
             None => {
-                let inserted = insert_alias_row(conn, &alias, session_id, "hermes", counter);
+                let inserted = insert_alias_row(
+                    conn,
+                    &alias,
+                    session_id,
+                    "hermes",
+                    HERMES_ALIAS_SCHEME,
+                    counter,
+                );
                 match inserted {
                     Ok(()) => return Ok(alias),
                     Err(err) if is_constraint_violation(&err) => {
@@ -294,11 +654,73 @@ pub fn register_hermes_alias(conn: &Connection, session_id: &str) -> Result<Stri
     )))
 }
 
+/// Register the Codex-style last-8 lookup alias for a Grok session.
+///
+/// Grok aliases are convenience handles only. If a collision appears, the
+/// shared alias is removed so it cannot silently resolve to the wrong full UUID.
+pub fn register_grok_alias(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<String>, GaalError> {
+    if let Some(alias) = get_session_alias(conn, "grok", session_id)? {
+        return Ok(Some(alias));
+    }
+
+    let Some(alias) = crate::util::grok_alias_candidate(session_id) else {
+        mark_grok_alias_unavailable(conn, session_id)?;
+        return Ok(None);
+    };
+    if canonical_session_id_exists(conn, &alias)? {
+        mark_grok_alias_unavailable(conn, session_id)?;
+        return Ok(None);
+    }
+
+    let existing = session_id_for_alias(conn, &alias, Some("grok"))?;
+    match existing.as_deref() {
+        Some(existing_id) if existing_id == session_id => {
+            clear_grok_alias_unavailable(conn, session_id)?;
+            Ok(Some(alias))
+        }
+        Some(_) => {
+            conn.execute(
+                r#"
+                DELETE FROM session_aliases
+                WHERE alias = :alias
+                  AND engine = 'grok'
+                  AND scheme = :scheme
+                "#,
+                named_params! {
+                    ":alias": &alias,
+                    ":scheme": GROK_ALIAS_SCHEME,
+                },
+            )
+            .map_err(db_err)?;
+            mark_grok_alias_unavailable(conn, existing.as_deref().unwrap_or_default())?;
+            mark_grok_alias_unavailable(conn, session_id)?;
+            Ok(None)
+        }
+        None => match insert_alias_row(conn, &alias, session_id, "grok", GROK_ALIAS_SCHEME, 0) {
+            Ok(()) => {
+                clear_grok_alias_unavailable(conn, session_id)?;
+                Ok(Some(alias))
+            }
+            Err(err) if is_constraint_violation(&err) => {
+                mark_grok_alias_unavailable(conn, session_id)?;
+                Ok(None)
+            }
+            Err(err) => Err(db_err(err)),
+        },
+    }
+}
+
 pub fn get_session_alias(
     conn: &Connection,
     engine: &str,
     session_id: &str,
 ) -> Result<Option<String>, GaalError> {
+    let Some(scheme) = alias_scheme(engine) else {
+        return Ok(None);
+    };
     conn.query_row(
         r#"
         SELECT alias
@@ -311,7 +733,7 @@ pub fn get_session_alias(
         named_params! {
             ":session_id": session_id,
             ":engine": engine,
-            ":scheme": HERMES_ALIAS_SCHEME,
+            ":scheme": scheme,
         },
         |row| row.get::<_, String>(0),
     )
@@ -361,7 +783,10 @@ pub fn resolve_session_ids(
     }
 
     let alias_reference = reference.to_ascii_lowercase();
-    if !has_exact && crate::util::is_hermes_alias(&alias_reference) {
+    if !has_exact
+        && (crate::util::is_hermes_alias(&alias_reference)
+            || crate::util::is_grok_alias(&alias_reference))
+    {
         if let Some(id) = session_id_for_alias(conn, &alias_reference, engine)? {
             push_unique(&mut ids, id);
         }
@@ -374,6 +799,40 @@ pub fn resolve_session_ids(
     }
 
     Ok(ids)
+}
+
+/// Return true when the alias registry is missing rows for Grok sessions.
+pub fn grok_alias_registry_needs_migration(conn: &Connection) -> Result<bool, GaalError> {
+    if !table_exists(conn, "sessions")? {
+        return Ok(true);
+    }
+    if !table_exists(conn, "session_aliases")? {
+        return Ok(true);
+    }
+
+    conn.query_row(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM sessions s
+            WHERE s.engine = 'grok'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM session_aliases a
+                  WHERE a.session_id = s.id
+                    AND a.engine = 'grok'
+                    AND a.scheme IN (:alias_scheme, :unavailable_scheme)
+              )
+            LIMIT 1
+        )
+        "#,
+        named_params! {
+            ":alias_scheme": GROK_ALIAS_SCHEME,
+            ":unavailable_scheme": GROK_ALIAS_UNAVAILABLE_SCHEME,
+        },
+        |row| row.get::<_, bool>(0),
+    )
+    .map_err(db_err)
 }
 
 /// Return true when the alias registry is absent or missing rows for Hermes sessions.
@@ -1337,6 +1796,7 @@ fn insert_alias_row(
     alias: &str,
     session_id: &str,
     engine: &str,
+    scheme: &str,
     counter: u32,
 ) -> rusqlite::Result<()> {
     conn.execute(
@@ -1348,11 +1808,52 @@ fn insert_alias_row(
             ":alias": alias,
             ":session_id": session_id,
             ":engine": engine,
-            ":scheme": HERMES_ALIAS_SCHEME,
+            ":scheme": scheme,
             ":counter": i64::from(counter),
             ":created_at": unix_now(),
         },
     )?;
+    Ok(())
+}
+
+fn mark_grok_alias_unavailable(conn: &Connection, session_id: &str) -> Result<(), GaalError> {
+    if session_id.is_empty() {
+        return Ok(());
+    }
+    let marker = format!("__grok_noalias_{}", session_id.replace('-', ""));
+    conn.execute(
+        r#"
+        INSERT INTO session_aliases (alias, session_id, engine, scheme, counter, created_at)
+        VALUES (:alias, :session_id, 'grok', :scheme, 0, :created_at)
+        ON CONFLICT(session_id, engine, scheme) DO UPDATE SET
+            alias = excluded.alias,
+            created_at = excluded.created_at
+        "#,
+        named_params! {
+            ":alias": marker,
+            ":session_id": session_id,
+            ":scheme": GROK_ALIAS_UNAVAILABLE_SCHEME,
+            ":created_at": unix_now(),
+        },
+    )
+    .map_err(db_err)?;
+    Ok(())
+}
+
+fn clear_grok_alias_unavailable(conn: &Connection, session_id: &str) -> Result<(), GaalError> {
+    conn.execute(
+        r#"
+        DELETE FROM session_aliases
+        WHERE session_id = :session_id
+          AND engine = 'grok'
+          AND scheme = :scheme
+        "#,
+        named_params! {
+            ":session_id": session_id,
+            ":scheme": GROK_ALIAS_UNAVAILABLE_SCHEME,
+        },
+    )
+    .map_err(db_err)?;
     Ok(())
 }
 
@@ -1367,17 +1868,23 @@ fn session_id_for_alias(
         FROM session_aliases
         WHERE alias = :alias
           AND (:engine IS NULL OR engine = :engine)
-          AND scheme = :scheme
         "#,
         named_params! {
             ":alias": alias,
             ":engine": engine,
-            ":scheme": HERMES_ALIAS_SCHEME,
         },
         |row| row.get::<_, String>(0),
     )
     .optional()
     .map_err(db_err)
+}
+
+fn alias_scheme(engine: &str) -> Option<&'static str> {
+    match engine {
+        "hermes" => Some(HERMES_ALIAS_SCHEME),
+        "grok" => Some(GROK_ALIAS_SCHEME),
+        _ => None,
+    }
 }
 
 fn canonical_session_id_exists(conn: &Connection, id: &str) -> Result<bool, GaalError> {
@@ -1563,6 +2070,7 @@ mod meta_tests {
             resolve_session_ids(&conn, &session.id, None).unwrap(),
             vec![session.id.clone()]
         );
+        assert!(!grok_alias_registry_needs_migration(&conn).unwrap());
     }
 
     #[test]
@@ -1589,7 +2097,15 @@ mod meta_tests {
             named_params! { ":alias": &candidate },
         )
         .unwrap();
-        insert_alias_row(&conn, &candidate, &existing.id, "hermes", 0).unwrap();
+        insert_alias_row(
+            &conn,
+            &candidate,
+            &existing.id,
+            "hermes",
+            HERMES_ALIAS_SCHEME,
+            0,
+        )
+        .unwrap();
 
         let alias = register_hermes_alias(&conn, &collided.id).unwrap();
 
@@ -1649,6 +2165,106 @@ mod meta_tests {
             resolve_session_ids(&conn, &alias, Some("hermes")).unwrap(),
             vec![hermes.id.clone()]
         );
+    }
+
+    #[test]
+    fn grok_upsert_registers_last8_alias_and_resolves_it() {
+        let conn = fresh_conn();
+        let session = grok_session(
+            "019f4711-2e99-78a3-a9ec-6fd31874b168",
+            "2026-07-09T13:28:56Z",
+        );
+
+        upsert_session(&conn, &session).unwrap();
+
+        let alias = get_session_alias(&conn, "grok", &session.id)
+            .unwrap()
+            .expect("alias should exist");
+        assert_eq!(alias, "1874b168");
+        assert_eq!(
+            resolve_session_ids(&conn, &alias, Some("grok")).unwrap(),
+            vec![session.id.clone()]
+        );
+        assert_eq!(
+            resolve_session_ids(&conn, &session.id, None).unwrap(),
+            vec![session.id.clone()]
+        );
+    }
+
+    #[test]
+    fn grok_alias_collision_removes_shared_alias() {
+        let conn = fresh_conn();
+        let first = grok_session(
+            "019f4711-2e99-78a3-a9ec-6fd31874b168",
+            "2026-07-09T13:28:56Z",
+        );
+        let second = grok_session(
+            "019f477f-4874-7341-bccb-22931874b168",
+            "2026-07-09T15:29:11Z",
+        );
+
+        upsert_session(&conn, &first).unwrap();
+        assert_eq!(
+            get_session_alias(&conn, "grok", &first.id)
+                .unwrap()
+                .as_deref(),
+            Some("1874b168")
+        );
+
+        upsert_session(&conn, &second).unwrap();
+
+        assert_eq!(get_session_alias(&conn, "grok", &first.id).unwrap(), None);
+        assert_eq!(get_session_alias(&conn, "grok", &second.id).unwrap(), None);
+        assert_eq!(
+            resolve_session_ids(&conn, "1874b168", Some("grok")).unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(!grok_alias_registry_needs_migration(&conn).unwrap());
+    }
+
+    #[test]
+    fn grok_alias_does_not_shadow_canonical_session_id() {
+        let conn = fresh_conn();
+        let grok = grok_session(
+            "019f4711-2e99-78a3-a9ec-6fd31874b168",
+            "2026-07-09T13:28:56Z",
+        );
+        upsert_session(
+            &conn,
+            &SessionRow {
+                id: "1874b168".to_string(),
+                engine: "codex".to_string(),
+                model: None,
+                cwd: None,
+                started_at: "2026-07-09T13:00:00Z".to_string(),
+                ended_at: None,
+                exit_signal: None,
+                last_event_at: None,
+                parent_id: None,
+                session_type: "standalone".to_string(),
+                jsonl_path: "/tmp/codex.jsonl".to_string(),
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                reasoning_tokens: 0,
+                total_tools: 0,
+                total_turns: 1,
+                peak_context: 0,
+                last_indexed_offset: 0,
+                subagent_type: None,
+                gemini_summary: None,
+            },
+        )
+        .unwrap();
+        upsert_session(&conn, &grok).unwrap();
+
+        assert_eq!(get_session_alias(&conn, "grok", &grok.id).unwrap(), None);
+        assert_eq!(
+            resolve_session_ids(&conn, "1874b168", None).unwrap(),
+            vec!["1874b168".to_string()]
+        );
+        assert!(!grok_alias_registry_needs_migration(&conn).unwrap());
     }
 
     #[test]
@@ -1739,6 +2355,14 @@ mod meta_tests {
         let mut session = test_session(id, started_at, None, Some(started_at));
         session.engine = "hermes".to_string();
         session.jsonl_path = "/tmp/hermes-state.db".to_string();
+        session
+    }
+
+    fn grok_session(id: &str, started_at: &str) -> SessionRow {
+        let mut session = test_session(id, started_at, None, Some(started_at));
+        session.engine = "grok".to_string();
+        session.jsonl_path = format!("/tmp/.grok/sessions/%2Ftmp/{id}");
+        session.model = Some("grok-4.5".to_string());
         session
     }
 

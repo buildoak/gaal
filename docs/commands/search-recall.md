@@ -110,7 +110,7 @@ Keywords: agent-mux, gaal, AX testing, LaunchAgent, Telegram bot
 Substance: 3 | Duration: 532m | Score: 0.0
 ```
 
-Direct lookup bypasses query scoring entirely. It resolves the supplied session reference first, then queries the handoffs table by canonical session ID. No scoring, no recency weighting, no query tokenization. Supports prefix matching, registered Hermes aliases, and `latest`.
+Direct lookup bypasses query scoring entirely. It resolves the supplied session reference first, then queries the handoffs table by canonical session ID. No scoring, no recency weighting, no query tokenization. Supports prefix matching, registered Hermes aliases, Grok last-8 aliases, and `latest`.
 
 ## Related Commands
 

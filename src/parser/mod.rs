@@ -14,6 +14,7 @@ pub mod common;
 pub mod event;
 pub mod facts;
 pub mod gemini;
+pub mod grok;
 pub mod hermes;
 pub mod types;
 
@@ -92,6 +93,9 @@ pub fn parse_session(path: &Path) -> Result<ParsedSession> {
         Engine::Hermes => {
             bail!("Hermes sessions require a session id; use hermes::parse_session(db_path, id)")
         }
+        Engine::Grok => {
+            bail!("Grok sessions require native session-directory parsing; use parse_discovered_session")
+        }
     };
     Ok(facts::extract_parsed_session(&events, engine, path))
 }
@@ -104,6 +108,7 @@ pub fn parse_session(path: &Path) -> Result<ParsedSession> {
 pub fn parse_discovered_session(discovered: &DiscoveredSession) -> Result<ParsedSession> {
     match discovered.engine {
         Engine::Hermes => hermes::parse_session(&discovered.path, &discovered.id),
+        Engine::Grok => grok::parse_session(&discovered.path, &discovered.id),
         _ => {
             let mut parsed = parse_session(&discovered.path)?;
             if parsed.meta.cwd.is_none() {
@@ -134,6 +139,9 @@ pub fn parse_session_incremental(path: &Path, offset: u64) -> Result<(ParsedSess
         Engine::Agy => agy::parse_events_from_offset(path, offset)?,
         Engine::Hermes => {
             bail!("Hermes sessions are SQLite-backed and do not support byte-offset parsing")
+        }
+        Engine::Grok => {
+            bail!("Grok sessions are directory-backed and do not support byte-offset parsing")
         }
     };
     let parsed = facts::extract_parsed_session(&events, engine, path);
@@ -260,6 +268,9 @@ fn detect_engine_from_path(path: &Path) -> Option<Engine> {
     }
     if path_str.contains("/.gemini/tmp/") {
         return Some(Engine::Gemini);
+    }
+    if path_str.contains("/.grok/sessions/") {
+        return Some(Engine::Grok);
     }
     None
 }
