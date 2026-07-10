@@ -12,8 +12,9 @@ gaal create-handoff [OPTIONS] [ID]
 
 ## Flags
 
-- `--jsonl <path>`: explicit JSONL override
-- `--engine <claude|codex|gemini|agy|hermes>`: worker engine override for handoff extraction. This does not select the source-session engine; source sessions are resolved from the indexed row or `--jsonl` path.
+- `--jsonl <path>`: explicit source-artifact override; the compatibility name
+  also accepts a Grok session directory
+- `--engine <claude|codex|gemini|agy|hermes|grok>`: worker engine override for handoff extraction. This does not select the source-session engine; source sessions are resolved from the indexed row or `--jsonl` path.
 - `--model <model>`
 - `--prompt <path>`
 - `--provider <agent-mux|openrouter>`: provider selector; default `agent-mux`.
@@ -29,7 +30,7 @@ gaal create-handoff [OPTIONS] [ID]
 - `--this`: compatibility no-op while parent-session preference is disabled
 - `--dry-run`: preview candidates/planned execution only. For `create-handoff`
   planning, it does not invoke providers, spend tokens, write handoff markdown,
-  upsert handoff rows, or index unindexed JSONL files. Treat it as handoff
+  upsert handoff rows, or index unindexed source artifacts. Treat it as handoff
   preview/planning mode, not as a broad guarantee that no other setup, index,
   or DB initialization can happen elsewhere in a Gaal workflow.
 - `--effort <low|medium|high|xhigh>`: effort level for the default `agent-mux` dispatch path. Overrides config `[agent-mux] effort`. Controls how long the LLM worker runs and auto-aligns gaal's wrapper timeout.
@@ -37,9 +38,9 @@ gaal create-handoff [OPTIONS] [ID]
 
 ## ID Resolution
 
-`ID` may be:
+The session reference may be:
 
-- a session ID
+- a full session ID or unique prefix
 - a registered Hermes alias
 - a Grok last-8 alias
 - `today`
@@ -64,7 +65,9 @@ Batch mode returns per-session status rows.
 - `side_effects`: all false in dry-run
 - `warnings`
 
-For unindexed `--jsonl --dry-run`, Gaal reads the JSONL path directly, reports `indexed=false`, and does not index it.
+For unindexed `--jsonl --dry-run`, Gaal reads the source artifact path directly,
+reports `indexed=false`, and does not index it. The flag name is retained for
+compatibility and may refer to a Grok session directory.
 
 Provider note: `agent-mux` is optional for Gaal itself but is the preferred default backend for real handoff generation once configured. Verify it before non-dry-run handoffs, especially batch handoffs. `--dry-run` is the required first step to inspect planned provider/model/effort choices before deciding whether a continuity artifact is worth generating.
 

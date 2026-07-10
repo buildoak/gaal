@@ -18,7 +18,7 @@ gaal index backfill [OPTIONS]
 
 Flags:
 
-- `--engine <claude|codex|gemini|agy|hermes>`
+- `--engine <claude|codex|gemini|agy|hermes|grok>`
 - `--since <date|timestamp>`
 - `--force`
 - `--with-markdown`
@@ -32,7 +32,14 @@ Output:
 
 ### Incremental behavior
 
-`index backfill` is incremental. Each engine keeps its own mtime cursor in the `meta` SQLite table, for example `backfill:claude`, `backfill:codex`, `backfill:gemini`, `backfill:agy`, and `backfill:hermes`. On every run, discovery for an engine skips files whose on-disk mtime is older than `cursor - 10s` before any head-read, JSON parse, or SQLite lookup. The 10-second safety margin covers actively-appending session files whose mtime is close to wall-clock.
+`index backfill` is incremental. An unfiltered run includes every supported
+engine, including Grok; `--engine` narrows that run. Each engine keeps its own
+mtime cursor in the `meta` SQLite table, for example `backfill:claude`,
+`backfill:codex`, `backfill:gemini`, `backfill:agy`, `backfill:hermes`, and
+`backfill:grok`. On every run, discovery for an engine skips source artifacts
+whose on-disk mtime is older than `cursor - 10s` before parsing or SQLite lookup.
+The 10-second safety margin covers actively changing session artifacts whose
+mtime is close to wall-clock.
 
 Cursor advancement rules:
 
@@ -52,6 +59,14 @@ present, otherwise Gaal falls back to the copied filename.
 
 Optional agent-mux sidecars can fill model or missing cwd for matching agy
 sessions. Indexing does not require agent-mux.
+
+### Grok discovery behavior
+
+Grok discovery scans `${GROK_HOME:-~/.grok}/sessions/<encoded-cwd>/<uuid>/`.
+Each directory is one canonical full-UUID session; `updates.jsonl` is the
+primary visible event source and `chat_history.jsonl` is fallback. Grok is part
+of the default unfiltered pass. Use `--engine grok` only for a Grok-scoped
+diagnostic, repair, or test run.
 
 ### Troubleshooting: stuck cursor
 
@@ -84,6 +99,15 @@ $ gaal index status
   "db_path": "/home/alex/.gaal/index.db",
   "db_size_bytes": 387366912,
   "facts_total": 249747,
+  "grok": {
+    "malformed_records": 0,
+    "parser_observations": 0,
+    "private_records": 0,
+    "redacted_records": 0,
+    "sessions_with_artifacts": 0,
+    "source_artifacts": 0,
+    "unknown_records": 0
+  },
   "handoffs_total": 871,
   "last_indexed_at": "2026-03-29T10:46:56.904Z",
   "newest_session": "2026-03-29T10:46:13.988Z",
@@ -92,6 +116,10 @@ $ gaal index status
   "sessions_total": 7214
 }
 ```
+
+The `grok` object is always present. Its counters expose source-artifact and
+parser-drift diagnostics without surfacing private record bodies. Human output
+shows the Grok diagnostics section when artifact or observation rows exist.
 
 ## `index reindex`
 

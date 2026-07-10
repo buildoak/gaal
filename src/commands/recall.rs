@@ -19,8 +19,8 @@ use crate::output::json::print_json;
 pub struct RecallArgs {
     /// Query text for semantic session lookup.
     pub query: Option<String>,
-    /// Direct handoff lookup by session ID. Bypasses semantic search.
-    /// Supports ID prefix and `latest`. Mutually exclusive with QUERY.
+    /// Direct handoff lookup by session reference. Bypasses semantic search.
+    /// Supports full IDs, unique prefixes, aliases, and `latest`. Mutually exclusive with QUERY.
     pub id: Option<String>,
     /// Recency window in days.
     #[arg(long, default_value_t = 14)]
@@ -707,10 +707,10 @@ fn print_recall_help() {
     eprintln!("gaal recall — Ranked session retrieval for continuity and context");
     eprintln!();
     eprintln!("Usage: gaal recall <query> [flags]");
-    eprintln!("       gaal recall --id <session-id> [flags]");
+    eprintln!("       gaal recall --id <session-reference> [flags]");
     eprintln!();
     eprintln!("Flags:");
-    eprintln!("  --id <id>          Direct handoff lookup by session ID (bypasses search)");
+    eprintln!("  --id <reference>   Direct handoff lookup by session reference (bypasses search)");
     eprintln!("  --days-back <n>    Recency window in days (default: 14)");
     eprintln!("  --limit <n>        Max number of sessions to return (default: 3)");
     eprintln!("  --format <fmt>     Output format: summary, brief, handoff, full (default: brief)");

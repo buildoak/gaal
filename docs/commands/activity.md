@@ -14,9 +14,9 @@ Common flags:
 
 - `--since <duration|date|timestamp>`: lower bound; default `1d`
 - `--before <date|timestamp>`: upper bound; default now
-- `--engine <claude|codex|gemini|agy|hermes>`
+- `--engine <claude|codex|gemini|agy|hermes|grok>`
 - `--cwd <substring>`
-- `--session <id>`: render one resolved session only
+- `--session <reference>`: render one resolved session only
 - `--skip-subagents`
 - `--limit <n>`: max DB candidates
 - `--stdout`: print markdown instead of path metadata

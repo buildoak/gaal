@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-07-10 — 0.5.0
+
+### Added
+- **Native Grok Build indexing.** Gaal discovers Grok multi-file session
+  directories, parses visible `updates.jsonl` records with
+  `chat_history.jsonl` fallback, and exposes Grok sessions through the normal
+  list, inspect, search, attribution, transcript, resolve, self-ID, reindex,
+  and handoff-planning surfaces.
+- **Grok source diagnostics and privacy controls.** Source-artifact state records
+  the selected visible source plus private, redacted, unknown, and malformed
+  record counts. Private/thought surfaces are excluded from visible facts;
+  derived visible text uses best-effort secret redaction and size-bounded tool
+  output while raw Grok files remain untouched.
+- **Collision-safe Grok aliases.** Canonical and artifact IDs remain full UUIDs;
+  a unique last-eight dash-stripped alias is registered for compact lookup.
+
+### Changed
+- **Grok is part of default backfill.** Unfiltered manual and scheduled
+  `gaal index backfill` runs now include Grok. `--engine grok` is a restriction
+  for scoped diagnostics, not an opt-in requirement; one scheduled backfill is
+  sufficient.
+- **Schema migration and install contract.** Existing pre-Grok indexes migrate
+  their engine constraints before Grok rows are written. Source install,
+  onboarding, help, docs, and scheduler checks now describe the six-engine
+  default path and the 0.5.0 binary contract.
+- **Release version metadata bumped to 0.5.0.** This entry records the source
+  state; it does not assert that a package has been published.
+
 ## 2026-07-02 — 0.4.1
 
 ### Changed

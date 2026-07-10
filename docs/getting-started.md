@@ -1,6 +1,9 @@
 # Getting Started
 
-This page is the shortest path from a fresh clone to your first useful `gaal` query. If you already have local Claude Code, Codex, Gemini, agy/Antigravity, or Hermes session logs, you can usually get from zero to indexed sessions in under five minutes.
+This page is the shortest path from a fresh clone to your first useful `gaal`
+query. If you already have local Claude Code, Codex, Gemini, agy/Antigravity,
+Hermes, or Grok session artifacts, you can usually get from zero to indexed
+sessions in under five minutes.
 
 After any package-manager install, run:
 
@@ -64,14 +67,17 @@ Scheduled indexing is recommended after the first install, but it is explicit:
 ./install.sh status
 ```
 
-The scheduled job runs only `gaal index backfill`. It does not create handoffs,
-call LLM backends, or run recall.
+The scheduled job runs one unfiltered `gaal index backfill`, which includes Grok
+and every other supported engine. It does not add a separate Grok job, create
+handoffs, call LLM backends, or run recall.
 
 ## Requirements
 
 `gaal` indexes session artifacts that already exist on disk. Before your first run, make sure you have:
 
-- Local access to session logs under `~/.claude/projects/`, `~/.codex/`, `~/.gemini/tmp/`, `~/.gemini/antigravity-cli/brain/`, and/or `~/.hermes/state.db`
+- Local access to session artifacts under `~/.claude/projects/`, `~/.codex/`,
+  `~/.gemini/tmp/`, `~/.gemini/antigravity-cli/brain/`, `~/.hermes/state.db`,
+  and/or `${GROK_HOME:-~/.grok}/sessions/`
 - A writable gaal home at `~/.gaal/`
 
 If this is a brand-new machine with no agent sessions yet, `gaal index backfill` may create the index and still leave you with zero sessions. That is expected. Run an agent for a bit, then backfill again.
@@ -83,6 +89,9 @@ Index your existing sessions:
 ```bash
 gaal index backfill
 ```
+
+That unfiltered command includes Grok by default. `--engine grok` is available
+when you deliberately want a Grok-only diagnostic or repair run.
 
 If you also want rendered transcript markdown written during indexing:
 
@@ -118,7 +127,7 @@ What each part is for:
 - `data/{engine}/sessions/YYYY/MM/DD/<id>.md`: rendered transcript markdown
 - `data/{engine}/handoffs/YYYY/MM/DD/<id>.md`: generated handoff markdown
 
-`{engine}` is usually `claude`, `codex`, `gemini`, `agy`, or `hermes`.
+`{engine}` is `claude`, `codex`, `gemini`, `agy`, `hermes`, or `grok`.
 
 ## Four Commands to Learn First
 

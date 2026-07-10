@@ -11,7 +11,7 @@ optional handoffs for continuity when compression is worth the cost.
 
 ### Raw Traces Are Evidence
 
-Claude Code, Codex, Antigravity CLI, Hermes Agent, and Gemini CLI own their
+Claude Code, Codex, Grok Build, Antigravity CLI, Hermes Agent, and Gemini CLI own their
 source artifacts. Gaal reads those artifacts and points back to them. A rendered
 view can make evidence easier to use, but it should not pretend to replace the
 evidence.

@@ -59,7 +59,7 @@ pub fn discover_sessions_with_cutoff(
     if engine_filter.is_none_or(|e| e == Engine::Hermes) {
         sessions.extend(super::hermes::discover_hermes_sessions(newer_than)?);
     }
-    if engine_filter.is_some_and(|e| e == Engine::Grok) {
+    if engine_filter.is_none_or(|e| e == Engine::Grok) {
         sessions.extend(super::grok::discover_grok_sessions(newer_than)?);
     }
 

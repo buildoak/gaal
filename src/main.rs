@@ -74,7 +74,7 @@ enum Commands {
 
     /// Session details with optional focused views (formerly show).
     Inspect {
-        /// Session ID or ID prefix. Use `latest` to resolve the newest session.
+        /// Session reference (full ID, unique prefix, alias, or `latest`).
         id: Option<String>,
         /// File ops view; when passed without a value, defaults to "all".
         #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "all")]
@@ -97,7 +97,7 @@ enum Commands {
         /// Full event timeline.
         #[arg(long)]
         trace: bool,
-        /// Raw JSONL source path.
+        /// Source-artifact diagnostics and path.
         #[arg(long)]
         source: bool,
         /// Include empty/low-signal subagents in coordinator views.
@@ -116,7 +116,7 @@ enum Commands {
         after_long_help = "Examples:\n  gaal transcript latest\n  gaal transcript 249aad1e\n  gaal transcript latest --stdout\n  gaal transcript latest --force"
     )]
     Transcript {
-        /// Session ID or ID prefix. Use `latest` for newest session.
+        /// Session reference (full ID, unique prefix, alias, or `latest`).
         id: Option<String>,
         /// Re-render even if cached file exists.
         #[arg(long)]
@@ -223,7 +223,7 @@ enum Commands {
     Recall {
         /// Optional topic query.
         query: Option<String>,
-        /// Direct handoff lookup by session ID (bypasses search). Supports prefix, `latest`.
+        /// Direct handoff lookup by session reference (bypasses search).
         #[arg(long)]
         id: Option<String>,
         /// Recency window in days.
@@ -240,9 +240,9 @@ enum Commands {
         substance: u8,
     },
 
-    /// Resolve a short session ID to paths and metadata.
+    /// Resolve a session reference to source and artifact paths.
     Resolve {
-        /// Short session ID (8-char prefix).
+        /// Session ID, unique prefix, registered alias, or "latest".
         id: Option<String>,
         /// Filter by engine to disambiguate.
         #[arg(long)]
@@ -252,7 +252,7 @@ enum Commands {
     /// Generate a random salt token for session identification.
     Salt,
 
-    /// Find the first JSONL file containing the provided salt token.
+    /// Find the first visible source artifact containing the salt token.
     #[command(name = "find-salt")]
     FindSalt {
         /// Salt token to search for.
@@ -265,10 +265,10 @@ enum Commands {
     /// Generate/create a session handoff markdown via LLM extraction.
     #[command(name = "create-handoff")]
     CreateHandoff {
-        /// Session ID (or "today").
+        /// Session reference (or "today").
         #[arg(required = false)]
         id: Option<String>,
-        /// Explicit JSONL file path to use.
+        /// Explicit source artifact path (JSONL file or Grok session directory).
         #[arg(long)]
         jsonl: Option<PathBuf>,
         /// Worker engine for handoff extraction, not source-session detection.
@@ -317,7 +317,7 @@ enum Commands {
 
     /// Apply or remove tags on a session.
     Tag {
-        /// Session ID (or `ls` to list all tags).
+        /// Session reference (or `ls` to list all tags).
         id: Option<String>,
         /// Tags to add/remove (not used with `gaal tag ls`).
         tags: Vec<String>,
@@ -329,9 +329,9 @@ enum Commands {
 
 #[derive(Debug, Subcommand)]
 enum IndexCommand {
-    /// Index supported local agent trace artifacts into SQLite + Tantivy.
+    /// Index all supported local agent trace artifacts into SQLite + Tantivy.
     Backfill {
-        /// Restrict backfill to one engine.
+        /// Restrict the default all-engine backfill to one engine.
         #[arg(long)]
         engine: Option<Engine>,
         /// Lower bound date/time.
@@ -343,7 +343,7 @@ enum IndexCommand {
         /// Also generate session markdown files during backfill.
         #[arg(long)]
         with_markdown: bool,
-        /// Write session markdowns to this directory (YYYY/MM/DD/<short-id>.md).
+        /// Write session markdowns to this directory (YYYY/MM/DD/<artifact-id>.md).
         /// Implies --with-markdown. Skips active sessions and existing files.
         #[arg(long)]
         output_dir: Option<PathBuf>,
@@ -352,7 +352,7 @@ enum IndexCommand {
     Status,
     /// Force re-index of one session.
     Reindex {
-        /// Session ID.
+        /// Session reference (full ID, unique prefix, or registered alias).
         id: String,
     },
     /// Remove old facts before a date.
@@ -626,7 +626,7 @@ fn run(cli: Cli) -> Result<(), GaalError> {
         }
         Commands::Resolve { id, engine } => {
             let id = id.ok_or_else(|| {
-                GaalError::ParseError("resolve requires a session ID".to_string())
+                GaalError::ParseError("resolve requires a session reference".to_string())
             })?;
             let args = gaal::commands::resolve::ResolveArgs {
                 id,

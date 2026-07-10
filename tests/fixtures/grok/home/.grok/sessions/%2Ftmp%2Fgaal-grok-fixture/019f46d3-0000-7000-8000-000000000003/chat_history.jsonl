@@ -1,2 +1,9 @@
-{"type":"user","text":"Fallback user message GROK_VISIBLE_USER_PROMPT_SHOULD_INDEX"}
-{"type":"assistant","text":"Fallback assistant reply GROK_VISIBLE_ASSISTANT_REPLY_SHOULD_INDEX"}
+{"type":"system","content":"GROK_PRIV_CHAT_SYSTEM_SHOULD_NOT_INDEX"}
+{"type":"reasoning","content":"GROK_PRIV_CHAT_REASONING_SHOULD_NOT_INDEX","encrypted_content":"GROK_PRIV_CHAT_ENCRYPTED_SHOULD_NOT_INDEX"}
+{"type":"user","content":[{"type":"text","text":"Fallback user message GROK_VISIBLE_USER_PROMPT_SHOULD_INDEX"},{"type":"image","url":"GROK_PRIV_CHAT_IMAGE_SHOULD_NOT_INDEX"}]}
+{"type":"assistant","content":"Fallback assistant reply GROK_VISIBLE_ASSISTANT_REPLY_SHOULD_INDEX","model_id":"grok-4.5","tool_calls":[{"id":"chat-read","name":"read_file","arguments":"{\"path\":\"/tmp/grok-chat-readable.txt\",\"content\":\"GROK_PRIV_CHAT_READ_BODY_SHOULD_NOT_INDEX\"}"}]}
+{"type":"tool_result","tool_call_id":"chat-read","content":"GROK_VISIBLE_CHAT_TOOL_RESULT_SHOULD_INDEX"}
+{"type":"assistant","content":"","tool_calls":[{"id":"chat-write","name":"write_file","arguments":"{\"path\":\"/tmp/grok-chat-written.txt\",\"content\":\"GROK_PRIV_CHAT_WRITE_BODY_SHOULD_NOT_INDEX\"}"}]}
+{"type":"tool_result","tool_call_id":"chat-write","content":"GROK_VISIBLE_CHAT_WRITE_RESULT_SHOULD_INDEX 1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"}
+{"type":"backend_tool_call","kind":"private-backend-kind"}
+malformed chat fixture line

@@ -129,7 +129,7 @@ Next steps:
   gaal inspect latest --tokens -H
 
 If no sessions are listed, run Codex CLI, Claude Code, Gemini CLI, Antigravity
-CLI, or Hermes locally once, then run:
+CLI, Hermes, or Grok Build locally once, then run:
   gaal index backfill
 
 Recommended scheduled indexing:
@@ -166,7 +166,7 @@ What it will not do by default:
   - It will not install a LaunchAgent unless you pass --schedule or accept a TTY prompt.
   - It will not install agent-mux unless you approve handoff setup.
   - It will not generate handoffs or call an LLM backend.
-  - It will not move source traces from Codex, Claude Code, Gemini, agy, or Hermes.
+  - It will not move source traces from Codex, Claude Code, Gemini, agy, Hermes, or Grok.
 EOF
 
   if [ "${SCHEDULE_MODE}" = "yes" ]; then
@@ -384,7 +384,7 @@ install_schedule_if_requested() {
       ;;
     auto)
       if [ -t 0 ]; then
-        printf 'Install scheduled indexing now? It runs only "%s index backfill" every 4 hours. [y/N] ' "${GAAL_BIN}"
+        printf 'Install scheduled indexing now? One unfiltered "%s index backfill" run includes Grok and all supported engines every 4 hours. [y/N] ' "${GAAL_BIN}"
         read -r answer
         case "${answer}" in
           y|Y|yes|YES)
@@ -456,7 +456,7 @@ install() {
           ;;
         1)
           log "No sessions are indexed yet. That is a valid first run on a clean machine."
-          log "Run Codex CLI, Claude Code, Gemini CLI, Antigravity CLI, or Hermes once, then run: gaal index backfill"
+          log "Run Codex CLI, Claude Code, Gemini CLI, Antigravity CLI, Hermes, or Grok Build once, then run: gaal index backfill"
           ;;
         *)
           die "gaal ls failed with exit ${ls_rc}"

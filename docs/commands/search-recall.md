@@ -12,7 +12,7 @@ gaal search [OPTIONS] [QUERY]
 
 - `--since <duration|date>`: default `30d`
 - `--cwd <substring>`
-- `--engine <claude|codex|gemini|agy|hermes>`
+- `--engine <claude|codex|gemini|agy|hermes|grok>`
 - `--field <prompts|replies|commands|errors|files|all>`: default `all`
 - `--context <n>`: default `2`
 - `--limit <n>`: default `20`
@@ -70,7 +70,9 @@ gaal recall [OPTIONS] [QUERY]
 
 ## Flags
 
-- `--id <session-id>`: direct handoff lookup by session ID (bypasses query scoring). Supports prefix, registered Hermes alias, and `latest`. Mutually exclusive with positional QUERY.
+- `--id <session-reference>`: direct handoff lookup (bypasses query scoring).
+  Supports full IDs, unique prefixes, registered Hermes/Grok aliases, and
+  `latest`. Mutually exclusive with positional QUERY.
 - `--days-back <n>`: default `14`
 - `--limit <n>`: default `3`
 - `--format <summary|handoff|brief|full>`: default `brief`
@@ -99,7 +101,7 @@ Keywords: gaal, subagent, transcript, who, BACKLOG.md
 Substance: 3 | Duration: 327m | Score: 44.9
 ```
 
-### Direct lookup by session ID
+### Direct lookup by session reference
 
 ```bash
 $ gaal recall --id 66ce8874 --format brief -H

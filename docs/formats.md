@@ -269,6 +269,33 @@ Current caveats:
 - Image generation is indexed and rendered through normalized tool facts and
   transcript evidence; Gaal does not ingest generated image files.
 
+## Grok Build Multi-File Format
+
+Grok Build stores one logical session as a directory under
+`${GROK_HOME:-~/.grok}/sessions/<percent-encoded-cwd>/<full-uuid>/`. Gaal keeps
+the full UUID as the canonical session/artifact ID and registers the unique
+last eight dash-stripped UUID characters as a lookup alias.
+
+Relevant files:
+
+| File | Gaal treatment |
+|------|----------------|
+| `summary.json` | Structural metadata such as model, cwd, timestamp, and format version. Private summary/title text is not indexed as visible conversation. |
+| `updates.jsonl` | Primary visible event stream. |
+| `chat_history.jsonl` | Fallback only when updates contain no recoverable visible events. |
+| prompt-context, system-prompt, rewind, thought, and unknown/private surfaces | Excluded from visible facts and counted in source diagnostics where possible. |
+
+Gaal does not merge `updates.jsonl` and `chat_history.jsonl`; doing so would
+duplicate turns. Visible assistant/user/tool material is normalized into the
+common event/fact model. Tool results in either selected visible source are
+eligible for commands, file activity, transcript rendering, search, and
+`find-salt` when their shape is supported.
+
+Before derived Grok text is stored, common secret patterns are redacted on a
+best-effort basis and projected tool output is size-bounded. Neither control is
+a general secret scanner or publication-safety guarantee. Gaal never modifies
+the raw Grok source files.
+
 ## Search Index Rebuild Triggers
 
 These commands rebuild Tantivy:

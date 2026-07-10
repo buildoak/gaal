@@ -1,6 +1,12 @@
 # gaal
 
-`gaal` is session observability for AI coding agents. Claude Code, Codex, Gemini, Antigravity CLI (`agy`), and Hermes emit session logs, but those logs are usually large undocumented, engine-specific event streams that are painful to inspect directly. `gaal` parses all five formats, indexes them into SQLite plus Tantivy, and turns raw traces into answers in seconds. The core mental model is that sessions are first-class queryable artifacts, not throwaway logs.
+`gaal` is session observability for AI coding agents. Claude Code, Codex,
+Gemini, Antigravity CLI (`agy`), Hermes, and Grok emit session artifacts, but
+those artifacts are usually large, undocumented, engine-specific event streams
+that are painful to inspect directly. `gaal` parses all six source shapes,
+indexes them into SQLite plus Tantivy, and turns raw traces into answers in
+seconds. The core mental model is that sessions are first-class queryable
+artifacts, not throwaway logs.
 
 ## Quick Orientation
 

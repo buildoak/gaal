@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -22,6 +22,8 @@ const RESULT_EXIT_CODE_KEY: &str = "__gaal_explicit_exit_code";
 const RESULT_SUCCESS_KEY: &str = "__gaal_explicit_success";
 const SOURCE_SCHEMA_VERSION: &str = "grok-0.2.93-bundle-v1";
 const VISIBILITY_POLICY_VERSION: &str = "grok-visibility-v1";
+const TOOL_OUTPUT_LIMIT_CHARS: usize = 20_000;
+const TOOL_OUTPUT_PREVIEW_CHARS: usize = 16_000;
 
 /// Parse one native Grok Build session directory.
 ///
@@ -403,7 +405,7 @@ fn classify_chat_file(path: &Path, artifact: &mut SourceArtifactRecord) {
             .and_then(Value::as_str)
             .unwrap_or_default()
         {
-            "user" | "assistant" => artifact.visible_count += 1,
+            "user" | "assistant" | "tool_result" => artifact.visible_count += 1,
             "reasoning" | "system" => artifact.private_count += 1,
             _ => artifact.unknown_count += 1,
         }
@@ -466,6 +468,8 @@ fn parse_chat_history_jsonl(
         .with_context(|| format!("failed to open Grok chat history file: {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut events = Vec::new();
+    let mut tool_meta_by_id: HashMap<String, (String, Value)> = HashMap::new();
+    let mut emitted_result_ids = HashSet::new();
 
     for line_result in reader.lines() {
         let line = line_result.context("failed to read Grok chat history JSONL line")?;
@@ -478,31 +482,78 @@ fn parse_chat_history_jsonl(
         };
         let timestamp =
             grok_record_timestamp(&record).or_else(|| fallback_timestamp.map(str::to_string));
-        let Some(text) = extract_text(&record).filter(|text| !text.trim().is_empty()) else {
-            continue;
-        };
         match record
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default()
         {
-            "user" => events.push(SessionEvent {
-                timestamp,
-                kind: EventKind::UserMessage {
-                    content: vec![ContentBlock::Text(text)],
-                },
-            }),
-            "assistant" => events.push(SessionEvent {
-                timestamp,
-                kind: EventKind::AssistantMessage {
-                    content: vec![ContentBlock::Text(text)],
-                    model: record
-                        .get("model")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    stop_reason: None,
-                },
-            }),
+            "user" => {
+                if let Some(text) =
+                    extract_chat_text(&record).filter(|text| !text.trim().is_empty())
+                {
+                    events.push(SessionEvent {
+                        timestamp,
+                        kind: EventKind::UserMessage {
+                            content: vec![ContentBlock::Text(text)],
+                        },
+                    });
+                }
+            }
+            "assistant" => {
+                if let Some(text) =
+                    extract_chat_text(&record).filter(|text| !text.trim().is_empty())
+                {
+                    events.push(SessionEvent {
+                        timestamp: timestamp.clone(),
+                        kind: EventKind::AssistantMessage {
+                            content: vec![ContentBlock::Text(text)],
+                            model: record
+                                .get("model")
+                                .or_else(|| record.get("model_id"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            stop_reason: None,
+                        },
+                    });
+                }
+                for tool_use in chat_tool_uses(&record) {
+                    tool_meta_by_id.insert(
+                        tool_use.id.clone(),
+                        (tool_use.name.clone(), tool_use.input.clone()),
+                    );
+                    events.push(SessionEvent {
+                        timestamp: timestamp.clone(),
+                        kind: EventKind::ToolUse(tool_use),
+                    });
+                }
+            }
+            "tool_result" => {
+                let id = record
+                    .get("tool_call_id")
+                    .or_else(|| record.get("toolCallId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                if id.is_empty() || !emitted_result_ids.insert(id.clone()) {
+                    continue;
+                }
+                let (tool_name, tool_input) = tool_meta_by_id
+                    .get(&id)
+                    .cloned()
+                    .map(|(name, input)| (Some(name), Some(input)))
+                    .unwrap_or((None, None));
+                events.push(SessionEvent {
+                    timestamp,
+                    kind: EventKind::ToolResult {
+                        tool_use_id: id,
+                        content: safe_chat_tool_output(&record),
+                        // Native chat_history records do not expose a reliable error flag.
+                        is_error: false,
+                        tool_name,
+                        tool_input,
+                    },
+                });
+            }
             _ => {}
         }
     }
@@ -517,6 +568,8 @@ struct UpdateEventBuilder {
     pending_user_chunks: Vec<String>,
     pending_assistant_chunks: Vec<String>,
     tool_meta_by_id: HashMap<String, (String, Value)>,
+    emitted_tool_use_ids: HashSet<String>,
+    emitted_result_ids: HashSet<String>,
 }
 
 impl UpdateEventBuilder {
@@ -565,6 +618,9 @@ impl UpdateEventBuilder {
                 let input = safe_tool_input(update);
                 self.tool_meta_by_id
                     .insert(id.clone(), (name.clone(), input.clone()));
+                if !self.emitted_tool_use_ids.insert(id.clone()) {
+                    return;
+                }
                 self.events.push(SessionEvent {
                     timestamp,
                     kind: EventKind::ToolUse(ToolUseEvent { id, name, input }),
@@ -594,6 +650,12 @@ impl UpdateEventBuilder {
                     .get(&id)
                     .cloned()
                     .unwrap_or_else(|| (normalize_tool_name(update), safe_tool_input(update)));
+                // A tool-call ID identifies one logical result. Grok can replay
+                // terminal lifecycle rows, and applying the ID gate uniformly
+                // also keeps other completed tool updates idempotent.
+                if !self.emitted_result_ids.insert(id.clone()) {
+                    return;
+                }
                 let output = safe_tool_output(update);
                 let mut result_input = name_input.1.clone();
                 attach_result_status(&mut result_input, update, status);
@@ -681,6 +743,64 @@ fn extract_text(value: &Value) -> Option<String> {
         .map(redact_visible_text)
 }
 
+fn extract_chat_text(value: &Value) -> Option<String> {
+    if let Some(text) = value
+        .get("text")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("content").and_then(Value::as_str))
+        .or_else(|| value.pointer("/content/text").and_then(Value::as_str))
+    {
+        return Some(redact_visible_text(text));
+    }
+
+    let chunks = value
+        .get("content")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|item| {
+            let item_type = item.get("type").and_then(Value::as_str);
+            if item_type.is_some_and(|kind| kind != "text") {
+                return None;
+            }
+            item.get("text").and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    (!chunks.is_empty()).then(|| redact_visible_text(&chunks.join("")))
+}
+
+fn chat_tool_uses(record: &Value) -> Vec<ToolUseEvent> {
+    record
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|call| {
+            let id = call
+                .get("id")
+                .or_else(|| call.get("tool_call_id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if id.is_empty() {
+                return None;
+            }
+            let name = normalize_tool_name(call);
+            let raw_input = call
+                .get("arguments")
+                .and_then(|arguments| match arguments {
+                    Value::String(encoded) => serde_json::from_str::<Value>(encoded).ok(),
+                    other => Some(other.clone()),
+                })
+                .unwrap_or_else(|| json!({}));
+            Some(ToolUseEvent {
+                id,
+                name,
+                input: safe_tool_input_value(&raw_input),
+            })
+        })
+        .collect()
+}
+
 fn normalize_tool_name(update: &Value) -> String {
     let raw = update
         .get("title")
@@ -688,16 +808,18 @@ fn normalize_tool_name(update: &Value) -> String {
         .or_else(|| update.get("kind"))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    match raw {
-        "read_file" | "open_file" | "view_file" => "Read",
+    let normalized = raw.trim().trim_end_matches(':').to_ascii_lowercase();
+    match normalized.as_str() {
+        "read" | "read_file" | "open_file" | "view_file" => "Read",
+        "glob" => "Glob",
         "list_dir" | "list_directory" => "Read",
         "grep" | "search" | "search_file" => "Grep",
         "run_terminal_command" | "terminal" | "bash" | "shell" => "Bash",
-        "write_file" | "create_file" => "Write",
-        "search_replace" | "edit_file" | "replace_file" => "Edit",
-        "web_search" => "WebSearch",
-        "web_fetch" => "WebFetch",
-        other if !other.is_empty() => other,
+        "write" | "write_file" | "create_file" => "Write",
+        "edit" | "search_replace" | "edit_file" | "replace_file" => "Edit",
+        "web search" | "x search" | "web_search" => "WebSearch",
+        "web fetch" | "web_fetch" => "WebFetch",
+        _ if !raw.is_empty() => raw,
         _ => "GrokTool",
     }
     .to_string()
@@ -708,6 +830,24 @@ fn safe_tool_input(update: &Value) -> Value {
         .get("rawInput")
         .or_else(|| update.get("input"))
         .unwrap_or(update);
+    let mut projected = safe_tool_input_value(raw);
+    let Value::Object(out) = &mut projected else {
+        return projected;
+    };
+    if !out.contains_key("command") {
+        if let Some(value) = update.get("command").and_then(safe_scalar) {
+            out.insert("command".to_string(), value);
+        }
+    }
+    if !out.contains_key("file_path") {
+        if let Some(value) = update.get("path").and_then(safe_scalar) {
+            out.insert("file_path".to_string(), value);
+        }
+    }
+    projected
+}
+
+fn safe_tool_input_value(raw: &Value) -> Value {
     let mut out = Map::new();
     for key in [
         "command",
@@ -715,6 +855,7 @@ fn safe_tool_input(update: &Value) -> Value {
         "path",
         "file_path",
         "target_file",
+        "target_directory",
         "directory",
         "dir",
         "cwd",
@@ -724,16 +865,6 @@ fn safe_tool_input(update: &Value) -> Value {
     ] {
         if let Some(value) = raw.get(key).and_then(safe_scalar) {
             out.insert(normalize_input_key(key).to_string(), value);
-        }
-    }
-    if !out.contains_key("command") {
-        if let Some(value) = update.get("command").and_then(safe_scalar) {
-            out.insert("command".to_string(), value);
-        }
-    }
-    if !out.contains_key("file_path") {
-        if let Some(value) = update.get("path").and_then(safe_scalar) {
-            out.insert("file_path".to_string(), value);
         }
     }
     Value::Object(out)
@@ -752,18 +883,80 @@ fn safe_scalar(value: &Value) -> Option<Value> {
 fn normalize_input_key(key: &str) -> &str {
     match key {
         "target_file" | "path" => "file_path",
-        "directory" | "dir" => "path",
+        "target_directory" | "directory" | "dir" => "path",
         other => other,
     }
 }
 
 fn safe_tool_output(update: &Value) -> Option<String> {
     let raw = update.get("rawOutput").or_else(|| update.get("output"))?;
-    raw.get("content")
+    let candidates = [
+        raw.get("content"),
+        raw.get("text"),
+        raw.get("output_for_prompt"),
+        raw.pointer("/FileContent/content_concise"),
+        raw.pointer("/FileContent/content"),
+        raw.pointer("/EditsApplied/tool_output_for_prompt_concise"),
+        raw.pointer("/EditsApplied/tool_output_for_prompt"),
+        raw.pointer("/Content/content"),
+        raw.pointer("/Result/output"),
+        raw.pointer("/Result/message"),
+        raw.get("file_matches"),
+        raw.get("stdout"),
+        raw.get("output"),
+        Some(raw).filter(|value| value.is_string()),
+    ];
+
+    candidates
+        .into_iter()
+        .flatten()
+        .find_map(output_value_to_text)
+        .map(|text| project_tool_output(&text))
+}
+
+fn output_value_to_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.is_empty() => Some(text.clone()),
+        Value::Array(items) if items.is_empty() => None,
+        Value::Array(items) => {
+            let bytes = items
+                .iter()
+                .map(Value::as_u64)
+                .collect::<Option<Vec<_>>>()
+                .filter(|values| values.iter().all(|value| *value <= u8::MAX.into()));
+            if let Some(bytes) = bytes {
+                let bytes = bytes
+                    .into_iter()
+                    .map(|value| value as u8)
+                    .collect::<Vec<_>>();
+                return Some(String::from_utf8_lossy(&bytes).into_owned());
+            }
+            serde_json::to_string(value).ok()
+        }
+        Value::Object(map) if map.is_empty() => None,
+        Value::Object(_) | Value::Number(_) | Value::Bool(_) => serde_json::to_string(value).ok(),
+        _ => None,
+    }
+}
+
+fn safe_chat_tool_output(record: &Value) -> Option<String> {
+    record
+        .get("content")
         .and_then(Value::as_str)
-        .or_else(|| raw.get("text").and_then(Value::as_str))
-        .or_else(|| raw.as_str())
-        .map(redact_visible_text)
+        .or_else(|| record.pointer("/content/text").and_then(Value::as_str))
+        .map(project_tool_output)
+}
+
+fn project_tool_output(text: &str) -> String {
+    let redacted = redact_visible_text(text);
+    let char_count = redacted.chars().count();
+    if char_count <= TOOL_OUTPUT_LIMIT_CHARS {
+        return redacted;
+    }
+    let preview: String = redacted.chars().take(TOOL_OUTPUT_PREVIEW_CHARS).collect();
+    format!(
+        "{preview}\n\n[GAAL_TRUNCATED_TOOL_OUTPUT original_chars={char_count} retained_chars={TOOL_OUTPUT_PREVIEW_CHARS}]"
+    )
 }
 
 fn redact_visible_text(text: &str) -> String {
@@ -924,7 +1117,7 @@ mod tests {
             .find(|fact| fact.fact_type.as_str() == "command")
             .expect("command fact");
 
-        assert_eq!(parsed.total_tools, 1);
+        assert_eq!(parsed.total_tools, 6);
         assert_eq!(
             command.detail.as_deref(),
             Some("printf GROK_VISIBLE_TOOL_RESULT_SHOULD_INDEX")
@@ -932,9 +1125,59 @@ mod tests {
         assert_eq!(command.exit_code, Some(0));
         assert_eq!(command.success, Some(true));
         assert!(text.contains("GROK_VISIBLE_TOOL_RESULT_SHOULD_INDEX"));
+        assert!(parsed.facts.iter().any(|fact| {
+            fact.fact_type.as_str() == "file_read"
+                && fact.subject.as_deref() == Some("/tmp/grok-readable.txt")
+        }));
+        assert!(parsed.facts.iter().any(|fact| {
+            fact.fact_type.as_str() == "file_write"
+                && fact.subject.as_deref() == Some("/tmp/grok-written.txt")
+        }));
+        assert!(parsed.facts.iter().any(|fact| {
+            fact.fact_type.as_str() == "file_read"
+                && fact.subject.as_deref() == Some("/tmp/grok-listable")
+        }));
+        assert!(parsed.facts.iter().any(|fact| {
+            fact.fact_type.as_str() == "error"
+                && fact.exit_code == Some(7)
+                && fact.success == Some(false)
+                && fact
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("GROK_VISIBLE_TOOL_FAILURE_SHOULD_INDEX"))
+        }));
+        assert!(text.contains("GAAL_TRUNCATED_TOOL_OUTPUT"));
+        assert!(text.contains("GROK_VISIBLE_OVERSIZE_OUTPUT_SHOULD_INDEX"));
+        assert!(!text.contains("GROK_OVERSIZE_TAIL_SHOULD_NOT_INDEX"));
+        assert!(!text.contains("GROK_VISIBLE_DUPLICATE_TERMINAL_RESULT_SHOULD_NOT_INDEX"));
+        assert!(!text.contains("GROK_VISIBLE_DUPLICATE_SHELL_RESULT_SHOULD_NOT_INDEX"));
         assert!(!text.contains("GROK_PRIV_RAWINPUT_BODY_SHOULD_NOT_INDEX"));
         assert!(!text.contains("GROK_PRIV_RAWOUTPUT_BODY_SHOULD_NOT_INDEX"));
+        assert!(!text.contains("GROK_PRIV_READ_BODY_SHOULD_NOT_INDEX"));
+        assert!(!text.contains("GROK_PRIV_WRITE_BODY_SHOULD_NOT_INDEX"));
+        assert!(!text.contains("GROK_PRIV_LIST_BODY_SHOULD_NOT_INDEX"));
         assert!(!text.contains("do not double index this chat row"));
+
+        let events = parse_events(&fixture_dir("02"), "019f46d3-0000-7000-8000-000000000002")
+            .expect("parse tool events");
+        let tool_outputs = events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                EventKind::ToolResult { content, .. } => content.as_deref(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for canary in [
+            "GROK_VISIBLE_TOOL_RESULT_SHOULD_INDEX",
+            "GROK_VISIBLE_READ_RESULT_SHOULD_INDEX",
+            "GROK_VISIBLE_WRITE_RESULT_SHOULD_INDEX",
+            "GROK_VISIBLE_LIST_RESULT_SHOULD_INDEX",
+        ] {
+            assert!(tool_outputs.contains(canary), "missing {canary}");
+        }
+        assert!(!tool_outputs.contains("GROK_VISIBLE_DUPLICATE_TERMINAL_RESULT_SHOULD_NOT_INDEX"));
+        assert!(!tool_outputs.contains("GROK_VISIBLE_DUPLICATE_SHELL_RESULT_SHOULD_NOT_INDEX"));
     }
 
     #[test]
@@ -943,18 +1186,145 @@ mod tests {
         let text = all_fact_text(&parsed);
 
         assert_eq!(parsed.total_turns, 1);
+        assert_eq!(parsed.total_tools, 2);
         assert!(text.contains("Fallback user message GROK_VISIBLE_USER_PROMPT_SHOULD_INDEX"));
         assert!(text.contains("Fallback assistant reply GROK_VISIBLE_ASSISTANT_REPLY_SHOULD_INDEX"));
+        assert!(parsed.facts.iter().any(|fact| {
+            fact.fact_type.as_str() == "file_read"
+                && fact.subject.as_deref() == Some("/tmp/grok-chat-readable.txt")
+        }));
+        assert!(parsed.facts.iter().any(|fact| {
+            fact.fact_type.as_str() == "file_write"
+                && fact.subject.as_deref() == Some("/tmp/grok-chat-written.txt")
+        }));
+        assert!(!text.contains("GROK_PRIV_CHAT_READ_BODY_SHOULD_NOT_INDEX"));
+        assert!(!text.contains("GROK_PRIV_CHAT_WRITE_BODY_SHOULD_NOT_INDEX"));
+        assert!(!text.contains("GROK_PRIV_CHAT_IMAGE_SHOULD_NOT_INDEX"));
+
+        let events = parse_events(&fixture_dir("03"), "019f46d3-0000-7000-8000-000000000003")
+            .expect("parse fallback events");
+        let tool_outputs = events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                EventKind::ToolResult { content, .. } => content.as_deref(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(tool_outputs.contains("GROK_VISIBLE_CHAT_TOOL_RESULT_SHOULD_INDEX"));
+        assert!(tool_outputs.contains("[REDACTED_TELEGRAM_BOT_TOKEN]"));
+        assert!(!tool_outputs.contains("1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"));
     }
 
     #[test]
     fn redacts_common_secret_patterns_from_visible_text() {
-        let raw = "tg api key 1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi and bearer Bearer abcdefghijklmnopqrstuvwxyz123456";
+        let raw = "tg 1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi github ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 api sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 bearer Bearer abcdefghijklmnopqrstuvwxyz123456 slack xoxb-123456789012345678901234";
         let redacted = redact_visible_text(raw);
 
         assert!(redacted.contains("[REDACTED_TELEGRAM_BOT_TOKEN]"));
+        assert!(redacted.contains("[REDACTED_GITHUB_TOKEN]"));
+        assert!(redacted.contains("[REDACTED_API_KEY]"));
         assert!(redacted.contains("Bearer [REDACTED_BEARER_TOKEN]"));
+        assert!(redacted.contains("[REDACTED_SLACK_TOKEN]"));
         assert!(!redacted.contains("1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"));
+        assert!(!redacted.contains("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"));
+        assert!(!redacted.contains("sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"));
         assert!(!redacted.contains("abcdefghijklmnopqrstuvwxyz123456"));
+        assert!(!redacted.contains("xoxb-123456789012345678901234"));
+    }
+
+    #[test]
+    fn caps_projected_tool_output_with_an_explicit_marker() {
+        let raw = format!(
+            "GROK_VISIBLE_OVERSIZE_OUTPUT_SHOULD_INDEX {} GROK_OVERSIZE_TAIL_SHOULD_NOT_INDEX",
+            "x".repeat(TOOL_OUTPUT_LIMIT_CHARS + 1_000)
+        );
+        let projected = project_tool_output(&raw);
+
+        assert!(projected.contains("GROK_VISIBLE_OVERSIZE_OUTPUT_SHOULD_INDEX"));
+        assert!(projected.contains("[GAAL_TRUNCATED_TOOL_OUTPUT"));
+        assert!(!projected.contains("GROK_OVERSIZE_TAIL_SHOULD_NOT_INDEX"));
+        assert!(projected.chars().count() <= TOOL_OUTPUT_LIMIT_CHARS);
+    }
+
+    #[test]
+    fn projects_observed_live_raw_output_shapes() {
+        let cases = [
+            (
+                json!({"rawOutput": {"output_for_prompt": "terminal-visible"}}),
+                "terminal-visible",
+            ),
+            (
+                json!({"rawOutput": {"FileContent": {"content_concise": "file-visible"}}}),
+                "file-visible",
+            ),
+            (
+                json!({"rawOutput": {"EditsApplied": {"tool_output_for_prompt_concise": "edit-visible"}}}),
+                "edit-visible",
+            ),
+            (
+                json!({"rawOutput": {"Content": {"content": "directory-visible"}}}),
+                "directory-visible",
+            ),
+            (
+                json!({"rawOutput": {"Result": {"output": "background-visible"}}}),
+                "background-visible",
+            ),
+            (
+                json!({"rawOutput": {"file_matches": [{"path": "/tmp/a", "matches": ["grep-visible"]}]}}),
+                "grep-visible",
+            ),
+            (
+                json!({"rawOutput": {"stdout": [115, 116, 100, 111, 117, 116, 45, 118, 105, 115, 105, 98, 108, 101]}}),
+                "stdout-visible",
+            ),
+            (
+                json!({"rawOutput": {"output": [111, 117, 116, 112, 117, 116, 45, 118, 105, 115, 105, 98, 108, 101]}}),
+                "output-visible",
+            ),
+        ];
+
+        for (update, expected) in cases {
+            let projected = safe_tool_output(&update).expect("project observed output");
+            assert!(projected.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
+    fn normalizes_observed_tool_names_and_directory_input() {
+        assert_eq!(normalize_tool_name(&json!({"title": "write"})), "Write");
+        assert_eq!(normalize_tool_name(&json!({"title": "Shell"})), "Bash");
+        assert_eq!(
+            normalize_tool_name(&json!({"title": "Web search:"})),
+            "WebSearch"
+        );
+        assert_eq!(
+            safe_tool_input(&json!({
+                "title": "list_dir",
+                "rawInput": {"target_directory": "/tmp/listable"}
+            }))["path"],
+            "/tmp/listable"
+        );
+    }
+
+    #[test]
+    fn source_state_reports_malformed_update_and_fallback_records() {
+        let updates = source_state(&fixture_dir("02"), "019f46d3-0000-7000-8000-000000000002");
+        assert!(updates.artifacts.iter().any(|artifact| {
+            artifact.role == "updates"
+                && artifact.malformed_count == 1
+                && artifact.parse_status == "partial_malformed"
+        }));
+
+        let fallback = source_state(&fixture_dir("03"), "019f46d3-0000-7000-8000-000000000003");
+        assert!(fallback.artifacts.iter().any(|artifact| {
+            artifact.role == "chat_history"
+                && artifact.malformed_count == 1
+                && artifact.parse_status == "partial_malformed"
+        }));
+        assert!(fallback.observations.iter().any(|observation| {
+            observation.kind == "source_selected"
+                && observation.source_role.as_deref() == Some("chat_history")
+        }));
     }
 }

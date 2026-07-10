@@ -20,11 +20,11 @@ Current top-level commands:
 6. `search` — full-text search over indexed facts
 7. `recall` — handoff retrieval for continuity
 8. `salt` — self-identification token
-9. `find-salt` — JSONL discovery by salt
+9. `find-salt` — visible source-artifact discovery by salt
 10. `create-handoff` — LLM extraction into handoff markdown
 11. `index` — index maintenance
 12. `tag` — apply/remove tags
-13. `resolve` — resolve short ID to full paths and metadata
+13. `resolve` — resolve a session reference to source and artifact paths
 
 There is **no separate `active` command**. `activity` is historical and source-backed; it is not process monitoring.
 
@@ -35,7 +35,8 @@ There is **no separate `active` command**. `activity` is historical and source-b
 `gaal index backfill` discovers supported local agent trace artifacts, parses
 them into normalized sessions and facts, stores those rows in SQLite, and
 rebuilds Tantivy full-text search from the indexed facts when new sessions are
-indexed. It does not index arbitrary JSON/JSONL files.
+indexed. It does not index arbitrary files or directories outside supported
+source shapes.
 
 Supported source shapes:
 
@@ -46,6 +47,7 @@ Supported source shapes:
 | Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON session files, re-parsed as a whole. |
 | Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | Native but experimental JSONL transcript support; no agy SQLite/blob parsing. |
 | Hermes Agent | `HERMES_STATE_DB`, `HERMES_HOME/state.db`, or `~/.hermes/state.db` | Logical sessions parsed from the Hermes SQLite state DB. |
+| Grok Build | `${GROK_HOME:-~/.grok}/sessions/<encoded-cwd>/<full-uuid>/` | Multi-file session directory; `updates.jsonl` is primary and `chat_history.jsonl` is fallback. |
 
 Indexed facts include prompts, replies, commands, file reads/writes, errors,
 git operations, and task-spawn records where the source exposes them. Subagent
@@ -65,7 +67,7 @@ Fleet view across sessions.
 
 | Flag | Meaning |
 |------|---------|
-| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, `agy`, or `hermes` |
+| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, `agy`, `hermes`, or `grok` |
 | `--session-type <TYPE>` | Filter by `coordinator`, `standalone`, or `subagent` |
 | `--subagent-type <TYPE>` | Filter by subagent type (e.g. `gsd-heavy`, `gsd-coordinator`, `Explore`) |
 | `--since <SINCE>` | Lower bound; supports durations/dates such as `1d` or `2026-03-01` |
@@ -106,14 +108,14 @@ older `show` docs.
 
 | Flag | Meaning |
 |------|---------|
-| `[ID]` | Session ID, unique prefix, or `latest` |
+| `[ID]` | Full session ID, unique prefix, registered alias, or `latest` |
 | `--files [read\|write\|all]` | File-ops view; bare `--files` defaults to `all` |
 | `--errors` | Errors and non-zero exits only |
 | `--commands` | Commands only |
 | `--git` | Git operations only |
 | `--tokens` | Token usage breakdown |
 | `--trace` | Full event timeline |
-| `--source` | Raw JSONL source path |
+| `--source` | Source-artifact diagnostics and path; a Grok source is a session directory |
 | `--include-empty` | Include empty/low-signal subagents in coordinator views |
 | `--ids <IDS>` | Batch IDs in comma-delimited form |
 | `--tag <TAG>` | Batch filter by tag |
@@ -147,7 +149,7 @@ style behavior.
 
 | Flag | Meaning |
 |------|---------|
-| `[ID]` | Session ID, unique prefix, or `latest` |
+| `[ID]` | Full session ID, unique prefix, registered alias, or `latest` |
 | `--force` | Re-render even if cached markdown exists |
 | `--stdout` | Dump markdown to stdout instead of returning path metadata |
 | `-H, --human` | Human-readable output |
@@ -179,7 +181,7 @@ Source-backed historical activity slices across a time window.
 |------|---------|
 | `--since <SINCE>` | Lower bound; default `1d`; supports durations, dates, and RFC3339 |
 | `--before <BEFORE>` | Upper bound; default now; windows are `[since,before)` |
-| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, `agy`, or `hermes` |
+| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, `agy`, `hermes`, or `grok` |
 | `--cwd <CWD>` | Restrict by working directory substring |
 | `--session <ID>` | Render one resolved session only |
 | `--skip-subagents` | Hide subagent sessions |
@@ -288,7 +290,7 @@ Ranked handoff retrieval for continuity.
 | `--days-back <DAYS_BACK>` | Recency window in days |
 | `--limit <LIMIT>` | Max number of sessions |
 | `--format <FORMAT>` | `summary`, `handoff`, `brief`, or `full` |
-| `--id <ID>` | Direct handoff lookup by session ID (bypasses search). Supports prefix, `latest` |
+| `--id <ID>` | Direct handoff lookup by session reference (bypasses search). Supports full ID, unique prefix, registered alias, or `latest` |
 | `--substance <SUBSTANCE>` | Minimum substance score |
 | `-H, --human` | Human-readable output |
 
@@ -309,9 +311,9 @@ LLM-powered handoff generation.
 
 | Flag | Meaning |
 |------|---------|
-| `[ID]` | Session ID or `today` |
-| `--jsonl <JSONL>` | Explicit JSONL path |
-| `--engine <ENGINE>` | Extraction engine: `claude`, `codex`, `gemini`, `agy`, or `hermes` |
+| `[ID]` | Session reference or `today` |
+| `--jsonl <JSONL>` | Explicit source artifact path; the legacy flag name also accepts a Grok session directory |
+| `--engine <ENGINE>` | Extraction engine: `claude`, `codex`, `gemini`, `agy`, `hermes`, or `grok` |
 | `--model <MODEL>` | Extraction model |
 | `--prompt <PROMPT>` | Custom prompt path |
 | `--provider <PROVIDER>` | `agent-mux` or `openrouter`; `agent-mux` is the supported real-execution provider unless dry-run reports another provider as supported |
@@ -353,11 +355,12 @@ Index maintenance commands.
 ### Notes
 
 - First run performs a full discovery pass across supported engines unless
-  `--engine` is supplied. Later runs use per-engine mtime cursors and skip
+  `--engine` is supplied. This includes Grok by default; `--engine grok` is a
+  scoped filter, not an opt-in requirement. Later runs use per-engine mtime cursors and skip
   unchanged sessions when possible.
 - Claude and Codex JSONL can use byte-offset incremental parsing. Gemini JSON,
-  agy transcript JSONL, and Hermes SQLite are re-parsed as complete source
-  artifacts when they need indexing.
+  agy transcript JSONL, Hermes SQLite, and Grok multi-file session directories
+  are re-parsed as complete source artifacts when they need indexing.
 - `--with-markdown` additionally writes deterministic session markdown; it is
   not required for SQLite/Tantivy indexing.
 
@@ -379,7 +382,7 @@ Apply or remove tags on a session.
 
 | Flag | Meaning |
 |------|---------|
-| `[ID]` | Session ID, or `ls` to list tags |
+| `[ID]` | Session reference, or `ls` to list tags |
 | `[TAGS]...` | Tags to add/remove |
 | `--remove` | Remove tags instead of adding them |
 | `-H, --human` | Human-readable output |
@@ -408,11 +411,12 @@ gaal salt
 
 ## 12. `find-salt`
 
-Find the first source file/directory containing the provided salt token.
+Find the first visible source artifact containing the provided salt token.
 
 Scans Claude Code, Codex, Antigravity brain JSONL logs, and Grok visible session
 sources. Agy and Grok match only executed action/tool output records and ignore
-user prompt echoes. For Grok, the returned `jsonl_path` is the session directory.
+user prompt echoes. For Grok, the legacy `jsonl_path` output field contains the
+session directory.
 
 ### Flags
 
@@ -432,22 +436,23 @@ gaal find-salt GAAL_SALT_abc123    # use the literal token from `gaal salt`, nev
 
 ## 13. `resolve`
 
-Resolve a short session ID to full session paths and metadata.
+Resolve a full session ID, unique prefix, registered alias, or `latest` to
+source and artifact paths plus metadata.
 
 ### Flags
 
 | Flag | Meaning |
 |------|---------|
-| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, `agy`, or `hermes` to disambiguate |
+| `--engine <ENGINE>` | Filter by `claude`, `codex`, `gemini`, `agy`, `hermes`, or `grok` to disambiguate |
 
 ### JSON Output
 
 | Field | Meaning |
 |-------|---------|
 | `session_id` | Full session ID |
-| `short_id` | Resolved short ID |
+| `short_id` | Resolved display/artifact ID; Hermes uses its registered alias, while Grok keeps the canonical full UUID |
 | `engine` | Source engine |
-| `jsonl_path` | Full path to the source JSONL |
+| `jsonl_path` | Legacy field containing the source artifact path; a Grok value is a session directory |
 | `transcript_path` | Full path to the rendered transcript markdown |
 | `transcript_exists` | Whether the transcript file exists |
 | `handoff_path` | Full path to the handoff markdown |

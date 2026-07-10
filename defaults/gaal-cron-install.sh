@@ -38,6 +38,9 @@ Options:
 The scheduled job runs only:
   gaal index backfill
 
+That single unfiltered command includes Grok and every other supported engine;
+the installer does not add a second Grok-only job.
+
 It does not create handoffs, call LLM backends, run recall, or perform broad
 maintenance.
 EOF

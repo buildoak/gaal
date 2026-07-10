@@ -21,7 +21,8 @@ use crate::config::{gaal_home, load_config};
 use crate::db::open_db;
 use crate::db::queries::{
     delete_session, get_grok_diagnostic_summary, get_index_status, get_meta, get_session,
-    insert_facts_batch, replace_grok_source_state, set_meta, upsert_session, SessionRow,
+    insert_facts_batch, replace_grok_source_state, resolve_session_ids, set_meta, upsert_session,
+    SessionRow,
 };
 use crate::discovery::codex::truncate_codex_id;
 use crate::discovery::{discover_sessions_with_cutoff, DiscoveredSession};
@@ -206,6 +207,7 @@ fn backfill_engines() -> Vec<Engine> {
         Engine::Gemini,
         Engine::Agy,
         Engine::Hermes,
+        Engine::Grok,
     ]
 }
 
@@ -421,7 +423,14 @@ fn print_status_human(
 /// Run `gaal index reindex`.
 pub fn run_reindex(args: ReindexArgs) -> Result<(), GaalError> {
     let mut conn = open_db()?;
-    let existing = get_session(&conn, &args.id)?.ok_or_else(|| GaalError::NotFound(args.id))?;
+    let matching_ids = resolve_session_ids(&conn, &args.id, None)?;
+    let resolved_id = match matching_ids.as_slice() {
+        [] => return Err(GaalError::NotFound(args.id)),
+        [id] => id.clone(),
+        _ => return Err(GaalError::AmbiguousId(args.id)),
+    };
+    let existing = get_session(&conn, &resolved_id)?
+        .ok_or_else(|| GaalError::NotFound(resolved_id.clone()))?;
     let path = PathBuf::from(&existing.jsonl_path);
     if !path.exists() {
         return Err(GaalError::NotFound(existing.jsonl_path));

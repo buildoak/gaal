@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::db;
 use crate::error::GaalError;
-use crate::parser::{self, Engine};
+use crate::parser;
 
 /// Arguments for `gaal find-salt`.
 #[derive(Debug, Clone)]
@@ -57,17 +57,34 @@ pub fn run(args: FindArgs) -> Result<(), GaalError> {
             continue;
         };
 
-        let engine = infer_engine(&path);
+        // The root is authoritative. Content-based detection can misclassify
+        // Grok chat_history rows as Claude because both use user/assistant types.
+        let engine = engine_name;
         let session_id = infer_session_id(&path, engine)?;
         let source_path = reported_source_path(&path, engine);
+        let source_role = matched_source_role(&path, engine);
 
         // Try enriching from DB
         let enriched = try_enrich(&session_id, engine, &home);
 
         if args.human {
-            print_human(&session_id, engine, &source_path, &enriched);
+            print_human(
+                &session_id,
+                engine,
+                &source_path,
+                &path,
+                source_role,
+                &enriched,
+            );
         } else {
-            print_json(&session_id, engine, &source_path, &enriched);
+            print_json(
+                &session_id,
+                engine,
+                &source_path,
+                &path,
+                source_role,
+                &enriched,
+            );
         }
         return Ok(());
     }
@@ -184,7 +201,14 @@ fn compute_transcript_path(
     (Some(path.to_string_lossy().to_string()), exists)
 }
 
-fn print_json(session_id: &str, engine: &str, jsonl_path: &Path, enriched: &Option<Enrichment>) {
+fn print_json(
+    session_id: &str,
+    engine: &str,
+    jsonl_path: &Path,
+    matched_source_path: &Path,
+    source_role: &str,
+    enriched: &Option<Enrichment>,
+) {
     let output = match enriched {
         Some(e) => {
             let total_tokens = e.total_input_tokens + e.total_output_tokens;
@@ -192,6 +216,8 @@ fn print_json(session_id: &str, engine: &str, jsonl_path: &Path, enriched: &Opti
                 "session_id": session_id,
                 "engine": engine,
                 "jsonl_path": jsonl_path,
+                "matched_source_path": matched_source_path,
+                "source_role": source_role,
                 "indexed": true,
                 "model": e.model,
                 "cwd": e.cwd,
@@ -216,13 +242,22 @@ fn print_json(session_id: &str, engine: &str, jsonl_path: &Path, enriched: &Opti
             "session_id": session_id,
             "engine": engine,
             "jsonl_path": jsonl_path,
+            "matched_source_path": matched_source_path,
+            "source_role": source_role,
             "indexed": false,
         }),
     };
     println!("{output}");
 }
 
-fn print_human(session_id: &str, engine: &str, jsonl_path: &Path, enriched: &Option<Enrichment>) {
+fn print_human(
+    session_id: &str,
+    engine: &str,
+    jsonl_path: &Path,
+    matched_source_path: &Path,
+    source_role: &str,
+    enriched: &Option<Enrichment>,
+) {
     match enriched {
         Some(e) => {
             let total_tokens = e.total_input_tokens + e.total_output_tokens;
@@ -242,7 +277,8 @@ fn print_human(session_id: &str, engine: &str, jsonl_path: &Path, enriched: &Opt
                 e.turns
             );
             println!("Last:    {last_label}");
-            println!("JSONL:   {}", jsonl_path.display());
+            println!("Source:  {}", jsonl_path.display());
+            println!("Matched: {} ({source_role})", matched_source_path.display());
 
             if let Some(tp) = &e.transcript_path {
                 let exists_label = if e.transcript_exists {
@@ -264,7 +300,8 @@ fn print_human(session_id: &str, engine: &str, jsonl_path: &Path, enriched: &Opt
         None => {
             println!("Session: {session_id}");
             println!("Engine:  {engine}");
-            println!("JSONL:   {}", jsonl_path.display());
+            println!("Source:  {}", jsonl_path.display());
+            println!("Matched: {} ({source_role})", matched_source_path.display());
             println!("Status:  not indexed (run 'gaal index backfill' to index)");
         }
     }
@@ -410,17 +447,46 @@ fn grok_salt_match(value: &Value, salt: &str) -> bool {
         .pointer("/params/update/sessionUpdate")
         .and_then(Value::as_str)
     {
-        Some("tool_call_update") => value
-            .pointer("/params/update/rawOutput/content")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                value
-                    .pointer("/params/update/rawOutput/text")
-                    .and_then(Value::as_str)
-            })
-            .is_some_and(|text| text.contains(salt)),
-        _ => false,
+        Some("tool_call_update") => ["rawOutput", "output"].iter().any(|field| {
+            value
+                .pointer(&format!("/params/update/{field}"))
+                .is_some_and(|output| grok_visible_output_contains(output, salt))
+        }),
+        _ => {
+            value.get("type").and_then(Value::as_str) == Some("tool_result")
+                && value
+                    .get("content")
+                    .is_some_and(|content| text_value_contains(content, salt))
+        }
     }
+}
+
+fn grok_visible_output_contains(output: &Value, salt: &str) -> bool {
+    if output.is_string() && text_value_contains(output, salt) {
+        return true;
+    }
+
+    [
+        "/content",
+        "/text",
+        "/output_for_prompt",
+        "/FileContent/content_concise",
+        "/FileContent/content",
+        "/EditsApplied/tool_output_for_prompt_concise",
+        "/EditsApplied/tool_output_for_prompt",
+        "/Content/content",
+        "/Result/output",
+        "/Result/message",
+        "/file_matches",
+        "/stdout",
+        "/output",
+    ]
+    .iter()
+    .any(|pointer| {
+        output
+            .pointer(pointer)
+            .is_some_and(|value| text_value_contains(value, salt))
+    })
 }
 
 fn is_agy_output_type(record_type: &str) -> bool {
@@ -440,7 +506,23 @@ fn is_agy_output_type(record_type: &str) -> bool {
 fn text_value_contains(value: &Value, needle: &str) -> bool {
     match value {
         Value::String(text) => text.contains(needle),
-        Value::Array(items) => items.iter().any(|item| text_value_contains(item, needle)),
+        Value::Array(items) => {
+            let bytes = items
+                .iter()
+                .map(Value::as_u64)
+                .collect::<Option<Vec<_>>>()
+                .filter(|values| values.iter().all(|value| *value <= u8::MAX.into()));
+            if let Some(bytes) = bytes {
+                let bytes = bytes
+                    .into_iter()
+                    .map(|value| value as u8)
+                    .collect::<Vec<_>>();
+                if String::from_utf8_lossy(&bytes).contains(needle) {
+                    return true;
+                }
+            }
+            items.iter().any(|item| text_value_contains(item, needle))
+        }
         Value::Object(map) => map.values().any(|item| text_value_contains(item, needle)),
         _ => false,
     }
@@ -498,34 +580,6 @@ fn is_agy_brain_transcript(path: &Path) -> bool {
             == Some(".system_generated")
 }
 
-/// Infer the engine from a JSONL file path.
-///
-/// - `~/.claude/projects/` → "claude"
-/// - `~/.codex/` → "codex"
-/// - Otherwise → "unknown"
-fn infer_engine(path: &Path) -> &'static str {
-    match parser::detect_engine(path) {
-        Ok(Engine::Claude) => "claude",
-        Ok(Engine::Codex) => "codex",
-        Ok(Engine::Gemini) => "gemini",
-        Ok(Engine::Agy) => "agy",
-        Ok(Engine::Hermes) => "hermes",
-        Ok(Engine::Grok) => "grok",
-        Err(_) => {
-            let path_str = path.to_string_lossy();
-            if path_str.contains("/.claude/projects/") {
-                "claude"
-            } else if path_str.contains("/.codex/") {
-                "codex"
-            } else if path_str.contains("/.gemini/antigravity-cli/") {
-                "agy"
-            } else {
-                "unknown"
-            }
-        }
-    }
-}
-
 fn infer_session_id(path: &Path, engine: &str) -> Result<String, GaalError> {
     if engine == "agy" {
         if let Some(session_id) = parser::extract_agy_session_id(path) {
@@ -552,4 +606,55 @@ fn reported_source_path(path: &Path, engine: &str) -> PathBuf {
         return path.parent().unwrap_or(path).to_path_buf();
     }
     path.to_path_buf()
+}
+
+fn matched_source_role(path: &Path, engine: &str) -> &'static str {
+    if engine != "grok" {
+        return "session_trace";
+    }
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some("updates.jsonl") => "updates",
+        Some("chat_history.jsonl") => "chat_history",
+        _ => "visible_source",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grok_salt_matches_observed_terminal_output_fields() {
+        let salt = "GAAL_SALT_deadbeef";
+        let prompt_output = json!({
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update",
+                "rawOutput": {"output_for_prompt": salt}
+            }}
+        });
+        let byte_output = json!({
+            "params": {"update": {
+                "sessionUpdate": "tool_call_update",
+                "rawOutput": {
+                    "output": [71, 65, 65, 76, 95, 83, 65, 76, 84, 95, 100, 101, 97, 100, 98, 101, 101, 102]
+                }
+            }}
+        });
+
+        assert!(grok_salt_match(&prompt_output, salt));
+        assert!(grok_salt_match(&byte_output, salt));
+    }
+
+    #[test]
+    fn grok_salt_does_not_match_user_prompt_echo() {
+        let salt = "GAAL_SALT_deadbeef";
+        let prompt = json!({
+            "params": {"update": {
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": salt}
+            }}
+        });
+
+        assert!(!grok_salt_match(&prompt, salt));
+    }
 }

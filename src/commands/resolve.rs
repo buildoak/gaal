@@ -11,7 +11,7 @@ use crate::output::json::print_json;
 /// Arguments for `gaal resolve`.
 #[derive(Debug, Clone)]
 pub struct ResolveArgs {
-    /// Short session ID prefix.
+    /// Full session ID, unique prefix, registered alias, or `latest`.
     pub id: String,
     /// Optional engine filter.
     pub engine: Option<String>,
@@ -43,7 +43,7 @@ struct ResolvedPaths {
     handoff_exists: bool,
 }
 
-/// Resolve a short session ID to session metadata and derived artifact paths.
+/// Resolve a session reference to session metadata and derived artifact paths.
 pub fn run(args: ResolveArgs) -> Result<(), GaalError> {
     let conn = db::open_db_readonly()?;
     let matches = db::queries::resolve_by_prefix(&conn, &args.id, args.engine.as_deref())?;
@@ -159,7 +159,7 @@ fn print_human(session: &SessionRow, paths: &ResolvedPaths) {
         paths.artifact_id.as_str(),
         session.session_type
     );
-    println!("JSONL:      {}", compact_home(&paths.jsonl_path));
+    println!("Source:     {}", compact_home(&paths.jsonl_path));
     println!(
         "Transcript: {} [{}]",
         display_path(&paths.transcript_path),

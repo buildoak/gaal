@@ -6,7 +6,7 @@
 
 Key components:
 
-- Parser: five-engine Claude/Codex/Gemini/Agy/Hermes session parsing
+- Parser: six-engine Claude/Codex/Gemini/Agy/Hermes/Grok session parsing
 - SQLite: canonical structured store for sessions, facts, handoffs, and tags
 - Tantivy: full-text search over indexed facts
 - Markdown renderer: transcript generation
@@ -29,7 +29,7 @@ src/
     who.rs             Inverted attribution queries
     search.rs          BM25 full-text search via Tantivy
     recall.rs          Ranked handoff retrieval for session continuity
-    resolve.rs         Short ID, prefix, Hermes alias, and Grok last-8 alias resolution
+    resolve.rs         Full ID, unique prefix, registered alias, and latest resolution
     transcript.rs      Markdown transcript rendering
     handoff.rs         LLM-powered handoff generation (create-handoff)
     salt.rs            Unique token generation for self-identification
@@ -41,12 +41,13 @@ src/
     runtime.rs         Shared command runtime (DB handle, config, output mode)
     mod.rs             Module declarations
 
-  parser/              Five-engine session parsing
+  parser/              Six-engine session parsing
     claude.rs          Claude session JSONL parser
     codex.rs           Codex session JSONL parser
     gemini.rs          Gemini CLI session JSON parser
     agy.rs             Antigravity CLI session JSONL parser
     hermes.rs          Hermes Agent SQLite session parser
+    grok.rs            Grok Build multi-file session parser
     facts.rs           Unified fact extraction (tool counting, error dedup, peak context)
     common.rs          Shared parser types and utilities
     event.rs           Parsed event types
@@ -65,6 +66,7 @@ src/
     gemini.rs          Gemini session scanner (~/.gemini/tmp/*/chats/)
     agy.rs             Antigravity session scanner (~/.gemini/antigravity-cli/brain/)
     hermes.rs          Hermes state DB scanner (~/.hermes/state.db)
+    grok.rs            Grok session-directory scanner (${GROK_HOME:-~/.grok}/sessions/)
     discover.rs        Unified discovery orchestrator
     process.rs         Process-related utilities
     mod.rs
@@ -102,7 +104,10 @@ engine source artifacts on disk
   -> output/ or render/
 ```
 
-The indexing and query path is: engine source artifacts on disk -> discovery/ -> parser/ -> db/ -> commands/ -> output/ or render/. Today that means Claude Code and Codex CLI JSONL, Gemini CLI JSON, Agy/Antigravity transcript JSONL, and Hermes SQLite.
+The indexing and query path is: engine source artifacts on disk -> discovery/
+-> parser/ -> db/ -> commands/ -> output/ or render/. Today that means Claude
+Code and Codex CLI JSONL, Gemini CLI JSON, Agy/Antigravity transcript JSONL,
+Hermes SQLite, and Grok multi-file session directories.
 
 Backfill indexes raw traces from supported local agent CLIs into SQLite session
 rows plus normalized facts, then rebuilds Tantivy FTS from those facts when new
@@ -118,6 +123,7 @@ Supported source roots and formats:
 | Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` | Single JSON session files. |
 | Agy / Antigravity CLI | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` | Transcript JSONL; SQLite/blob sidecars are not parsed. |
 | Hermes Agent | `HERMES_STATE_DB`, `HERMES_HOME/state.db`, or `~/.hermes/state.db` | Logical sessions from the Hermes SQLite state DB. |
+| Grok Build | `${GROK_HOME:-~/.grok}/sessions/<encoded-cwd>/<full-uuid>/` | One full-UUID session per directory; `updates.jsonl` is primary and `chat_history.jsonl` is fallback. |
 
 Codex and Claude desktop/web UI histories are not supported unless they write
 one of the local CLI trace shapes above. Subagent and lineage support is
@@ -189,7 +195,9 @@ Session tags live in `session_tags` and are managed through the `tag` command.
 IDs. Hermes uses this table for deterministic 8-character lowercase aliases
 because first-8 prefixes collide on date-like native IDs. `sessions.id` remains
 the full Hermes session ID; alias rows exist for lookup and registered artifact
-filenames.
+filenames. Grok also keeps its full UUID canonical and registers a unique
+last-eight dash-stripped UUID alias for lookup; its artifact ID remains the full
+UUID.
 
 ### FTS Index
 
@@ -341,6 +349,28 @@ Current caveats:
 - Image generation is indexed and rendered through normalized tool facts and
   transcript evidence, not through image-file ingestion.
 
+## Grok Engine Model
+
+Grok is a native, experimental engine. Unfiltered discovery includes it by
+default; `--engine grok` restricts a run but is not required to opt in.
+Discovery treats each directory under
+`${GROK_HOME:-~/.grok}/sessions/<encoded-cwd>/<full-uuid>/` as one source
+artifact. The canonical session and artifact ID is the full UUID, with a unique
+last-eight alias registered for compact lookup.
+
+`updates.jsonl` is the primary visible-event source. Gaal uses
+`chat_history.jsonl` only when updates contain no recoverable visible events;
+the sources are not merged. `summary.json` contributes structural metadata,
+not private summary/title text. Thought records, prompt context, system prompts,
+rewind points, and unknown/private surfaces do not become visible facts.
+
+Visible Grok text receives best-effort secret-pattern redaction before it is
+copied into derived events, and projected tool outputs are size-bounded. These
+are defense-in-depth controls, not a general sanitization guarantee. Raw Grok
+files remain untouched and authoritative. Source-artifact diagnostics record
+which source was selected plus private, redacted, and unknown record counts so
+upstream schema drift remains observable.
+
 ## Session Lifecycle
 
 The common operator workflow is:
@@ -356,9 +386,12 @@ The self-handoff flow is:
 
 1. Run `gaal salt`
 2. Run `gaal find-salt <token>`
-3. Run `gaal create-handoff --jsonl <path> --dry-run`
+3. Run `gaal create-handoff --jsonl <source-path> --dry-run`
 
-This flow depends on salt-based self-identification so an in-progress session can locate its own JSONL on disk before generating a handoff.
+This flow depends on salt-based self-identification so an in-progress session
+can locate its own source artifact before generating a handoff. The `--jsonl`
+flag and `jsonl_path` output field are compatibility names; a Grok source path
+is its session directory.
 
 ## Token Accounting
 
@@ -367,7 +400,7 @@ Token accounting is parser-driven and model-aware:
 - Cache tokens are fully tracked as `cache_read_tokens` and `cache_creation_tokens`.
 - Peak context is the maximum of `input_tokens + cache_read_tokens + cache_creation_tokens` across all counted turns.
 - Model-aware cost estimation uses per-model pricing instead of one flat rate.
-- Tool counting includes Claude, Codex, Gemini, Agy, and Hermes tool uses.
+- Tool counting includes Claude, Codex, Gemini, Agy, Hermes, and Grok tool uses.
 - Usage deduplication differs by engine: Claude uses `dedup_key`, while Codex uses cumulative `total_tokens`.
 - Error deduplication uses `tool:{tool_use_id}` when available, otherwise `ts:{timestamp}|exit:{code}`.
 - Agy token/cost parity is not implemented.
@@ -395,4 +428,7 @@ Token accounting is parser-driven and model-aware:
     hermes/
       sessions/YYYY/MM/DD/<id>.md
       handoffs/YYYY/MM/DD/<id>.md
+    grok/
+      sessions/YYYY/MM/DD/<full-uuid>.md
+      handoffs/YYYY/MM/DD/<full-uuid>.md
 ```

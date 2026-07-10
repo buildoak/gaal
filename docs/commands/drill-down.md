@@ -17,9 +17,9 @@ gaal inspect [OPTIONS] [ID]
 - `-F`, `--full`: include all arrays and fields
 - `--tokens`: include token breakdown
 - `--trace`: include full fact timeline
-- `--source`: include raw JSONL path
+- `--source`: include source-artifact diagnostics and path (a Grok source is a session directory)
 - `--include-empty`: keep low-signal subagents in coordinator views
-- `--ids <id1,id2,...>`: batch mode by comma-delimited prefixes
+- `--ids <ref1,ref2,...>`: batch mode by comma-delimited session references
 - `--tag <tag>`: batch mode by tag
 - `-H`, `--human`: human-readable output
 
@@ -81,7 +81,8 @@ gaal transcript [OPTIONS] [ID]
 
 - Default mode resolves or renders the transcript file and returns path metadata.
 - `--stdout` prints the markdown body.
-- If no ID is provided, the command prints help and exits successfully.
+- The positional value accepts a full ID, unique prefix, registered alias, or
+  `latest`.
 
 ## Output
 

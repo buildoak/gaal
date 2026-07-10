@@ -49,9 +49,10 @@ Gaal indexes local traces from supported CLI-style harnesses:
 | Antigravity CLI (`agy`) | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript_full.jsonl`, falling back to `transcript.jsonl` |
 | Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` |
 | Hermes Agent | `~/.hermes/state.db`, or `HERMES_STATE_DB` / `HERMES_HOME` overrides |
+| Grok Build | `${GROK_HOME:-~/.grok}/sessions/<encoded-cwd>/<full-uuid>/` |
 
 "Supported" means Gaal has discovery and parser coverage for these local source
-shapes. Codex, Claude, Gemini, or other web and desktop UI apps are not
+shapes. Codex, Claude, Gemini, Grok, or other web and desktop UI apps are not
 supported unless they write one of these local trace formats.
 
 Indexed facts include sessions, prompts, replies, commands, file reads/writes,
@@ -84,7 +85,7 @@ export GAAL_HOME=/tmp/gaal-home
 ```
 
 `GAAL_HOME` does not move source traces owned by Codex, Claude Code, Gemini,
-Antigravity, or Hermes.
+Antigravity, Hermes, or Grok.
 
 ## Onboarding Command
 
@@ -120,6 +121,10 @@ cargo install gaal-cli --force
 
 gaal onboard --dry-run
 ```
+
+The first `gaal index status` or `gaal index backfill` after an upgrade may
+perform a one-time migration of Gaal's local derived schema under `GAAL_HOME`.
+This does not rewrite the raw traces owned by any agent harness.
 
 Agent rule: package managers update the `gaal` binary, not the agent-facing
 skill files already copied into Codex, Claude, or agent-mux environments. Use
@@ -193,7 +198,9 @@ On a machine with no supported traces yet, `gaal ls -H --limit 5` reports the
 zero-session state and exits with code `1`. That is a healthy empty map, not a
 broken install. The installer treats this as an educational first-run state.
 
-`index backfill` is incremental. It discovers supported source traces, parses
+`index backfill` is incremental. Without `--engine`, it discovers every
+supported source, including Grok; `--engine grok` is a scoped diagnostic filter,
+not an onboarding requirement. It parses
 new or changed sessions, writes derived rows under `GAAL_HOME`, and rebuilds
 full-text search when new facts were indexed. It does not require an LLM
 backend.
@@ -206,7 +213,7 @@ zero indexed sessions. That is normal. Check:
 - `GAAL_HOME` is writable and not confused with source trace storage;
 - the harness is one of the supported CLI-style sources above;
 - the source roots exist, for example `~/.codex/sessions` or
-  `~/.claude/projects`.
+  `~/.claude/projects`; Grok uses `${GROK_HOME:-~/.grok}/sessions`.
 
 For exact index flags and cursor behavior, see
 [`gaal index`](../../docs/commands/index-tags.md).
@@ -218,11 +225,14 @@ historical by design. It does not watch live processes. A scheduled
 `gaal index backfill` keeps the discovery map fresh without asking humans or
 agents to remember.
 
-The default scheduled job must run only:
+The default scheduled job must run exactly one unfiltered command:
 
 ```bash
 gaal index backfill
 ```
+
+That one command includes Grok and every other supported engine. Do not add a
+second `--engine grok` job; it would duplicate work and cursor updates.
 
 No default handoffs. No LLM calls. No transcript-derived content leaving the
 machine. Handoff generation is a separate, explicit continuity action.
@@ -386,7 +396,7 @@ generation unless I explicitly approve it.
 ```text
 Use Gaal to identify your own current session. Run `gaal salt`, then in a
 separate tool call run `gaal find-salt <token>`, and report the session ID,
-engine, JSONL path, and whether a handoff already exists.
+engine, source path, and whether a handoff already exists.
 ```
 
 ```text
@@ -418,7 +428,7 @@ gaal create-handoff latest  # intentional real generation
 gaal recall --id latest --format brief -H
 ```
 
-For self-identification from a running Codex, Claude Code, or agy session, use
+For self-identification from a running Codex, Claude Code, agy, or Grok session, use
 two separate tool calls so the salt token can flush into the trace:
 
 ```bash
@@ -427,10 +437,12 @@ gaal salt
 
 ```bash
 gaal find-salt GAAL_SALT_<hex> -H
-gaal create-handoff --jsonl /path/to/session.jsonl --dry-run
+gaal create-handoff --jsonl /path/to/source-artifact --dry-run
 ```
 
 `find-salt` does not identify Gemini JSON sessions or Hermes SQLite sessions.
+The output field remains named `jsonl_path` for compatibility, but for Grok its
+value is the multi-file session directory.
 Batch handoffs are advanced; start with
 [`defaults/handoff-batch-advanced.md`](../../defaults/handoff-batch-advanced.md)
 and keep filters narrow.
@@ -475,7 +487,13 @@ terminals, and tool results. Treat these as private working data unless audited:
 - `~/.codex/`
 - `~/.gemini/`
 - `~/.hermes/`
+- `~/.grok/`
 - `~/.gaal/`
+
+Grok privacy controls apply only to derived data: private/thought surfaces are
+excluded, visible text gets best-effort secret-pattern redaction, and projected
+tool output is size-bounded. Raw Grok files are not rewritten, and these
+controls are not a complete sanitization guarantee.
 
 `gaal create-handoff` is externally sensitive. It may transmit
 transcript-derived content to a configured backend and consume subscription

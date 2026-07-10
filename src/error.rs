@@ -63,7 +63,7 @@ impl GaalError {
             Self::AmbiguousId(id) => (
                 format!("Multiple sessions match `{id}`."),
                 command_example(command),
-                "Use a longer session ID prefix or inspect the available IDs with `gaal ls --since 30d -H`.".to_string(),
+                "Use a longer unique session reference or inspect available IDs and aliases with `gaal ls --since 30d -H`.".to_string(),
             ),
             Self::NotFound(target) => not_found_message(command, target),
             Self::NoIndex => (
@@ -85,7 +85,7 @@ impl GaalError {
             Self::Internal(detail) => (
                 format!("Gaal hit an internal error: {detail}"),
                 command_example(command),
-                "Retry once; if it repeats, capture this message and inspect the referenced session with `gaal inspect <session-id> -H`.".to_string(),
+                "Retry once; if it repeats, capture this message and inspect the referenced session with `gaal inspect <session-reference> -H`.".to_string(),
             ),
             Self::Config(detail) => (
                 format!("Gaal configuration is invalid: {detail}"),
@@ -157,7 +157,7 @@ fn no_results_message(command: &str) -> (String, String, String) {
         "inspect" => (
             "No sessions matched that inspect request.".to_string(),
             "gaal inspect latest -H".to_string(),
-            "Try a specific session ID, `latest`, or list recent sessions first with `gaal ls --since 30d -H`.".to_string(),
+            "Try a specific session reference, `latest`, or list recent sessions first with `gaal ls --since 30d -H`.".to_string(),
         ),
         "activity" => (
             "No source-backed activity matched that window.".to_string(),
@@ -185,32 +185,32 @@ fn not_found_message(command: &str, target: &str) -> (String, String, String) {
         "recall" => (
             format!("Session `{target}` was not found."),
             "gaal recall --id latest -H".to_string(),
-            "List recent sessions with `gaal ls --since 7d -H` to find a valid session ID.".to_string(),
+            "List recent sessions with `gaal ls --since 7d -H` to find a valid session reference.".to_string(),
         ),
         "transcript" => (
             format!("Session `{target}` was not found, so no transcript could be generated."),
             "gaal transcript latest -H".to_string(),
-            "List recent sessions with `gaal ls --since 7d -H`, then rerun `gaal transcript` with a valid session ID.".to_string(),
+            "List recent sessions with `gaal ls --since 7d -H`, then rerun `gaal transcript` with a valid session reference.".to_string(),
         ),
         "inspect" => (
             format!("Session `{target}` was not found."),
             "gaal inspect latest -H".to_string(),
-            "List recent sessions with `gaal ls --since 7d -H`, then rerun `gaal inspect` with a valid 8-character ID prefix.".to_string(),
+            "List recent sessions with `gaal ls --since 7d -H`, then rerun `gaal inspect` with a full ID, unique prefix, or registered alias.".to_string(),
         ),
         "resolve" => (
-            format!("No session matches ID `{target}`."),
+            format!("No session matches reference `{target}`."),
             "gaal resolve dc5e98dc".to_string(),
-            "Check the ID with `gaal ls -H` or use a longer prefix.".to_string(),
+            "Check the reference with `gaal ls -H` or use a longer unique prefix.".to_string(),
         ),
         "find-salt" => (
-            format!("No session JSONL file contains salt token `{target}`."),
+            format!("No visible session source artifact contains salt token `{target}` in executed tool/action output."),
             "gaal find-salt GAAL_SALT_abc123".to_string(),
             "Generate or copy the exact token with `gaal salt`, then rerun `gaal find-salt` with that full value.".to_string(),
         ),
         "tag" => (
             format!("Session `{target}` was not found, so tags could not be updated."),
             "gaal tag 249aad1e deployment".to_string(),
-            "Find a valid session ID with `gaal ls --since 30d -H`, then rerun `gaal tag`.".to_string(),
+            "Find a valid session reference with `gaal ls --since 30d -H`, then rerun `gaal tag`.".to_string(),
         ),
         _ => (
             format!("`{target}` was not found."),
@@ -228,9 +228,9 @@ fn parse_error_message(command: &str, detail: &str) -> (String, String, String) 
             "Provide a non-empty query string, or use `gaal ls --since 30d -H` if you want to browse sessions instead of search fact text.".to_string(),
         ),
         "transcript" if detail.contains("session id") => (
-            "The transcript command needs a session ID or `latest`.".to_string(),
+            "The transcript command needs a session reference or `latest`.".to_string(),
             "gaal transcript latest -H".to_string(),
-            "Pass a session ID prefix or `latest`, or run `gaal ls --since 7d -H` to find a session first.".to_string(),
+            "Pass a full ID, unique prefix, registered alias, or `latest`; run `gaal ls --since 7d -H` to find a session first.".to_string(),
         ),
         "activity" if detail.contains("time bound") || detail.contains("--since") || detail.contains("--before") => (
             format!("The activity time window is invalid: {detail}"),
@@ -240,12 +240,12 @@ fn parse_error_message(command: &str, detail: &str) -> (String, String, String) 
         "inspect" if detail.contains("session id") || detail.contains("requires") => (
             "The inspect command needs a session selector.".to_string(),
             "gaal inspect latest -H".to_string(),
-            "Pass a session ID, `latest`, `--ids`, or `--tag` to select at least one session.".to_string(),
+            "Pass a session reference, `latest`, `--ids`, or `--tag` to select at least one session.".to_string(),
         ),
         "resolve" if detail.contains("session") || detail.contains("requires") => (
-            "The resolve command needs a session ID.".to_string(),
+            "The resolve command needs a session reference.".to_string(),
             "gaal resolve dc5e98dc".to_string(),
-            "Pass an 8-character session ID prefix.".to_string(),
+            "Pass a full session ID, unique prefix, registered alias, or `latest`.".to_string(),
         ),
         "who" if detail.contains("invalid who verb:") => {
             // Extract the bad verb from "invalid who verb: <verb> (expected: ...)"
@@ -270,9 +270,9 @@ fn parse_error_message(command: &str, detail: &str) -> (String, String, String) 
             "Generate a token with `gaal salt` or copy an existing one from a session, then rerun `gaal find-salt`.".to_string(),
         ),
         "tag" if detail.contains("session") => (
-            "The `tag` command needs a session ID or `ls`.".to_string(),
+            "The `tag` command needs a session reference or `ls`.".to_string(),
             "gaal tag 249aad1e deployment".to_string(),
-            "Use `gaal tag ls` to list known tags, or pass a session ID followed by one or more tags.".to_string(),
+            "Use `gaal tag ls` to list known tags, or pass a session reference followed by one or more tags.".to_string(),
         ),
         "tag" if detail.contains("tag") => (
             format!("The tag command arguments are invalid: {detail}"),
@@ -282,12 +282,12 @@ fn parse_error_message(command: &str, detail: &str) -> (String, String, String) 
         "recall" if detail.contains("mutually exclusive") => (
             "The `--id` flag and a positional QUERY cannot be used together.".to_string(),
             "gaal recall --id abc12345 --format brief -H".to_string(),
-            "Use `--id <session-id>` for direct lookup or a positional query for semantic search, but not both.".to_string(),
+            "Use `--id <session-reference>` for direct lookup or a positional query for semantic search, but not both.".to_string(),
         ),
         "index" => (
             format!("The index command arguments are invalid: {detail}"),
             "gaal index backfill".to_string(),
-            "Check the subcommand flags and rerun with a valid date, path, or session ID.".to_string(),
+            "Check the subcommand flags and rerun with a valid date, path, or session reference.".to_string(),
         ),
         _ => (
             format!("The command arguments are invalid: {detail}"),

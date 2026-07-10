@@ -27,7 +27,11 @@ GAAL_SALT_d0a6e1d5530bf6c9
 
 # `gaal find-salt`
 
-Purpose: scan Claude Code, Codex, Antigravity brain, and Grok visible session sources and return the first source containing a salt token in tool/action output. Returns enriched session context when the session is indexed, so agents can self-identify in a single call without chaining `inspect`/`transcript`/`recall`.
+Purpose: scan Claude Code, Codex, Antigravity brain, and Grok visible session
+source artifacts and return the first one containing a salt token in executed
+tool/action output. Returns enriched session context when the session is indexed,
+so agents can self-identify in a single call without chaining
+`inspect`/`transcript`/`recall`.
 
 ## Usage
 
@@ -48,8 +52,12 @@ When the session is indexed (has been processed by `gaal index backfill`):
 - `session_id` — native source session identifier; agy uses the 8-character
   brain UUID prefix
 - `engine` — `claude`, `codex`, `agy`, or `grok`
-- `jsonl_path` — absolute path to the source file; for Grok this is the
-  session directory because native Grok sessions are multi-file artifacts
+- `jsonl_path` — compatibility field containing the absolute source artifact
+  path; for Grok this is the session directory because native Grok sessions are
+  multi-file artifacts
+- `matched_source_path` — exact visible file containing the token
+- `source_role` — normalized role for that file, such as `updates`,
+  `chat_history`, or `session_trace`
 - `indexed` — `true`
 - `model` — model name (e.g. `claude-opus-4-6`)
 - `cwd` — working directory of the session
@@ -66,15 +74,20 @@ When the session is indexed (has been processed by `gaal index backfill`):
 
 When not indexed:
 
-- `session_id`, `engine`, `jsonl_path` — same as above
+- `session_id`, `engine`, `jsonl_path`, `matched_source_path`, and `source_role`
+  — same as above
 - `indexed` — `false`
 
 Notes:
 
 - The returned `session_id` is derived from the native source identity. Agy uses the first 8 characters of the Antigravity brain UUID. Grok keeps the full UUID.
-- This command scans `~/.claude/projects/`, `~/.codex/`, Antigravity brain `transcript_full.jsonl` / `transcript.jsonl` files, and `${GROK_HOME:-~/.grok}/sessions/.../{updates.jsonl,chat_history.jsonl}`.
+- This command scans `~/.claude/projects/`, `~/.codex/`, Antigravity brain
+  `transcript_full.jsonl` / `transcript.jsonl` files, and visible records under
+  `${GROK_HOME:-~/.grok}/sessions/.../`.
 - Agy and Grok matching ignore user prompt echoes. The salt must appear in an executed action/tool output record such as command output, file/search output, image-generation output, or an error message.
-- Enrichment is best-effort: if the DB is unavailable or the session is not indexed, the command still succeeds with the base 3 fields plus `"indexed": false`.
+- Enrichment is best-effort: if the DB is unavailable or the session is not
+  indexed, the command still succeeds with the source-identification fields
+  plus `"indexed": false`.
 
 ## Real Examples
 
@@ -95,7 +108,8 @@ Type:    coordinator
 CWD:     /home/alex/src/agent-project
 Tokens:  2K (883 in / 1K out) | 31 turns
 Last:    2026-03-27T09:45:20.375Z
-JSONL:   /home/alex/.claude/projects/.../5e54db27-a30e-455c-af24-26a3c55e511e.jsonl
+Source:  /home/alex/.claude/projects/.../5e54db27-a30e-455c-af24-26a3c55e511e.jsonl
+Matched: /home/alex/.claude/projects/.../5e54db27-a30e-455c-af24-26a3c55e511e.jsonl (session_trace)
 Transcript: /home/alex/.gaal/data/claude/sessions/2026/03/27/5e54db27.md
 Handoff: yes (generated 2026-03-27T09:45:04Z)
 ```
@@ -105,13 +119,15 @@ Non-indexed session (`-H`):
 ```
 Session: abc12345-defg-...
 Engine:  claude
-JSONL:   /path/to/session.jsonl
+Source:  /path/to/session.jsonl
+Matched: /path/to/session.jsonl (session_trace)
 Status:  not indexed (run 'gaal index backfill' to index)
 ```
 
 # `gaal resolve`
 
-Purpose: resolve a session ID, unique prefix, registered Hermes alias, or Grok last-8 alias to session metadata and derived artifact paths.
+Purpose: resolve a session reference—full ID, unique prefix, registered alias,
+or `latest`—to session metadata and derived artifact paths.
 
 ## Usage
 
@@ -124,14 +140,17 @@ gaal resolve [OPTIONS] [ID]
 | Flag | Description |
 | --- | --- |
 | `-H`, `--human` | Human-readable output (otherwise JSON) |
-| `--engine <claude|codex|gemini|agy|hermes>` | Filter by engine to disambiguate |
+| `--engine <claude|codex|gemini|agy|hermes|grok>` | Filter by engine to disambiguate |
 
 ## JSON Output
 
 - `session_id` — canonical session identifier from the index. Hermes keeps the full native session ID here.
-- `short_id` — artifact/display identifier. For Hermes this is the persisted 8-character alias.
-- `engine` — `claude`, `codex`, `gemini`, `agy`, or `hermes`
-- `jsonl_path` — legacy field name for the resolved source artifact path
+- `short_id` — artifact/display identifier. For Hermes this is the persisted
+  8-character alias; for Grok it is the canonical full UUID because the
+  last-eight form is lookup-only.
+- `engine` — `claude`, `codex`, `gemini`, `agy`, `hermes`, or `grok`
+- `jsonl_path` — legacy field name for the resolved source artifact path; Grok
+  returns its multi-file session directory
 - `transcript_path` — expected rendered transcript markdown path
 - `transcript_exists` — whether the transcript file exists on disk
 - `handoff_path` — expected handoff markdown path
@@ -164,7 +183,7 @@ Human-readable output (`-H`):
 ```bash
 $ target/release/gaal resolve dc5e98dc -H
 Session:    dc5e98dc (claude-opus-4-6, coordinator)
-JSONL:      ~/.claude/projects/example-project/dc5e98dc-5ed4-4de3-a440-d92defaeb9b1.jsonl
+Source:     ~/.claude/projects/example-project/dc5e98dc-5ed4-4de3-a440-d92defaeb9b1.jsonl
 Transcript: ~/.gaal/data/claude/sessions/2026/03/30/dc5e98dc.md [ok]
 Handoff:    ~/.gaal/data/claude/handoffs/2026/03/30/dc5e98dc.md [not generated]
 ```
@@ -183,11 +202,13 @@ Handoff:    ~/.gaal/data/claude/handoffs/2026/03/30/dc5e98dc.md [not generated]
 ## Self-Handoff Protocol
 
 1. Run `gaal salt` and capture the emitted token.
-2. Echo that token into the live session so it is flushed into the session JSONL.
-3. Run `gaal find-salt <token>` — this returns full indexed session context when available, including JSONL path, model, session type, token counts when known, transcript path, and handoff status.
-4. If a handoff is needed: `gaal create-handoff --jsonl <jsonl_path> --dry-run`; generate only after review and a continuity need.
+2. Let the tool result flush into the live session source artifact.
+3. Run `gaal find-salt <token>` — this returns full indexed session context when available, including source path, model, session type, token counts when known, transcript path, and handoff status.
+4. If a handoff is needed: `gaal create-handoff --jsonl <jsonl_path> --dry-run`; despite the legacy flag/field name, a Grok value is a session directory. Generate only after review and a continuity need.
 
-These must be separate tool calls because `salt` output has to be written into the session log before `find-salt` scans for it. If `find-salt` runs before the tool result is flushed, discovery can miss the active session.
+These must be separate tool calls because `salt` output has to be written into
+the session source before `find-salt` scans for it. If `find-salt` runs before
+the tool result is flushed, discovery can miss the active session.
 
 ## Related Commands
 

@@ -278,6 +278,19 @@ fn table_exists(conn: &Connection, table_name: &str) -> Result<bool, GaalError> 
     .map_err(map_db_err)
 }
 
+fn grok_read_schema_needs_migration(conn: &Connection) -> Result<bool, GaalError> {
+    for table_name in [
+        "source_artifacts",
+        "grok_session_meta",
+        "parser_observations",
+    ] {
+        if !table_exists(conn, table_name)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn session_columns(conn: &Connection) -> Result<Vec<String>, GaalError> {
     let mut stmt = conn
         .prepare("SELECT name FROM pragma_table_info('sessions') ORDER BY cid")
@@ -549,6 +562,31 @@ mod tests {
             .expect("count hermes aliases");
         assert_eq!(hermes_alias_count, 1);
     }
+
+    #[test]
+    fn detects_and_migrates_pre_grok_read_schema_without_grok_rows() {
+        let conn = Connection::open_in_memory().expect("open db");
+        init_db(&conn).expect("initialize current schema");
+        conn.execute_batch(
+            r#"
+            DROP TABLE parser_observations;
+            DROP TABLE grok_session_meta;
+            DROP TABLE source_artifacts;
+            "#,
+        )
+        .expect("simulate pre-Grok production schema");
+
+        assert!(grok_read_schema_needs_migration(&conn).expect("check old read schema"));
+
+        init_db(&conn).expect("migrate missing Grok read schema");
+
+        assert!(!grok_read_schema_needs_migration(&conn).expect("check migrated read schema"));
+        let diagnostic = crate::db::queries::get_grok_diagnostic_summary(&conn)
+            .expect("index status Grok diagnostic query");
+        assert_eq!(diagnostic.sessions_with_artifacts, 0);
+        assert_eq!(diagnostic.source_artifacts, 0);
+        assert_eq!(diagnostic.parser_observations, 0);
+    }
 }
 
 /// Return the default SQLite index path (`~/.gaal/index.db`).
@@ -616,7 +654,8 @@ pub fn open_db_readonly() -> Result<Connection, GaalError> {
     conn.busy_timeout(Duration::from_millis(5_000))
         .map_err(map_db_err)?;
 
-    if crate::db::queries::hermes_alias_registry_needs_migration(&conn)?
+    if grok_read_schema_needs_migration(&conn)?
+        || crate::db::queries::hermes_alias_registry_needs_migration(&conn)?
         || crate::db::queries::grok_alias_registry_needs_migration(&conn)?
     {
         drop(conn);

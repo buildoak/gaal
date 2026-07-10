@@ -140,7 +140,7 @@ TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/gaal-run-all.XXXXXX")"
 mkdir -p "$TMP_ROOT/home" "$TMP_ROOT/gaal-home" "$TMP_ROOT/hermes-home"
 
 capture_gaal version --version
-assert_contains "$CAPTURED_OUT" "gaal "
+assert_contains "$CAPTURED_OUT" "gaal 0.5.0"
 
 capture_gaal top-help --help
 assert_contains "$CAPTURED_OUT" "Agent session observability CLI"
@@ -162,6 +162,23 @@ assert_contains "$CAPTURED_OUT" "gaal index backfill"
 capture_gaal index-help index --help
 assert_contains "$CAPTURED_OUT" "backfill"
 assert_contains "$CAPTURED_OUT" "status"
+
+capture_gaal backfill-help index backfill --help
+assert_contains "$CAPTURED_OUT" "Index all supported local agent trace artifacts"
+assert_contains "$CAPTURED_OUT" "Restrict the default all-engine backfill"
+assert_contains "$CAPTURED_OUT" "grok"
+
+capture_gaal inspect-help inspect --help
+assert_contains "$CAPTURED_OUT" "Session reference"
+assert_contains "$CAPTURED_OUT" "Source-artifact diagnostics and path"
+
+capture_gaal transcript-noarg transcript
+assert_contains "$CAPTURED_ERR" "<session-reference>"
+assert_contains "$CAPTURED_ERR" "registered alias"
+
+capture_gaal recall-noarg recall
+assert_contains "$CAPTURED_ERR" "--id <session-reference>"
+assert_contains "$CAPTURED_ERR" "session reference"
 
 capture_gaal ls-help ls --help
 assert_contains "$CAPTURED_OUT" "Fleet view across sessions"
@@ -193,6 +210,8 @@ assert_json_expr "empty ls JSON error" "$CAPTURED_OUT" \
 expect_gaal_failure ls-empty-human 1 "No sessions are indexed yet." ls -H --limit 5
 assert_contains "$CAPTURED_OUT" "What went wrong:"
 assert_contains "$CAPTURED_OUT" "Hint:"
+
+expect_gaal_failure tag-missing-reference 11 'session reference or `ls`' tag
 
 section "Legacy shell suites intentionally excluded"
 cat <<'EOF'

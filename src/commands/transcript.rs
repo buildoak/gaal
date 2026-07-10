@@ -15,7 +15,7 @@ use crate::output::json::print_json;
 /// CLI arguments for `gaal transcript`.
 #[derive(Debug, Clone)]
 pub struct TranscriptArgs {
-    /// Session ID or ID prefix. Use `latest` to resolve the newest session.
+    /// Session reference. Use `latest` to resolve the newest session.
     pub id: Option<String>,
     /// Re-render even if cached file exists.
     pub force: bool,
@@ -312,10 +312,10 @@ fn date_parts(started_at: &str) -> (String, String, String) {
 fn print_transcript_help() {
     eprintln!("gaal transcript — Get session transcript markdown (replaces inspect --markdown)");
     eprintln!();
-    eprintln!("Usage: gaal transcript <session-id> [flags]");
+    eprintln!("Usage: gaal transcript <session-reference> [flags]");
     eprintln!();
     eprintln!("Arguments:");
-    eprintln!("  <session-id>    Session ID, ID prefix, or `latest`");
+    eprintln!("  <session-reference>    Full ID, unique prefix, registered alias, or `latest`");
     eprintln!();
     eprintln!("Flags:");
     eprintln!("  --force         Re-render even if cached markdown exists");

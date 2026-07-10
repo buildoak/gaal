@@ -26,7 +26,15 @@ Use this table first. It is the fastest way to choose the correct command.
 
 The primary consumers of `gaal` are agents, not humans. Prefer machine-readable JSON unless a human explicitly asks for a table or card view.
 
-`gaal` supports five engines: Claude Code (JSONL), Codex (JSONL), Gemini (single JSON), Antigravity CLI / `agy` (JSONL), and Hermes Agent (SQLite). All five are indexed into the same session, fact, transcript, tag, and handoff model. Agy support is native, experimental, and does not require agent-mux. Hermes support is newer and has been tested against one real installation shape plus sanitized fixtures; treat unusual Hermes installations as compatibility work until fixtures cover them. Agent-mux is optional for core Gaal, but is the preferred default backend for real handoff delivery once configured.
+`gaal` supports six engines: Claude Code (JSONL), Codex (JSONL), Gemini
+(single JSON), Antigravity CLI / `agy` (JSONL), Hermes Agent (SQLite), and
+Grok Build (multi-file session directories). All six are indexed into the same
+session, fact, transcript, tag, and handoff model. Agy and Grok support are
+native, experimental, and do not require agent-mux. Hermes support is newer and
+has been tested against one real installation shape plus sanitized fixtures;
+treat unusual Hermes installations as compatibility work until fixtures cover
+them. Agent-mux is optional for core Gaal, but is the preferred default backend
+for real handoff delivery once configured.
 
 The core mental model:
 
@@ -38,6 +46,10 @@ The core mental model:
 - `gaal search` answers "where does this text appear?"
 - `gaal recall` answers "what past handoffs are relevant to this work?"
 - `gaal create-handoff` answers "preview or generate continuity material for future agents"
+
+An unfiltered `gaal index backfill` discovers all six supported engines,
+including Grok. Use `--engine` to narrow a diagnostic or repair run, not to opt
+an engine into normal indexing.
 
 Before depending on `recall`, make sure handoffs and the index actually exist.
 
@@ -64,23 +76,25 @@ This means agents should branch on both process exit status and JSON payload sha
 
 Commands that take a session identifier accept several forms:
 
-- Full UUID: accepted even though `gaal` truncates internally
-- Short ID: the 8-character session identifier used directly. For Hermes this
-  is the persisted alias, not the first 8 characters of the full native ID. For
-  Grok this is the last 8 dash-stripped UUID hex characters when unique.
+- Full ID: accepted and canonical for Hermes and Grok; other engines may store
+  an engine-native compact ID.
+- Registered/compact alias: usually 8 characters. For Hermes this is the
+  persisted alias, not the first 8 characters of the full native ID. For Grok
+  this is the last 8 dash-stripped UUID hex characters when unique.
 - Prefix: any unique prefix resolves; non-unique prefixes return ambiguous-ID error with exit code `2`
 - `latest`: resolves to the most recent session
 - `today`: accepted by `gaal create-handoff` for the current day's sessions
 
-Smallest defensible rule: use short IDs when you have them, use the registered
-Hermes alias for Hermes sessions, the last-8 alias for Grok sessions, and use
-`latest` when you do not care which exact recent session is selected.
+Smallest defensible rule: pass the reference returned by Gaal, use the
+registered Hermes alias or unique Grok last-eight alias when compactness helps,
+and use `latest` only when you do not care which exact recent session is
+selected.
 
 ## Common Patterns
 
 ### Recall at session start
 
-Use `recall` when you are resuming work and want continuity, not when you need raw session facts. Use `recall --id <session-id>` when you know which session's handoff you want. Use `recall <query>` when searching by topic.
+Use `recall` when you are resuming work and want continuity, not when you need raw session facts. Use `recall --id <session-reference>` when you know which session's handoff you want. Use `recall <query>` when searching by topic.
 
 ```bash
 gaal recall 'topic' --format brief --limit 5
@@ -103,7 +117,10 @@ gaal create-handoff --batch --since 1d --dry-run
 
 ### Self-handoff protocol
 
-Use this when the agent must identify its own current session and generate a handoff from that exact JSONL. `find-salt` returns enriched session context (model, type, tokens, transcript path, handoff status) when the session is indexed, so you get full self-identification in one call.
+Use this when the agent must identify its own current session and preview a
+handoff from that exact source artifact. `find-salt` returns enriched session
+context (model, type, tokens, transcript path, handoff status) when the session
+is indexed, so you get full self-identification in one call.
 
 First tool call:
 
@@ -118,20 +135,24 @@ gaal find-salt GAAL_SALT_<hex>
 ```
 
 `find-salt` returns full session context when indexed: model, type, tokens,
-transcript path, JSONL path, and handoff status. Inspect that JSON before
+transcript path, source path, and handoff status. The compatibility field is
+named `jsonl_path`; for Grok it contains a session directory. Inspect that JSON before
 generating anything.
 
-`find-salt` scans Claude Code, Codex, and Agy/Antigravity transcript logs. It
-does not identify Gemini or Hermes sessions.
+`find-salt` scans Claude Code, Codex, Agy/Antigravity, and Grok visible source
+artifacts for executed tool/action output. It does not identify Gemini or
+Hermes sessions.
 
 If a handoff is needed, preview first:
 
 ```bash
-gaal create-handoff --jsonl /path/to/session.jsonl --dry-run
-gaal create-handoff --jsonl /path/to/session.jsonl  # only after review and a continuity need
+gaal create-handoff --jsonl /path/to/source-artifact --dry-run
+gaal create-handoff --jsonl /path/to/source-artifact  # only after review and a continuity need
 ```
 
-CRITICAL: `gaal salt` and `gaal find-salt` must be separate tool calls. The JSONL must flush between those calls or `find-salt` may miss the current session. Do not hide this split inside one shell script.
+CRITICAL: `gaal salt` and `gaal find-salt` must be separate tool calls. The tool
+result must flush into the source artifact between those calls or `find-salt`
+may miss the current session. Do not hide this split inside one shell script.
 
 ### Filtering by engine
 
@@ -211,7 +232,7 @@ Avoid these patterns. They usually create incorrect assumptions or unnecessary w
 |--------|------------|
 | Pipe `gaal who` directly | Capture to a variable first |
 | Assume `gaal ls` has `--status active` | Use `gaal ls --all` plus `gaal inspect <id>` |
-| Read entire session JSONL manually | Use `gaal inspect --trace` or `gaal transcript` |
+| Read entire source artifact manually | Use `gaal inspect --trace` or `gaal transcript` |
 | Treat `gaal activity` as live process status | Use it for historical/indexed activity; use fleet/process tools for live status |
 | Call `gaal inspect` in a loop | Use `gaal inspect --ids a1b2,c3d4` |
 | Assume `gaal recall` works without handoffs | Check gaal index status first |
@@ -257,7 +278,9 @@ gaal ls --cwd /path/to/project --aggregate -H
 - Mutation commands include `create-handoff`, `index backfill`, `index reindex`, `index prune`, `index recover-orphans`, and `tag`
 - `create-handoff` dispatches to an LLM/agent backend and may consume subscription quota, API credits, metered usage, or local compute. `agent-mux` is optional for core Gaal and is the preferred default backend for real handoff delivery once configured.
 - Use `--dry-run` before any handoff generation. It previews handoff planning; it is not a broad promise that unrelated setup, index, or DB initialization cannot happen elsewhere.
-- `index backfill` is operationally safe: it reads JSONL and writes derived state under `~/.gaal/`
+- `index backfill` reads local source artifacts and writes derived state under
+  `~/.gaal/`; it does not rewrite the source artifacts. Treat trace content as
+  private even when an engine applies best-effort redaction to derived facts.
 
 Practical agent rule: do not mutate anything unless the task explicitly requires continuity generation, tagging, or index maintenance.
 

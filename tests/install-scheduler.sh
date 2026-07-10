@@ -20,6 +20,14 @@ fi
 
 grep -q '<string>index</string>' "${TMP_PLIST}"
 grep -q '<string>backfill</string>' "${TMP_PLIST}"
+if [ "$(grep -c '<string>backfill</string>' "${TMP_PLIST}")" -ne 1 ]; then
+  echo "generated scheduler plist must contain exactly one backfill command" >&2
+  exit 1
+fi
+if grep -E '<string>--engine</string>|<string>grok</string>' "${TMP_PLIST}" >/dev/null; then
+  echo "generated scheduler plist must rely on unfiltered default discovery, including Grok" >&2
+  exit 1
+fi
 if grep -E 'create-handoff|recall|agent-mux|2&gt;/dev/null|2>/dev/null' "${TMP_PLIST}" >/dev/null; then
   echo "generated scheduler plist contains forbidden scheduled work" >&2
   exit 1

@@ -1,9 +1,9 @@
 # AGENTS.md - Gaal Contributor Notes
 
 Gaal is a local session observability CLI for AI coding agents. It indexes
-traces from Codex, Claude Code, Antigravity CLI, Hermes Agent, and Gemini CLI,
-then turns those traces into searchable facts, deterministic markdown views,
-attribution queries, and optional handoffs.
+traces from Codex, Claude Code, Grok Build, Antigravity CLI, Hermes Agent, and
+Gemini CLI, then turns those traces into searchable facts, deterministic
+markdown views, attribution queries, and optional handoffs.
 
 This file is for agents and contributors working inside the repo. The public
 user path starts in `README.md`; the public agent skill starts in
