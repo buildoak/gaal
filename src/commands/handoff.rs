@@ -122,7 +122,10 @@ struct DetectedSession {
 struct HandoffDryRunResult {
     session_id: String,
     status: String,
+    /// Backward-compatible alias for `source_engine`.
     engine: String,
+    source_engine: String,
+    worker_engine: String,
     indexed: bool,
     jsonl_path: String,
     handoff_path: String,
@@ -229,6 +232,7 @@ struct ChunkMapResult {
 
 #[derive(Clone, Copy)]
 struct DryRunRequest<'a> {
+    engine: &'a str,
     model: &'a str,
     provider: &'a str,
     format: &'a str,
@@ -345,6 +349,7 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
             &id_or_today,
             detected.as_ref(),
             DryRunRequest {
+                engine: &engine,
                 model: &model,
                 provider: &provider,
                 format: &format,
@@ -586,6 +591,8 @@ fn build_dry_run_plan(
         session_id: session.id.clone(),
         status: "dry_run".to_string(),
         engine: session.engine.clone(),
+        source_engine: session.engine.clone(),
+        worker_engine: request.engine.to_string(),
         indexed: session.indexed,
         jsonl_path: session.jsonl_path.to_string_lossy().to_string(),
         handoff_path: handoff_path.to_string_lossy().to_string(),
@@ -933,6 +940,10 @@ fn print_handoff_dry_run_human(plans: &[HandoffDryRunResult]) {
         );
         println!("  jsonl: {}", plan.jsonl_path);
         println!("  handoff: {}", plan.handoff_path);
+        println!(
+            "  source/worker engines: {}/{}",
+            plan.source_engine, plan.worker_engine
+        );
         println!(
             "  provider/model/effort: {}/{}/{}",
             plan.provider, plan.model, plan.effort
@@ -2960,6 +2971,8 @@ fn build_handoff_frontmatter(
         "gemini"
     } else if engine.contains("hermes") {
         "hermes"
+    } else if engine.contains("grok") {
+        "grok"
     } else {
         "claude"
     };
@@ -3586,6 +3599,47 @@ mod tests {
         let frontmatter = build_handoff_frontmatter(&session, &extracted, "codex", "gpt-5.5");
 
         assert!(frontmatter.contains("date: 2026-05-04"));
+    }
+
+    #[test]
+    fn handoff_frontmatter_preserves_full_grok_uuid_and_engine() {
+        let session_id = "019f46d3-0000-7000-8000-000000000002";
+        let session = SessionRow {
+            id: session_id.to_string(),
+            engine: "grok".to_string(),
+            model: Some("grok-4.5".to_string()),
+            cwd: None,
+            started_at: "2026-07-10T08:00:00Z".to_string(),
+            ended_at: Some("2026-07-10T09:00:00Z".to_string()),
+            exit_signal: None,
+            last_event_at: None,
+            parent_id: None,
+            session_type: "standalone".to_string(),
+            jsonl_path: format!("/tmp/{session_id}"),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            reasoning_tokens: 0,
+            total_tools: 0,
+            total_turns: 0,
+            peak_context: 0,
+            last_indexed_offset: 0,
+            subagent_type: None,
+            gemini_summary: None,
+        };
+        let extracted = ExtractedMetadata {
+            headline: Some("Grok handoff".to_string()),
+            projects: vec!["gaal".to_string()],
+            keywords: vec!["grok".to_string()],
+            substance: 2,
+        };
+
+        let frontmatter = build_handoff_frontmatter(&session, &extracted, "grok", "grok-4.5");
+
+        assert!(frontmatter.contains(&format!("session_id: {session_id}\n")));
+        assert!(frontmatter.contains("engine: grok\n"));
+        assert!(!frontmatter.contains("engine: claude\n"));
     }
 
     #[test]

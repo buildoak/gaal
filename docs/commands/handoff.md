@@ -60,6 +60,9 @@ Batch mode returns per-session status rows.
 - `estimated_transcript_chars`, `estimated_transcript_tokens`
 - `compaction_lines`
 - `chunk_count`, `estimated_llm_calls`
+- `engine` and `source_engine`: the resolved source-session engine (`engine`
+  remains as a compatibility alias)
+- `worker_engine`: the extraction worker selected by `--engine` or config
 - `provider`, `provider_supported`, `model`, `effort`, `format`
 - `handoff_path`
 - `side_effects`: all false in dry-run

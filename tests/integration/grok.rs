@@ -238,14 +238,32 @@ fn grok_default_backfill_indexes_searches_and_renders_native_sessions() {
     assert!(String::from_utf8_lossy(&user_prompt_salt.stderr)
         .contains("No visible session source artifact contains salt token"));
 
-    let handoff_dry_run = run_json(&env, &["create-handoff", "--jsonl", salt_path, "--dry-run"]);
+    let handoff_dry_run = run_json(
+        &env,
+        &[
+            "create-handoff",
+            "--jsonl",
+            salt_path,
+            "--dry-run",
+            "--engine",
+            "codex",
+        ],
+    );
     let dry_run = handoff_dry_run
         .as_array()
         .and_then(|items| items.first())
         .expect("handoff dry-run array");
     assert_eq!(dry_run["strategy"], "single");
     assert_eq!(dry_run["session_id"], SESSION_TOOL_ID);
+    assert_eq!(dry_run["engine"], "grok");
+    assert_eq!(dry_run["source_engine"], "grok");
+    assert_eq!(dry_run["worker_engine"], "codex");
     assert_eq!(dry_run["indexed"], true);
+    assert!(dry_run["handoff_path"]
+        .as_str()
+        .is_some_and(|path| path.ends_with(&format!(
+            "/data/grok/handoffs/2026/07/09/{SESSION_TOOL_ID}.md"
+        ))));
 
     let ls = run_json(&env, &["ls", "--engine", "grok", "--limit", "10"]);
     assert_eq!(ls["total_unfiltered"], 3);
