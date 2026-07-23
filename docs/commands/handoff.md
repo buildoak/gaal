@@ -33,7 +33,7 @@ gaal create-handoff [OPTIONS] [ID]
   upsert handoff rows, or index unindexed source artifacts. Treat it as handoff
   preview/planning mode, not as a broad guarantee that no other setup, index,
   or DB initialization can happen elsewhere in a Gaal workflow.
-- `--effort <low|medium|high|xhigh>`: effort level for the default `agent-mux` dispatch path. Overrides config `[agent-mux] effort`. Controls how long the LLM worker runs and auto-aligns gaal's wrapper timeout.
+- `--effort <low|medium|high|xhigh>`: effort level for the default `agent-mux` dispatch path. Overrides config `[agent-mux] effort`. Gaal applies the matching minimum provider timeout and keeps its outer wrapper alive through agent-mux's wrap-up grace period.
 - `-H`, `--human`
 
 ## ID Resolution
@@ -59,7 +59,8 @@ Batch mode returns per-session status rows.
 - `strategy`: `single`, `chunked_compaction`, or `chunked_turn_split`
 - `estimated_transcript_chars`, `estimated_transcript_tokens`
 - `compaction_lines`
-- `chunk_count`, `estimated_llm_calls`
+- `chunk_count`, `estimated_llm_calls`, `worst_case_llm_calls`
+- `provider_timeout_secs`, `provider_grace_secs`, `wrapper_timeout_secs`
 - `engine` and `source_engine`: the resolved source-session engine (`engine`
   remains as a compatibility alias)
 - `worker_engine`: the extraction worker selected by `--engine` or config
@@ -78,7 +79,9 @@ For first-run handoff backend setup, see the [first-run reference](../../skill/r
 
 Scheduled indexing, when installed separately, should run index maintenance only. Do not treat scheduled jobs as a handoff creator.
 
-When single-session planning returns a strategy other than `single`, non-dry-run execution uses automatic chunked generation: mapper calls process each planned chunk, one reducer call synthesizes the final handoff, and Gaal writes only the final markdown file plus the normal handoff DB row. Mapper outputs stay in memory and no surfaced `.parts` files are created. The final markdown includes a `Coverage Manifest` reporting source JSONL line ranges, source used, chunk statuses, mapper/reducer call counts, and whether rendered transcript line ranges were approximate.
+When single-session planning returns a strategy other than `single`, non-dry-run execution uses automatic chunked generation: mapper calls process each planned chunk, then a reducer synthesizes the final handoff. A validation retry is allowed only while the total remains within `max_llm_calls_per_session` (currently 9); an eight-mapper plan therefore gets exactly one reducer attempt. Gaal writes only the final markdown file plus the normal handoff DB row. Mapper outputs stay in memory and no surfaced `.parts` files are created. The final markdown includes a `Coverage Manifest` reporting source JSONL line ranges, source used, chunk statuses, actual mapper/reducer call counts, and whether rendered transcript line ranges were approximate.
+
+`[agent-mux] timeout_secs` in `~/.gaal/config.toml` is the direct timeout override when a handoff needs more room; the selected effort tier remains the minimum. Gaal passes a slightly smaller soft timeout to agent-mux, then waits through agent-mux's half-time wrap-up grace period plus a 10-second wrapper buffer. Dry-run reports all three resolved deadlines. There is no separate environment-variable timeout override.
 
 ## Real Example
 

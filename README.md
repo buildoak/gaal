@@ -529,6 +529,10 @@ gaal create-handoff latest --dry-run
     "provider": "agent-mux",
     "provider_supported": true,
     "estimated_llm_calls": 1,
+    "worst_case_llm_calls": 2,
+    "provider_timeout_secs": 2705,
+    "provider_grace_secs": 1352,
+    "wrapper_timeout_secs": 4067,
     "side_effects": {
       "spawn_provider_worker": false,
       "spend_tokens": false,

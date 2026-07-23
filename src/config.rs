@@ -69,7 +69,8 @@ pub struct AgentMuxConfig {
     pub path: String,
     /// Profile name for dispatch (maps to a prompt file via -P).
     pub profile: Option<String>,
-    /// Timeout override for agent-mux invocations (in seconds).
+    /// Base timeout override for agent-mux invocations (in seconds).
+    /// Gaal derives a provider soft deadline and a grace-aware wrapper deadline.
     pub timeout_secs: Option<u64>,
     /// Default effort level for dispatch.
     pub effort: Option<String>,

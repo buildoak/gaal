@@ -259,6 +259,18 @@ fn grok_default_backfill_indexes_searches_and_renders_native_sessions() {
     assert_eq!(dry_run["source_engine"], "grok");
     assert_eq!(dry_run["worker_engine"], "codex");
     assert_eq!(dry_run["indexed"], true);
+    assert_eq!(dry_run["estimated_llm_calls"], 1);
+    assert_eq!(dry_run["worst_case_llm_calls"], 2);
+    let provider_timeout = dry_run["provider_timeout_secs"]
+        .as_u64()
+        .expect("provider timeout");
+    let provider_grace = dry_run["provider_grace_secs"]
+        .as_u64()
+        .expect("provider grace");
+    let wrapper_timeout = dry_run["wrapper_timeout_secs"]
+        .as_u64()
+        .expect("wrapper timeout");
+    assert!(wrapper_timeout > provider_timeout + provider_grace);
     assert!(dry_run["handoff_path"]
         .as_str()
         .is_some_and(|path| path.ends_with(&format!(

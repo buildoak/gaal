@@ -39,9 +39,11 @@ const DEFAULT_HANDOFF_PROMPT: &str = r#"You are analyzing an agent session trace
 Also extract: projects (list), keywords (list), substance score (0-3)."#;
 
 const SINGLE_CONTEXT_LIMIT_CHARS: u64 = 80_000;
-const MAX_CHUNKS: usize = 8;
 const MAX_LLM_CALLS_PER_SESSION: usize = 9;
+const MAX_CHUNKS: usize = MAX_LLM_CALLS_PER_SESSION - 1;
+const MAX_HANDOFF_VALIDATION_ATTEMPTS: usize = 2;
 const ESTIMATED_CHARS_PER_TOKEN: u64 = 4;
+const AGENT_MUX_WRAPPER_BUFFER_SECS: u64 = 10;
 
 static FENCED_JSON_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)```json\s*\n(.*?)\n\s*```")
@@ -136,9 +138,13 @@ struct HandoffDryRunResult {
     compaction_lines: Vec<usize>,
     chunk_count: usize,
     estimated_llm_calls: usize,
+    worst_case_llm_calls: usize,
     single_context_limit_chars: u64,
     max_chunks: usize,
     max_llm_calls_per_session: usize,
+    provider_timeout_secs: u64,
+    provider_grace_secs: u64,
+    wrapper_timeout_secs: u64,
     provider: String,
     provider_supported: bool,
     model: String,
@@ -230,6 +236,13 @@ struct ChunkMapResult {
     context_chars: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AgentMuxTimeoutPlan {
+    provider_timeout_secs: u64,
+    provider_grace_secs: u64,
+    wrapper_timeout_secs: u64,
+}
+
 #[derive(Clone, Copy)]
 struct DryRunRequest<'a> {
     engine: &'a str,
@@ -237,6 +250,7 @@ struct DryRunRequest<'a> {
     provider: &'a str,
     format: &'a str,
     effort: &'a str,
+    timeout_plan: AgentMuxTimeoutPlan,
 }
 
 #[derive(Clone, Copy)]
@@ -260,8 +274,8 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
         config.agent_mux.effort = Some(effort.clone());
     }
 
-    // When effort is set, ensure gaal's wrapper timeout is at least as long
-    // as agent-mux's effort-mapped timeout bucket to avoid premature kills.
+    // When effort is set, keep agent-mux's provider timeout at least as long
+    // as the effort-mapped bucket. The outer wrapper adds grace separately.
     if let Some(ref effort) = config.agent_mux.effort {
         let min_timeout = match effort.as_str() {
             "low" => 130,
@@ -343,6 +357,7 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
         .unwrap_or_else(|| config.handoff.prompt.clone());
 
     if args.dry_run {
+        let timeout_plan = agent_mux_timeout_plan(effective_agent_mux_timeout_secs(&config));
         let plans = plan_single_session_dry_run(
             &conn,
             &args,
@@ -354,6 +369,7 @@ pub fn run(args: HandoffArgs) -> Result<(), GaalError> {
                 provider: &provider,
                 format: &format,
                 effort: effective_handoff_effort(&config),
+                timeout_plan,
             },
         )?;
         if args.human {
@@ -559,14 +575,8 @@ fn build_dry_run_plan(
     let stats = scan_dry_run_session_for_handoff_plan(session)?;
     let mut warnings = Vec::new();
     let execution_plan = plan_execution_chunks(&stats, &mut warnings);
-    let estimated_llm_calls = match execution_plan.strategy.as_str() {
-        "single" => 1,
-        _ => execution_plan
-            .chunks
-            .len()
-            .saturating_add(1)
-            .min(MAX_LLM_CALLS_PER_SESSION),
-    };
+    let estimated_llm_calls = estimated_llm_calls_for_plan(&execution_plan);
+    let worst_case_llm_calls = worst_case_llm_calls_for_plan(&execution_plan);
     let provider_supported = request.provider == "agent-mux";
     if !provider_supported {
         warnings.push(format!(
@@ -603,9 +613,13 @@ fn build_dry_run_plan(
         compaction_lines: stats.compaction_lines,
         chunk_count: execution_plan.chunks.len(),
         estimated_llm_calls,
+        worst_case_llm_calls,
         single_context_limit_chars: SINGLE_CONTEXT_LIMIT_CHARS,
         max_chunks: MAX_CHUNKS,
         max_llm_calls_per_session: MAX_LLM_CALLS_PER_SESSION,
+        provider_timeout_secs: request.timeout_plan.provider_timeout_secs,
+        provider_grace_secs: request.timeout_plan.provider_grace_secs,
+        wrapper_timeout_secs: request.timeout_plan.wrapper_timeout_secs,
         provider: request.provider.to_string(),
         provider_supported,
         model: request.model.to_string(),
@@ -615,6 +629,28 @@ fn build_dry_run_plan(
         side_effects: DryRunSideEffects::none(),
         warnings,
     })
+}
+
+fn remaining_validation_attempts(completed_llm_calls: usize) -> usize {
+    MAX_HANDOFF_VALIDATION_ATTEMPTS
+        .min(MAX_LLM_CALLS_PER_SESSION.saturating_sub(completed_llm_calls))
+}
+
+fn estimated_llm_calls_for_plan(plan: &ExecutionPlan) -> usize {
+    if plan.is_chunked() {
+        plan.chunks.len().saturating_add(1)
+    } else {
+        1
+    }
+}
+
+fn worst_case_llm_calls_for_plan(plan: &ExecutionPlan) -> usize {
+    let completed_mapper_calls = if plan.is_chunked() {
+        plan.chunks.len()
+    } else {
+        0
+    };
+    completed_mapper_calls.saturating_add(remaining_validation_attempts(completed_mapper_calls))
 }
 
 fn plan_chunking(stats: &JsonlPlanStats, warnings: &mut Vec<String>) -> (String, usize) {
@@ -927,14 +963,38 @@ fn effective_handoff_effort(config: &GaalConfig) -> &str {
         .unwrap_or("xhigh")
 }
 
+fn effective_agent_mux_timeout_secs(config: &GaalConfig) -> u64 {
+    config
+        .agent_mux
+        .timeout_secs
+        .unwrap_or(config.llm.timeout_secs)
+}
+
+fn agent_mux_timeout_plan(configured_timeout_secs: u64) -> AgentMuxTimeoutPlan {
+    // Keep the provider's soft deadline just inside the configured budget.
+    // agent-mux then reserves half of that deadline for its wrap-up grace
+    // period, so Gaal's outer wrapper must wait for both phases.
+    let provider_timeout_secs = configured_timeout_secs.saturating_sub(5).max(10);
+    let provider_grace_secs = provider_timeout_secs / 2;
+    let wrapper_timeout_secs = provider_timeout_secs
+        .saturating_add(provider_grace_secs)
+        .saturating_add(AGENT_MUX_WRAPPER_BUFFER_SECS);
+    AgentMuxTimeoutPlan {
+        provider_timeout_secs,
+        provider_grace_secs,
+        wrapper_timeout_secs,
+    }
+}
+
 fn print_handoff_dry_run_human(plans: &[HandoffDryRunResult]) {
     for plan in plans {
         println!(
-            "{}: {} ({} chunks, {} call(s), {} chars/~{} tokens)",
+            "{}: {} ({} chunks, {} estimated/{} worst-case call(s), {} chars/~{} tokens)",
             plan.session_id,
             plan.strategy,
             plan.chunk_count,
             plan.estimated_llm_calls,
+            plan.worst_case_llm_calls,
             plan.estimated_transcript_chars,
             plan.estimated_transcript_tokens
         );
@@ -947,6 +1007,10 @@ fn print_handoff_dry_run_human(plans: &[HandoffDryRunResult]) {
         println!(
             "  provider/model/effort: {}/{}/{}",
             plan.provider, plan.model, plan.effort
+        );
+        println!(
+            "  timeouts: provider={}s grace={}s wrapper={}s",
+            plan.provider_timeout_secs, plan.provider_grace_secs, plan.wrapper_timeout_secs
         );
         println!("  indexed: {}", plan.indexed);
         println!("  provider_supported: {}", plan.provider_supported);
@@ -1227,8 +1291,8 @@ fn process_session_handoff(
         }
     };
 
-    let (response, extracted) =
-        invoke_validated_handoff(config, session, request, &context, "single-pass")?;
+    let (response, extracted, _) =
+        invoke_validated_handoff(config, session, request, &context, "single-pass", 0)?;
 
     finish_handoff(conn, config, session, request, response, extracted)
 }
@@ -1257,10 +1321,7 @@ fn process_chunked_session_handoff(
         transcript.as_deref(),
     )?;
     let mapper_prompt = build_chunk_mapper_prompt(request.prompt);
-    let timeout_secs = config
-        .agent_mux
-        .timeout_secs
-        .unwrap_or(config.llm.timeout_secs);
+    let timeout_secs = effective_agent_mux_timeout_secs(config);
     let mut mapped = Vec::with_capacity(chunk_contexts.len());
 
     for chunk in chunk_contexts {
@@ -1292,16 +1353,16 @@ fn process_chunked_session_handoff(
         });
     }
 
-    let coverage_manifest = build_coverage_manifest(session, &plan, &mapped);
+    let planned_coverage_manifest = build_coverage_manifest(session, &plan, &mapped, 1);
     let reducer_prompt = build_chunk_reducer_prompt(request.prompt);
     let reducer_context = build_reducer_context(
         session,
         request.provider,
         request.format,
         &mapped,
-        &coverage_manifest,
+        &planned_coverage_manifest,
     );
-    let (response, extracted) = invoke_validated_handoff(
+    let (response, extracted, reducer_calls) = invoke_validated_handoff(
         config,
         session,
         HandoffRequest {
@@ -1313,7 +1374,9 @@ fn process_chunked_session_handoff(
         },
         &reducer_context,
         "chunked reducer",
+        mapped.len(),
     )?;
+    let coverage_manifest = build_coverage_manifest(session, &plan, &mapped, reducer_calls);
     let response = format!(
         "{}\n\n{}",
         coverage_manifest.trim_end(),
@@ -1329,15 +1392,21 @@ fn invoke_validated_handoff(
     request: HandoffRequest<'_>,
     context: &str,
     label: &str,
-) -> Result<(String, ExtractedMetadata), GaalError> {
-    let max_attempts = 2;
+    completed_llm_calls: usize,
+) -> Result<(String, ExtractedMetadata, usize), GaalError> {
+    let max_attempts = remaining_validation_attempts(completed_llm_calls);
+    if max_attempts == 0 {
+        return Err(GaalError::Other(anyhow!(
+            "handoff LLM call budget exhausted before {label}: \
+             completed={completed_llm_calls}, max={MAX_LLM_CALLS_PER_SESSION}"
+        )));
+    }
     let mut response = String::new();
     let mut extracted = ExtractedMetadata::default();
-    let timeout_secs = config
-        .agent_mux
-        .timeout_secs
-        .unwrap_or(config.llm.timeout_secs);
+    let mut attempts_used = 0;
+    let timeout_secs = effective_agent_mux_timeout_secs(config);
     for attempt in 1..=max_attempts {
+        attempts_used = attempt;
         response = invoke_agent_mux(
             &config.agent_mux,
             request.engine,
@@ -1370,7 +1439,7 @@ fn invoke_validated_handoff(
         }
     }
 
-    Ok((response, extracted))
+    Ok((response, extracted, attempts_used))
 }
 
 fn finish_handoff(
@@ -1743,6 +1812,7 @@ fn build_coverage_manifest(
     session: &SessionRow,
     plan: &ExecutionPlan,
     mapped: &[ChunkMapResult],
+    reducer_calls: usize,
 ) -> String {
     let mut manifest = format!(
         "## Coverage Manifest\n\n\
@@ -1752,7 +1822,7 @@ fn build_coverage_manifest(
 - compaction_lines: {:?}\n\
 - chunks_completed: {}/{}\n\
 - mapper_calls: {}\n\
-- reducer_calls: 1\n\
+- reducer_calls: {}\n\
 - surfaced_part_files: false\n\
 - excluded_content: compacted records were used as boundary markers only; encrypted replacement_history payloads were not interpreted\n\n\
 | Chunk | Source JSONL Lines | Source Used | Rendered Transcript Lines | Status | Context Chars |\n\
@@ -1763,7 +1833,8 @@ fn build_coverage_manifest(
         plan.compaction_lines,
         mapped.len(),
         plan.chunks.len(),
-        mapped.len()
+        mapped.len(),
+        reducer_calls
     );
     for result in mapped {
         let rendered = match (result.rendered_start_line, result.rendered_end_line) {
@@ -2589,7 +2660,7 @@ fn invoke_agent_mux(
     timeout_secs: u64,
 ) -> Result<String, GaalError> {
     let request = format!("{prompt}\n\n---\n\nSession context:\n{context}");
-    let mux_timeout_secs = timeout_secs.saturating_sub(5).max(10);
+    let timeout_plan = agent_mux_timeout_plan(timeout_secs);
     let profile = mux_config
         .profile
         .as_deref()
@@ -2633,7 +2704,7 @@ fn invoke_agent_mux(
     let prompt_file = TempPromptFile::new(&request).ok();
     command
         .arg("--timeout")
-        .arg(mux_timeout_secs.to_string())
+        .arg(timeout_plan.provider_timeout_secs.to_string())
         .arg("--cwd")
         .arg(&effective_cwd);
     if let Some(ref prompt_file) = prompt_file {
@@ -2673,12 +2744,17 @@ fn invoke_agent_mux(
         let _ = tx.send(child.wait_with_output());
     });
 
-    let output = match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
+    let output = match rx.recv_timeout(Duration::from_secs(timeout_plan.wrapper_timeout_secs)) {
         Ok(result) => result.map_err(GaalError::from)?,
         Err(mpsc::RecvTimeoutError::Timeout) => {
             let _ = terminate_process(child_pid);
             return Err(GaalError::Other(anyhow!(
-                "agent-mux timed out after {timeout_secs}s"
+                "agent-mux wrapper timed out after {}s \
+                 (provider timeout {}s + grace {}s + buffer {}s)",
+                timeout_plan.wrapper_timeout_secs,
+                timeout_plan.provider_timeout_secs,
+                timeout_plan.provider_grace_secs,
+                AGENT_MUX_WRAPPER_BUFFER_SECS
             )));
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -3331,6 +3407,22 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn chunked_test_plan(chunk_count: usize) -> ExecutionPlan {
+        ExecutionPlan {
+            strategy: "chunked_turn_split".to_string(),
+            chunks: (1..=chunk_count)
+                .map(|index| ChunkPlan {
+                    index,
+                    total: chunk_count,
+                    source_start_line: index,
+                    source_end_line: index,
+                })
+                .collect(),
+            jsonl_lines: chunk_count,
+            compaction_lines: Vec::new(),
+        }
+    }
+
     #[test]
     fn detects_codex_compaction_type_without_rendering_payload() {
         let line = r#"{"timestamp":"2026-05-04T00:57:52.496Z","type":"compacted","payload":{"replacement_history":[{"type":"message"}]}}"#;
@@ -3446,6 +3538,91 @@ mod tests {
         assert_eq!(chunks, 6);
         assert_eq!(chunks + 1, 7);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn eight_mapper_plan_reserves_one_reducer_call_within_session_ceiling() {
+        let plan = chunked_test_plan(8);
+
+        assert_eq!(estimated_llm_calls_for_plan(&plan), 9);
+        assert_eq!(worst_case_llm_calls_for_plan(&plan), 9);
+        assert_eq!(remaining_validation_attempts(plan.chunks.len()), 1);
+        assert_eq!(remaining_validation_attempts(MAX_LLM_CALLS_PER_SESSION), 0);
+        assert!(worst_case_llm_calls_for_plan(&plan) <= MAX_LLM_CALLS_PER_SESSION);
+    }
+
+    #[test]
+    fn seven_mapper_plan_can_retry_reducer_without_exceeding_session_ceiling() {
+        let plan = chunked_test_plan(7);
+
+        assert_eq!(estimated_llm_calls_for_plan(&plan), 8);
+        assert_eq!(worst_case_llm_calls_for_plan(&plan), 9);
+        assert_eq!(remaining_validation_attempts(plan.chunks.len()), 2);
+        assert!(worst_case_llm_calls_for_plan(&plan) <= MAX_LLM_CALLS_PER_SESSION);
+    }
+
+    #[test]
+    fn agent_mux_wrapper_waits_through_provider_grace_period() {
+        let timeout_plan = agent_mux_timeout_plan(130);
+
+        assert_eq!(
+            timeout_plan,
+            AgentMuxTimeoutPlan {
+                provider_timeout_secs: 125,
+                provider_grace_secs: 62,
+                wrapper_timeout_secs: 197,
+            }
+        );
+        assert!(
+            timeout_plan.wrapper_timeout_secs
+                > timeout_plan.provider_timeout_secs + timeout_plan.provider_grace_secs
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_mux_wrapper_does_not_kill_provider_at_configured_base_deadline() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "gaal-agent-mux-grace-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create fixture directory");
+        let mux = root.join("agent-mux");
+        fs::write(
+            &mux,
+            "#!/bin/sh\nsleep 2\nprintf '%s\\n' \
+             '{\"schema_version\":1,\"status\":\"completed\",\"response\":\"graceful result\"}'\n",
+        )
+        .expect("write fake agent-mux");
+        let mut permissions = fs::metadata(&mux).expect("fake mux metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&mux, permissions).expect("make fake mux executable");
+
+        let response = invoke_agent_mux(
+            &AgentMuxConfig {
+                path: mux.to_string_lossy().to_string(),
+                profile: None,
+                timeout_secs: None,
+                effort: None,
+                cwd: None,
+            },
+            "codex",
+            "gpt-test",
+            root.to_str().expect("fixture path is utf-8"),
+            "prompt",
+            "context",
+            1,
+        )
+        .expect("wrapper should wait beyond the configured base deadline");
+
+        fs::remove_dir_all(&root).ok();
+        assert_eq!(response, "graceful result");
     }
 
     #[test]

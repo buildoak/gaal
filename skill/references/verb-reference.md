@@ -327,6 +327,11 @@ LLM-powered handoff generation.
 | `--dry-run` | Preview candidates without processing |
 | `-H, --human` | Human-readable output |
 
+Single-session dry-run JSON reports both `estimated_llm_calls` and
+`worst_case_llm_calls`, the per-session call ceiling, and the resolved
+provider/grace/wrapper timeouts. Chunked execution limits reducer validation
+retries to the calls left under that ceiling.
+
 ### Examples
 
 ```bash

@@ -179,6 +179,7 @@ These are the practical defaults in `~/.gaal/config.toml`:
 | `handoff.format` | `markdown` |
 | `agent-mux.path` | `agent-mux` |
 | `agent-mux.effort` | `xhigh` |
+| `agent-mux.timeout_secs` | unset; effort minimum applies |
 
 You do not need to change any of these to build, index, or run the first query. The usual first useful loop is:
 
