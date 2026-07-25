@@ -3,6 +3,14 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS-lightgrey)
 
+![Gaal turns 2.92B raw trace tokens into 45.4M transcript tokens across 10,015 paired Codex sessions](assets/gaal-metrics-banner-v1.png)
+
+Measured on one local July 2026 corpus, Gaal indexed **20.8K sessions** and
+**782K facts**. Across 10,015 paired Codex sessions, **2.92B raw trace tokens
+became 45.4M transcript tokens** — **64.4x smaller**. A representative indexed
+search returned in **12 ms**; a 25.8M-token raw session rendered to 51.8K tokens
+in **1.43 seconds**.
+
 **Turn harness logs into transparent and traceable knowledge layer**
 
 Gaal is `strace` for AI coding agents: a local CLI for traceability,
@@ -18,31 +26,6 @@ the smaller token-efficient markdown views and navigation tools around them.
 
 Agent-first is literal here: JSON by default, source-backed, and built for the
 next run that has to inherit the mess.
-
-## Install
-
-```bash
-brew install buildoak/tap/gaal
-# or
-cargo install gaal-cli
-
-gaal onboard --dry-run
-gaal index backfill
-gaal ls -H --limit 5
-```
-
-The crates.io package is `gaal-cli` because `gaal` was already occupied there;
-it still installs the `gaal` binary.
-
-If you are giving this to a coding agent, use this prompt:
-
-```text
-Install or update Gaal, then load the latest Gaal skill from
-https://github.com/buildoak/gaal/tree/master/skill.
-Run `gaal onboard --dry-run`, follow its first-launch commands, and do not
-enable scheduled indexing, install agent-mux, or generate handoffs unless I
-explicitly approve that step.
-```
 
 ## Why This Exists
 
@@ -188,6 +171,31 @@ Fix transcript renderer
 
 The normal path is: broad query -> exact session -> faithful view -> raw
 evidence if needed.
+
+## Quick Install
+
+```bash
+brew install buildoak/tap/gaal
+# or
+cargo install gaal-cli
+
+gaal onboard --dry-run
+gaal index backfill
+gaal ls -H --limit 5
+```
+
+The crates.io package is `gaal-cli` because `gaal` was already occupied there;
+it still installs the `gaal` binary.
+
+If you are giving this to a coding agent, use this prompt:
+
+```text
+Install or update Gaal, then load the latest Gaal skill from
+https://github.com/buildoak/gaal/tree/master/skill.
+Run `gaal onboard --dry-run`, follow its first-launch commands, and do not
+enable scheduled indexing, install agent-mux, or generate handoffs unless I
+explicitly approve that step.
+```
 
 ## What Agents Can Do With Gaal
 
