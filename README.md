@@ -5,11 +5,13 @@
 
 ![Gaal turns 2.92B raw trace tokens into 45.4M transcript tokens across 10,015 paired Codex sessions](assets/gaal-metrics-banner-v1.png)
 
-Measured on one local July 2026 corpus, Gaal indexed **20.8K sessions** and
-**782K facts**. Across 10,015 paired Codex sessions, **2.92B raw trace tokens
-became 45.4M transcript tokens** — **64.4x smaller**. A representative indexed
-search returned in **12 ms**; a 25.8M-token raw session rendered to 51.8K tokens
-in **1.43 seconds**.
+<p align="center">
+  <em>Measured on one local July 2026 corpus, Gaal indexed 20.8K sessions and
+  782K facts. Across 10,015 paired Codex sessions, 2.92B raw trace tokens became
+  45.4M transcript tokens — 64.4x smaller. A representative indexed search
+  returned in 12 ms; a 25.8M-token raw session rendered to 51.8K tokens in
+  1.43 seconds.</em>
+</p>
 
 **Turn harness logs into transparent and traceable knowledge layer**
 
