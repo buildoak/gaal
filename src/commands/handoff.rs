@@ -3775,7 +3775,18 @@ mod tests {
 
         let frontmatter = build_handoff_frontmatter(&session, &extracted, "codex", "gpt-5.5");
 
-        assert!(frontmatter.contains("date: 2026-05-04"));
+        // The fixture starts late on 2026-05-03 UTC, so the local date it lands
+        // on depends on the machine's offset. Derive the expectation instead of
+        // hardcoding one timezone's answer.
+        let expected = DateTime::parse_from_rfc3339(&session.started_at)
+            .expect("fixture start timestamp is RFC3339")
+            .with_timezone(&Local)
+            .format("%Y-%m-%d")
+            .to_string();
+        assert!(
+            frontmatter.contains(&format!("date: {expected}")),
+            "frontmatter should carry the local start date {expected}:\n{frontmatter}"
+        );
     }
 
     #[test]
