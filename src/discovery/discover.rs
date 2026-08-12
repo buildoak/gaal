@@ -68,20 +68,24 @@ pub fn discover_sessions_with_cutoff(
     }
 
     sessions.sort_by(|a, b| {
-        hermes_parent_order(a)
-            .cmp(&hermes_parent_order(b))
+        child_link_order(a)
+            .cmp(&child_link_order(b))
             .then_with(|| b.started_at.as_deref().cmp(&a.started_at.as_deref()))
             .then_with(|| a.id.cmp(&b.id))
     });
     Ok(sessions)
 }
 
-fn hermes_parent_order(session: &DiscoveredSession) -> u8 {
-    if session.engine == Engine::Hermes && session.forked_from_id.is_some() {
-        1
-    } else {
-        0
-    }
+/// Sort key that puts every parent-linked session after its potential parents.
+///
+/// `sessions.parent_id` is a foreign key, so a child indexed before its parent
+/// fails the constraint. Ordering is newest-first, which is exactly backwards
+/// for forked sessions: a subagent always starts after the session that spawned
+/// it. Sinking linked sessions to the back makes the common single-level case
+/// resolve in one pass; deeper nesting is repaired by the linking pass in
+/// `index`.
+fn child_link_order(session: &DiscoveredSession) -> u8 {
+    u8::from(session.forked_from_id.is_some())
 }
 
 /// Read up to `n` lines from the start of a file.
