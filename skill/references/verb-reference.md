@@ -270,6 +270,13 @@ Full-text search over indexed facts.
 | `--limit <LIMIT>` | Max number of results |
 | `-H, --human` | Human-readable output |
 
+### JSON Output
+
+Each result carries `session_id`, `engine`, `turn`, `fact_type`, `subject`,
+`snippet`, `ts`, `score`, `session_headline`, `session_type`, and optional `cwd`
+and `parent_id`. Use `cwd` to go from a hit straight to the directory the
+session ran in; it is absent when the source trace recorded none.
+
 ### Example
 
 ```bash
