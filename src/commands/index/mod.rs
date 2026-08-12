@@ -257,6 +257,14 @@ fn run_engine_pass(
     let total = sessions.len();
     let mut indexed_any = false;
 
+    // Parent links seen this pass, applied after every row exists. Discovery
+    // orders parents before children, but nesting and parents outside the
+    // discovery window still leave links unresolved during the loop.
+    let pending_links: Vec<(String, String)> = sessions
+        .iter()
+        .filter_map(|session| Some((session.id.clone(), linked_parent_id(session)?)))
+        .collect();
+
     for (idx, session) in sessions.into_iter().enumerate() {
         match index_discovered_session(conn, &session, force, invalid_codex_error_sessions) {
             Ok(IndexOutcome::Indexed) => {
@@ -348,7 +356,70 @@ fn run_engine_pass(
         }
     }
 
+    apply_pending_parent_links(conn, &pending_links)?;
+
     Ok(indexed_any)
+}
+
+/// Parent session ID a discovered session should link to, in indexed-ID form.
+///
+/// Returns `None` for engines whose lineage is not expressed via
+/// `forked_from_id`; Claude subagents are linked by [`index_subagents`].
+fn linked_parent_id(discovered: &DiscoveredSession) -> Option<String> {
+    let forked_from_id = discovered.forked_from_id.as_deref()?;
+    if forked_from_id.is_empty() {
+        return None;
+    }
+    match discovered.engine {
+        Engine::Codex => Some(truncate_codex_id(forked_from_id)),
+        Engine::Hermes => Some(forked_from_id.to_string()),
+        _ => None,
+    }
+}
+
+/// Link sessions to parents that were not yet indexed when the child was written.
+///
+/// `sessions.parent_id` is a foreign key, so linking a child to an unindexed
+/// parent aborts the whole insert. Indexing leaves those links unset and this
+/// pass fills them once every row exists. Parents that never showed up are
+/// reported rather than silently dropped — the session stays indexed and
+/// searchable, it just has no parent to point at.
+fn apply_pending_parent_links(
+    conn: &mut Connection,
+    pending: &[(String, String)],
+) -> Result<(), GaalError> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let tx = conn
+        .savepoint_with_name("link_parents")
+        .map_err(GaalError::from)?;
+    let mut unresolved = Vec::new();
+    for (child_id, parent_id) in pending {
+        if child_id == parent_id {
+            continue;
+        }
+        if get_session(&tx, parent_id)?.is_none() {
+            if get_session(&tx, child_id)?.is_some() {
+                unresolved.push((child_id.clone(), parent_id.clone()));
+            }
+            continue;
+        }
+        tx.execute(
+            "UPDATE sessions SET parent_id = :parent_id
+             WHERE id = :child_id AND parent_id IS NULL",
+            named_params! { ":parent_id": parent_id, ":child_id": child_id },
+        )
+        .map_err(GaalError::from)?;
+    }
+    tx.commit().map_err(GaalError::from)?;
+
+    for (child_id, parent_id) in &unresolved {
+        eprintln!("  -> session {child_id}: parent {parent_id} is not indexed; link left unset");
+    }
+
+    Ok(())
 }
 
 /// Run `gaal index status`.
@@ -571,6 +642,7 @@ pub(crate) fn index_discovered_session(
         )?;
         let mut merged_row = merged_row;
         apply_codex_subagent_link(
+            conn,
             &mut merged_row,
             discovered,
             parsed_delta
@@ -578,7 +650,7 @@ pub(crate) fn index_discovered_session(
                 .agent_role
                 .clone()
                 .or_else(|| existing_row.subagent_type.clone()),
-        );
+        )?;
         let normalized_facts = normalize_facts(parsed_delta.facts, &existing_row.id);
 
         // Wrap upsert + facts + links in a single savepoint to reduce lock
@@ -634,8 +706,13 @@ pub(crate) fn index_discovered_session(
     if let Some(row) = existing.as_ref() {
         session_row.session_type = row.session_type.clone();
     }
-    apply_codex_subagent_link(&mut session_row, discovered, parsed.meta.agent_role.clone());
-    apply_hermes_lineage(&mut session_row, discovered);
+    apply_codex_subagent_link(
+        conn,
+        &mut session_row,
+        discovered,
+        parsed.meta.agent_role.clone(),
+    )?;
+    apply_hermes_lineage(conn, &mut session_row, discovered)?;
     let facts = normalize_facts(parsed.facts, target_id);
     let source_state = (discovered.engine == Engine::Grok)
         .then(|| crate::parser::grok::source_state(&discovered.path, target_id));
@@ -1121,30 +1198,53 @@ fn build_incremental_session_row(
 }
 
 fn apply_codex_subagent_link(
+    conn: &Connection,
     session_row: &mut SessionRow,
     discovered: &DiscoveredSession,
     subagent_type: Option<String>,
-) {
-    let Some(forked_from_id) = discovered.forked_from_id.as_deref() else {
-        return;
-    };
+) -> Result<(), GaalError> {
+    if discovered.forked_from_id.is_none() {
+        return Ok(());
+    }
 
     session_row.session_type = "subagent".to_string();
-    session_row.parent_id = Some(truncate_codex_id(forked_from_id));
     session_row.subagent_type = subagent_type;
+    link_parent_if_indexed(conn, session_row, discovered)
 }
 
-fn apply_hermes_lineage(session_row: &mut SessionRow, discovered: &DiscoveredSession) {
+fn apply_hermes_lineage(
+    conn: &Connection,
+    session_row: &mut SessionRow,
+    discovered: &DiscoveredSession,
+) -> Result<(), GaalError> {
     if discovered.engine != Engine::Hermes {
-        return;
-    }
-    if let Some(parent_id) = discovered.forked_from_id.as_ref() {
-        if !parent_id.is_empty() {
-            session_row.parent_id = Some(parent_id.clone());
-        }
+        return Ok(());
     }
     session_row.session_type = "standalone".to_string();
     session_row.subagent_type = None;
+    link_parent_if_indexed(conn, session_row, discovered)
+}
+
+/// Set `parent_id` only when the parent row already exists.
+///
+/// The column is a foreign key: pointing it at an unindexed parent aborts the
+/// insert and loses the session entirely. Leaving it unset keeps the session
+/// indexed; [`apply_pending_parent_links`] fills the link once the parent lands.
+fn link_parent_if_indexed(
+    conn: &Connection,
+    session_row: &mut SessionRow,
+    discovered: &DiscoveredSession,
+) -> Result<(), GaalError> {
+    let Some(parent_id) = linked_parent_id(discovered) else {
+        return Ok(());
+    };
+    if parent_id == session_row.id {
+        return Ok(());
+    }
+    if get_session(conn, &parent_id)?.is_some() {
+        session_row.parent_id = Some(parent_id);
+    }
+    Ok(())
 }
 
 fn promote_codex_coordinators(conn: &mut Connection) -> Result<(), GaalError> {

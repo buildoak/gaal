@@ -9,6 +9,9 @@ const SESSION_TOOL_ID: &str = "019f46d3-0000-7000-8000-000000000002";
 const SESSION_TOOL_ALIAS: &str = "00000002";
 const SESSION_FALLBACK_ID: &str = "019f46d3-0000-7000-8000-000000000003";
 const FAKE_TG_TOKEN: &str = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi";
+/// Absolute lower bound for searches over the fixed-date fixture. A relative
+/// window (the `search` default of 30d) expires as the fixture ages.
+const FIXTURE_SINCE: &str = "2026-07-01";
 
 struct TestEnv {
     root: PathBuf,
@@ -286,8 +289,11 @@ fn grok_default_backfill_indexes_searches_and_renders_native_sessions() {
     }));
 
     let fallback_search = assert_success(
-        gaal(&env, &["search", "Fallback", "-H"]),
-        &["search", "Fallback", "-H"],
+        gaal(
+            &env,
+            &["search", "Fallback", "--since", FIXTURE_SINCE, "-H"],
+        ),
+        &["search", "Fallback", "--since", FIXTURE_SINCE, "-H"],
     );
     assert!(fallback_search.contains(SESSION_FALLBACK_ID));
     assert!(fallback_search.contains("Fallback user message GROK_VISIBLE_USER_PROMPT_SHOULD_INDEX"));
@@ -295,38 +301,92 @@ fn grok_default_backfill_indexes_searches_and_renders_native_sessions() {
     let oversized_search = assert_success(
         gaal(
             &env,
-            &["search", "GROK_VISIBLE_OVERSIZE_OUTPUT_SHOULD_INDEX", "-H"],
+            &[
+                "search",
+                "GROK_VISIBLE_OVERSIZE_OUTPUT_SHOULD_INDEX",
+                "--since",
+                FIXTURE_SINCE,
+                "-H",
+            ],
         ),
-        &["search", "GROK_VISIBLE_OVERSIZE_OUTPUT_SHOULD_INDEX", "-H"],
+        &[
+            "search",
+            "GROK_VISIBLE_OVERSIZE_OUTPUT_SHOULD_INDEX",
+            "--since",
+            FIXTURE_SINCE,
+            "-H",
+        ],
     );
     assert!(oversized_search.contains("GROK_VISIBLE_OVERSIZE_OUTPUT_SHOULD_INDEX"));
     assert!(!oversized_search.contains("GROK_OVERSIZE_TAIL_SHOULD_NOT_INDEX"));
     let truncation_marker_search = assert_success(
-        gaal(&env, &["search", "GAAL_TRUNCATED_TOOL_OUTPUT", "-H"]),
-        &["search", "GAAL_TRUNCATED_TOOL_OUTPUT", "-H"],
+        gaal(
+            &env,
+            &[
+                "search",
+                "GAAL_TRUNCATED_TOOL_OUTPUT",
+                "--since",
+                FIXTURE_SINCE,
+                "-H",
+            ],
+        ),
+        &[
+            "search",
+            "GAAL_TRUNCATED_TOOL_OUTPUT",
+            "--since",
+            FIXTURE_SINCE,
+            "-H",
+        ],
     );
     assert!(truncation_marker_search.contains("retained_chars=16000"));
     let oversized_tail_search = gaal(
         &env,
-        &["search", "GROK_OVERSIZE_TAIL_SHOULD_NOT_INDEX", "-H"],
+        &[
+            "search",
+            "GROK_OVERSIZE_TAIL_SHOULD_NOT_INDEX",
+            "--since",
+            FIXTURE_SINCE,
+            "-H",
+        ],
     );
     assert!(!oversized_tail_search.status.success());
     assert!(String::from_utf8_lossy(&oversized_tail_search.stderr)
         .contains("No indexed facts matched that search query"));
 
-    let private_search = gaal(&env, &["search", "GROK_PRIV", "-H"]);
+    let private_search = gaal(
+        &env,
+        &["search", "GROK_PRIV", "--since", FIXTURE_SINCE, "-H"],
+    );
     assert!(!private_search.status.success());
     assert!(String::from_utf8_lossy(&private_search.stderr)
         .contains("No indexed facts matched that search query"));
 
-    let raw_secret_search = gaal(&env, &["search", FAKE_TG_TOKEN, "-H"]);
+    let raw_secret_search = gaal(
+        &env,
+        &["search", FAKE_TG_TOKEN, "--since", FIXTURE_SINCE, "-H"],
+    );
     assert!(!raw_secret_search.status.success());
     assert!(String::from_utf8_lossy(&raw_secret_search.stderr)
         .contains("No indexed facts matched that search query"));
 
     let redacted_secret_search = assert_success(
-        gaal(&env, &["search", "REDACTED_TELEGRAM_BOT_TOKEN", "-H"]),
-        &["search", "REDACTED_TELEGRAM_BOT_TOKEN", "-H"],
+        gaal(
+            &env,
+            &[
+                "search",
+                "REDACTED_TELEGRAM_BOT_TOKEN",
+                "--since",
+                FIXTURE_SINCE,
+                "-H",
+            ],
+        ),
+        &[
+            "search",
+            "REDACTED_TELEGRAM_BOT_TOKEN",
+            "--since",
+            FIXTURE_SINCE,
+            "-H",
+        ],
     );
     assert!(redacted_secret_search.contains("REDACTED_TELEGRAM_BOT_TOKEN"));
     assert!(!redacted_secret_search.contains(FAKE_TG_TOKEN));

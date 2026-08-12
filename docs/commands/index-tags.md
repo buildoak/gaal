@@ -48,6 +48,24 @@ Cursor advancement rules:
 - First run (no cursor) and DB wipes fall through to a full scan — the cursor is absent, so no mtime gate applies.
 - `--engine`, `--since`, and `--force` are all additive on top of the mtime gate. `--engine claude` only advances the Claude cursor. `--since` narrows further. `--force` re-indexes already-known rows but still honors the mtime gate for discovery.
 
+### Parent links
+
+Codex subagents and Hermes forks record the session they came from.
+`sessions.parent_id` is a foreign key, so those links can only be written once
+the parent row exists. Discovery is newest-first and a child always starts after
+its parent, so discovery sorts linked sessions to the back of the pass and the
+indexer fills any link it could not resolve inline after the pass completes.
+
+A parent that is never indexed — its trace was deleted, or it sits outside the
+run's window — leaves the child indexed, typed as a subagent, and unlinked. That
+case prints one stderr line per session:
+
+```text
+  -> session 9767dfaf: parent 4105a92a is not indexed; link left unset
+```
+
+Re-running backfill over a window that includes the parent restores the link.
+
 ### Agy discovery behavior
 
 Agy discovery scans Antigravity brain directories, prefers non-empty

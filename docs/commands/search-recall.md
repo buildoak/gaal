@@ -27,7 +27,11 @@ Default output is an envelope with:
 - `total`
 - `results`
 
-Each result includes `session_id`, `engine`, `turn`, `fact_type`, `subject`, `snippet`, `ts`, `score`, `session_headline`, `session_type`, and optional `parent_id`.
+Each result includes `session_id`, `engine`, `turn`, `fact_type`, `subject`, `snippet`, `ts`, `score`, `session_headline`, `session_type`, and optional `cwd` and `parent_id`.
+
+`cwd` is the matched session's working directory, so a hit can be taken back to
+the repo it came from without a second `inspect` call. It is omitted when the
+source trace recorded no cwd.
 
 ## Real Example
 
@@ -52,6 +56,7 @@ $ gaal search subagent --limit 2
       "score": 15.346081,
       "session_headline": "",
       "session_type": "subagent",
+      "cwd": "/Users/dev/src/gaal",
       "parent_id": "2b0db33c"
     }
   ]

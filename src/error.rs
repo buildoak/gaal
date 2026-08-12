@@ -39,6 +39,28 @@ pub enum GaalError {
 }
 
 impl GaalError {
+    /// Returns true when this error is a closed downstream pipe (`EPIPE`).
+    ///
+    /// Piping into `head` closes stdout early. That is normal shell usage, not
+    /// a gaal failure, so callers exit quietly instead of emitting an error
+    /// payload. The write can fail as a bare `io::Error` or wrapped by
+    /// `serde_json` inside an `anyhow` chain, so both shapes are checked.
+    pub fn is_broken_pipe(&self) -> bool {
+        match self {
+            Self::Io(err) => err.kind() == std::io::ErrorKind::BrokenPipe,
+            Self::Other(err) => err.chain().any(|cause| {
+                if let Some(io_err) = cause.downcast_ref::<std::io::Error>() {
+                    return io_err.kind() == std::io::ErrorKind::BrokenPipe;
+                }
+                cause
+                    .downcast_ref::<serde_json::Error>()
+                    .and_then(serde_json::Error::io_error_kind)
+                    == Some(std::io::ErrorKind::BrokenPipe)
+            }),
+            _ => false,
+        }
+    }
+
     /// Returns the process exit code associated with this error.
     pub fn exit_code(&self) -> i32 {
         match self {

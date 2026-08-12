@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Codex subagents no longer fail to index behind their parent.** Discovery is
+  newest-first, so a forked session was reached before the session that spawned
+  it and the `sessions.parent_id` foreign key aborted the insert with
+  `FOREIGN KEY constraint failed`. Linked sessions now sort after their parents,
+  links that still cannot be resolved inline are applied after the pass, and a
+  parent that is never indexed leaves the child indexed and unlinked with a
+  reported reason instead of dropping the session.
+- **Closing a pipe early no longer reports a failure.** `gaal ... | head` raised
+  `The command failed: Broken pipe (os error 32)` with a non-zero exit, or
+  panicked out of `println!`. Gaal now dies quietly on `SIGPIPE` like other CLIs.
+- **Timezone- and date-dependent tests.** A handoff frontmatter test assumed a
+  UTC+ offset, and agy/grok fixture searches relied on the relative `30d`
+  default that their fixed fixture dates outgrew.
+
+### Changed
+- **`gaal search` results carry `cwd`.** A hit now includes the matched
+  session's working directory in JSON and in the `-H` table, so a search result
+  leads back to the directory the session ran in without a second lookup.
+
 ## 2026-07-10 — 0.5.0
 
 ### Added

@@ -437,12 +437,41 @@ enum SessionTypeFilter {
     Subagent,
 }
 
+/// Restore the default `SIGPIPE` disposition.
+///
+/// Rust ignores `SIGPIPE` at startup, so `gaal ... | head` turns a closed
+/// downstream pipe into an `EPIPE` write error — which surfaced as a bogus
+/// `"The command failed: Broken pipe"` payload plus a non-zero exit. Restoring
+/// the default makes gaal die quietly on a closed pipe like every other CLI.
+#[cfg(unix)]
+fn restore_sigpipe_default() {
+    mod ffi {
+        unsafe extern "C" {
+            pub fn signal(sig: i32, handler: usize) -> usize;
+        }
+    }
+    const SIGPIPE: i32 = 13;
+    const SIG_DFL: usize = 0;
+    unsafe {
+        ffi::signal(SIGPIPE, SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_sigpipe_default() {}
+
 fn main() {
+    restore_sigpipe_default();
+
     let cli = Cli::parse();
     let human = cli.human;
     let command = current_command_name();
 
     if let Err(err) = run(cli) {
+        // A closed downstream pipe is not a gaal failure; stay silent.
+        if err.is_broken_pipe() {
+            std::process::exit(0);
+        }
         emit_error(&err, human, command);
         std::process::exit(err.exit_code());
     }

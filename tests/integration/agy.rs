@@ -533,7 +533,7 @@ fn agy_batch_handoff_dry_run_includes_short_sessions_when_min_turns_zero() {
             "create-handoff",
             "--batch",
             "--since",
-            "30d",
+            "2026-06-01",
             "--min-turns",
             "0",
             "--dry-run",

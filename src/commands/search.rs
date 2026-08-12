@@ -87,6 +87,10 @@ pub struct SearchResult {
     pub score: f32,
     pub session_headline: String,
     pub session_type: String,
+    /// Working directory of the matched session, so a caller can `cd` there and
+    /// resume the session the hit came from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }
@@ -295,6 +299,7 @@ fn search_facts_with_context(
             score,
             session_headline: doc_text(&retrieved, fields.session_headline).unwrap_or_default(),
             session_type: "standalone".to_string(),
+            cwd: None,
             parent_id: None,
         });
     }
@@ -343,7 +348,7 @@ fn print_search_human(conn: &Connection, results: &[SearchResult]) {
     }
 
     let headers = [
-        "Score", "Session", "Engine", "Turn", "Type", "Time", "Snippet",
+        "Score", "Session", "Engine", "Turn", "Type", "Time", "Cwd", "Snippet",
     ];
     let rows: Vec<Vec<String>> = results
         .iter()
@@ -356,6 +361,10 @@ fn print_search_human(conn: &Connection, results: &[SearchResult]) {
                 row.turn.to_string(),
                 row.fact_type.clone(),
                 format_timestamp(&row.ts),
+                row.cwd
+                    .as_deref()
+                    .map(|cwd| crate::output::human::format_cwd(cwd, 32))
+                    .unwrap_or_default(),
                 truncate_chars(&row.snippet, 120),
             ]
         })
@@ -363,22 +372,23 @@ fn print_search_human(conn: &Connection, results: &[SearchResult]) {
     print_table(&headers, &rows);
 }
 
-/// Enrich search results with session_type and parent_id from the sessions table.
+/// Enrich search results with session_type, cwd, and parent_id from the sessions table.
 fn enrich_session_metadata(conn: &Connection, results: &mut [SearchResult]) {
     // Collect unique session IDs to batch-query
     let session_ids: HashSet<String> = results.iter().map(|r| r.session_id.clone()).collect();
-    let mut metadata: std::collections::HashMap<String, (String, Option<String>)> =
+    let mut metadata: std::collections::HashMap<String, (String, Option<String>, Option<String>)> =
         std::collections::HashMap::new();
 
     for sid in &session_ids {
         if let Ok(Some(row)) = crate::db::queries::get_session(conn, sid) {
-            metadata.insert(sid.clone(), (row.session_type, row.parent_id));
+            metadata.insert(sid.clone(), (row.session_type, row.cwd, row.parent_id));
         }
     }
 
     for result in results.iter_mut() {
-        if let Some((session_type, parent_id)) = metadata.get(&result.session_id) {
+        if let Some((session_type, cwd, parent_id)) = metadata.get(&result.session_id) {
             result.session_type = session_type.clone();
+            result.cwd = cwd.clone();
             result.parent_id = parent_id.clone();
         }
     }
